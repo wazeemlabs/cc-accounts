@@ -1,0 +1,362 @@
+#!/bin/bash
+# cca: run Claude Code on several accounts and move a conversation between them.
+#
+# Each account is a Claude Code config dir (CLAUDE_CONFIG_DIR). Conversations,
+# the session list and your settings are shared between the accounts, so any
+# account can resume any conversation.
+#
+#   cca init <name>            set up, naming your current account (~/.claude)
+#   cca add <name> [dir]       add an account (default dir ~/.claude-<name>) and sign in
+#   cca                        list the accounts; * marks where new sessions start
+#   cca use <name>             start new sessions on <name>
+#   cca <name> [claude args]   run Claude Code on <name>
+#   cca run [claude args]      run it on the account the resumed conversation last
+#                              used, else the default (what `claude` runs after init)
+#   cca uninstall              undo init's shell, settings and VS Code changes
+#   cca version | help
+#
+# Inside a session, /account <name> moves the conversation to <name>: in a
+# terminal it closes and reopens on <name> with the same flags; in VS Code the
+# next message you send continues it on <name>.
+set -euo pipefail
+
+ROOT="${CCA_ROOT:-$HOME/.claude-shared/accounts}"
+SHARED="${CCA_SHARED:-$HOME/.claude-shared}"
+TABLE="$ROOT/accounts.tsv"
+# The account Claude Code uses with no CLAUDE_CONFIG_DIR. It runs with the
+# variable unset: set, even to this path, it keys a credential entry of its own
+# and the account reads as signed out.
+HOME_DIR="$HOME/.claude"
+# Kept in the shared dir and linked into every account: what makes one
+# account's conversations and sessions visible to the others.
+SHARED_STATE=(projects todos file-history sessions)
+# Linked from ~/.claude into every other account unless share.conf says otherwise.
+DEFAULT_SHARE=(settings.json CLAUDE.md agents commands keybindings.json)
+RESERVED=" init add use run uninstall version help "
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+# The plugin rewrites a conversation's record each time it starts, so a record
+# this old belongs to a conversation nobody has opened since; it then opens on
+# the default account.
+RECORD_DAYS=180
+
+# Where this script really is, through the link install.sh makes.
+self="$0"
+while [[ -L "$self" ]]; do
+  link="$(readlink "$self")"
+  if [[ "$link" == /* ]]; then self="$link"; else self="$(dirname "$self")/$link"; fi
+done
+HERE="$(cd "$(dirname "$self")/.." && pwd -P)"
+LIBEXEC="$HERE/libexec"
+PLUGIN="$HERE/plugin"
+export CCA_ROOT="$ROOT"
+
+die() { echo "cca: $*" >&2; exit 2; }
+
+names() { [[ -f "$TABLE" ]] && cut -f1 "$TABLE"; return 0; }
+
+dir_of() {
+  [[ -f "$TABLE" ]] || return 0
+  awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$TABLE"
+}
+
+# An account's global config, where its login and folder trust live.
+config_of() {
+  if [[ "$1" == "$HOME_DIR" ]]; then echo "$HOME/.claude.json"; else echo "$1/.claude.json"; fi
+}
+
+email_of() {
+  local config; config="$(config_of "$1")"
+  [[ -f "$config" ]] || return 0
+  python3 -I -c 'import json,sys
+try:
+    print((json.load(open(sys.argv[1])).get("oauthAccount") or {}).get("emailAddress") or "")
+except ValueError:
+    print("")' "$config"
+}
+
+default_name() {
+  if [[ -s "$ROOT/default" ]]; then
+    head -1 "$ROOT/default"
+  else
+    names | head -1
+  fi
+}
+
+require_account() {
+  [[ -n "$(dir_of "$1")" ]] || die "no account named '$1' (accounts: $(names | paste -sd' ' -))"
+}
+
+valid_name() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "an account name is lowercase letters, digits and dashes"
+  [[ "$RESERVED" != *" $1 "* ]] || die "'$1' is a cca command"
+}
+
+# The conversation id a --resume / -r argument names, if any.
+resume_id() {
+  local next="" a
+  for a in "$@"; do
+    if [[ -n "$next" ]]; then
+      [[ "$a" =~ $UUID_RE ]] && echo "$a"
+      return 0
+    fi
+    case "$a" in
+      --resume|-r) next=1 ;;
+      --resume=*) [[ "${a#--resume=}" =~ $UUID_RE ]] && echo "${a#--resume=}"; return 0 ;;
+    esac
+  done
+  return 0
+}
+
+# Which account a run with these args starts on.
+choose() {
+  local id; id="$(resume_id "$@")"
+  if [[ -n "$id" && -s "$ROOT/by-session/$id" ]]; then
+    local recorded; recorded="$(head -1 "$ROOT/by-session/$id")"
+    if [[ -n "$(dir_of "$recorded")" ]]; then echo "$recorded"; return; fi
+  fi
+  if [[ -n "${CLAUDE_ACCOUNT:-}" && -n "$(dir_of "$CLAUDE_ACCOUNT")" ]]; then
+    echo "$CLAUDE_ACCOUNT"; return
+  fi
+  default_name
+}
+
+apply() {
+  # No accounts registered: Claude Code runs as it would without cca.
+  [[ -n "$1" ]] || return 0
+  local dir; dir="$(dir_of "$1")"
+  export CLAUDE_ACCOUNT="$1"
+  if [[ "$dir" == "$HOME_DIR" ]]; then unset CLAUDE_CONFIG_DIR; else export CLAUDE_CONFIG_DIR="$dir"; fi
+}
+
+claude_bin() {
+  [[ -n "${CCA_CLAUDE:-}" ]] && { echo "$CCA_CLAUDE"; return; }
+  [[ -x "$HOME/.local/bin/claude" ]] && { echo "$HOME/.local/bin/claude"; return; }
+  command -v claude || die "no claude binary found; install Claude Code first"
+}
+
+# Give the account every folder the others trust, so no account asks to trust
+# a folder another one already trusts. CCA_TRUST_SYNC=off turns it off. A
+# failure is reported, not fatal.
+sync_trust() {
+  local bin="$1" account="$2" name dir others=()
+  [[ "${CCA_TRUST_SYNC:-on}" != off && -n "$account" && -f "$TABLE" ]] || return 0
+  while IFS=$'\t' read -r name dir; do
+    [[ "$name" == "$account" ]] || others+=("$(config_of "$dir")")
+  done < "$TABLE"
+  [[ ${#others[@]} -gt 0 ]] || return 0
+  "$LIBEXEC/cca-trust" "$bin" "$(config_of "$(dir_of "$account")")" "${others[@]}" \
+    || echo "cca: folder trust was not synced to $account" >&2
+}
+
+# Run in the terminal, relaunching on the account a /account switch asks for.
+launch() {
+  local account="$1"; shift
+  local bin; bin="$(claude_bin)"
+  mkdir -p "$ROOT/switch"
+  # Global: the EXIT trap reads it after this function has returned.
+  SWITCH="$ROOT/switch/$$"
+  local switch="$SWITCH"
+  # The plugin checks CCA_PID is its parent, so a claude started inside this
+  # session (inheriting these) cannot switch this one.
+  export CLAUDE_ACCOUNT_SWITCH_FILE="$switch" CCA_MODE=terminal CCA_PID=$$
+  trap 'rm -f "$SWITCH"' EXIT
+  local args=("$@") first=("$@")
+  if [[ -d "$ROOT/by-session" ]]; then
+    find "$ROOT/by-session" -type f -mtime +"$RECORD_DAYS" -delete
+  fi
+  while :; do
+    rm -f "$switch"
+    apply "$account"
+    sync_trust "$bin" "$account"
+    local status=0
+    "$bin" ${args[@]+"${args[@]}"} || status=$?
+    [[ -s "$switch" ]] || return "$status"
+    local next_account id
+    read -r next_account id < "$switch"
+    [[ -n "$(dir_of "$next_account")" && "$id" =~ $UUID_RE ]] \
+      || die "switch file held '$next_account $id', not '<account> <conversation id>'"
+    echo "cca: resuming $id on account $next_account" >&2
+    account="$next_account"
+    args=()
+    local arg
+    while IFS= read -r -d '' arg; do args+=("$arg"); done \
+      < <("$LIBEXEC/cca-keep-args" "$bin" ${first[@]+"${first[@]}"})
+    args+=(--resume "$id")
+  done
+}
+
+# What every other account links from ~/.claude: share.conf, one name a line.
+share_list() {
+  if [[ -f "$ROOT/share.conf" ]]; then
+    grep -v '^[[:space:]]*\(#\|$\)' "$ROOT/share.conf" || true
+  else
+    printf '%s\n' "${DEFAULT_SHARE[@]}"
+  fi
+}
+
+# Links one item of an account to its shared copy, keeping what was there.
+link_item() {
+  local path="$1" target="$2" stamp
+  [[ -L "$path" && "$(readlink "$path")" == "$target" ]] && return 0
+  if [[ -e "$path" || -L "$path" ]]; then
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    mv "$path" "$path.bak-$stamp"
+    echo "cca: kept the old $path as $(basename "$path").bak-$stamp" >&2
+  fi
+  ln -s "$target" "$path"
+}
+
+link_shared() {
+  local dir="$1" item
+  for item in "${SHARED_STATE[@]}"; do
+    mkdir -p "$SHARED/$item"
+    link_item "$dir/$item" "$SHARED/$item"
+  done
+  [[ "$dir" == "$HOME_DIR" ]] && return 0
+  while IFS= read -r item; do
+    [[ -e "$HOME_DIR/$item" ]] && link_item "$dir/$item" "$HOME_DIR/$item"
+  done < <(share_list)
+  return 0
+}
+
+# Moves ~/.claude's own conversations and sessions into the shared dir and
+# links them back, so the accounts added later see them.
+adopt_home() {
+  local item
+  mkdir -p "$SHARED"
+  for item in "${SHARED_STATE[@]}"; do
+    local own="$HOME_DIR/$item" shared="$SHARED/$item"
+    if [[ -L "$own" ]]; then
+      [[ "$(readlink "$own")" == "$shared" ]] || die "$own links to $(readlink "$own"), not $shared; move it by hand"
+      continue
+    fi
+    if [[ -d "$own" ]]; then
+      if [[ -d "$shared" ]]; then
+        [[ -z "$(ls -A "$shared")" ]] || die "both $own and $shared hold files; merge them by hand, then run init again"
+        rmdir "$shared"  # empty: mv needs the name free
+      fi
+      mv "$own" "$shared"
+    else
+      mkdir -p "$shared"
+    fi
+    ln -s "$shared" "$own"
+  done
+}
+
+# Live Claude Code sessions, from Claude Code's own session list.
+running_sessions() {
+  "$LIBEXEC/cca-setup" running "$HOME_DIR/sessions"
+}
+
+# The rc file of the person's shell, or nothing for a shell cca does not know.
+shell_rc() {
+  case "$(basename "${SHELL:-}")" in
+    zsh) echo "$HOME/.zshrc" ;;
+    bash) echo "$HOME/.bashrc" ;;
+  esac
+  return 0
+}
+
+init() {
+  local name="$1" yes="$2" rc; rc="$(shell_rc)"
+  valid_name "$name"
+  if [[ -n "$(dir_of "$name")" && "$(dir_of "$name")" != "$HOME_DIR" ]]; then
+    die "'$name' is already $(dir_of "$name")"
+  fi
+  local home_name=""
+  if [[ -f "$TABLE" ]]; then
+    home_name="$(awk -F'\t' -v d="$HOME_DIR" '$2 == d { print $1 }' "$TABLE")"
+  fi
+  [[ -z "$home_name" || "$home_name" == "$name" ]] || die "$HOME_DIR is already the account '$home_name'"
+  if [[ -n "$(running_sessions)" && "$yes" != yes ]]; then
+    die "Claude Code is running (pids: $(running_sessions | paste -sd' ' -)). Quit it first, or run cca init $name --yes"
+  fi
+  "$LIBEXEC/cca-setup" check --settings "$HOME_DIR/settings.json"
+  mkdir -p "$HOME_DIR" "$ROOT"
+  adopt_home
+  [[ -n "$(dir_of "$name")" ]] || printf '%s\t%s\n' "$name" "$HOME_DIR" >> "$TABLE"
+  [[ -s "$ROOT/default" ]] || printf '%s\n' "$name" > "$ROOT/default"
+  if [[ ! -f "$ROOT/share.conf" ]]; then
+    {
+      echo "# Linked from ~/.claude into every other account, one name a line."
+      echo "# Run cca add <name> again for an account after changing this."
+      printf '%s\n' "${DEFAULT_SHARE[@]}"
+    } > "$ROOT/share.conf"
+  fi
+  "$LIBEXEC/cca-setup" install \
+    --rc "$rc" --bin "$HERE/bin" \
+    --settings "$HOME_DIR/settings.json" --plugin "$PLUGIN" \
+    --wrapper "$HERE/bin/cca"
+  echo "Account $name is $HOME_DIR. Add the others with: cca add <name>"
+  [[ -n "$rc" ]] && echo "Open a new terminal (or run: source $rc) to use it."
+  return 0
+}
+
+list() {
+  local def name dir; def="$(default_name)"
+  [[ -f "$TABLE" ]] || { echo "No accounts yet: cca init <name>"; return 0; }
+  while IFS=$'\t' read -r name dir; do
+    local email; email="$(email_of "$dir")"
+    printf '%s %-10s %-32s %s\n' "$([[ "$name" == "$def" ]] && echo '*' || echo ' ')" \
+      "$name" "${email:-(not signed in)}" "$dir"
+  done < "$TABLE"
+  echo "* new sessions start here. Move a running one with /account <name>."
+}
+
+case "${1:-}" in
+  "") list ;;
+  help|-h|--help) sed -n '2,20p' "$self" | sed 's/^# \{0,1\}//' ;;
+  version|-v|--version) echo "cca $(cat "$HERE/VERSION")" ;;
+  init)
+    [[ $# -ge 2 && $# -le 3 ]] || die "usage: cca init <name> [--yes]"
+    [[ $# -eq 2 || "$3" == --yes ]] || die "usage: cca init <name> [--yes]"
+    init "$2" "$([[ "${3:-}" == --yes ]] && echo yes || echo no)"
+    ;;
+  uninstall)
+    "$LIBEXEC/cca-setup" uninstall --rc "$(shell_rc)" --settings "$HOME_DIR/settings.json" \
+      --plugin "$PLUGIN" --wrapper "$HERE/bin/cca"
+    echo "Your accounts, conversations and $SHARED are left as they are."
+    ;;
+  use)
+    [[ $# -eq 2 ]] || die "usage: cca use <name>"
+    require_account "$2"
+    printf '%s\n' "$2" > "$ROOT/default"
+    echo "New sessions start on $2."
+    ;;
+  add)
+    [[ $# -ge 2 && $# -le 3 ]] || die "usage: cca add <name> [dir]"
+    [[ -f "$TABLE" ]] || die "run cca init <name> first, naming your current account"
+    name="$2"
+    valid_name "$name"
+    dir="${3:-$HOME/.claude-$name}"
+    dir="$(mkdir -p "$dir" && cd "$dir" && pwd -P)"
+    existing="$(dir_of "$name")"
+    [[ -z "$existing" || "$existing" == "$dir" ]] || die "'$name' is already $existing"
+    if [[ -z "$existing" ]]; then printf '%s\t%s\n' "$name" "$dir" >> "$TABLE"; fi
+    link_shared "$dir"
+    if [[ -z "$(email_of "$dir")" ]]; then
+      echo "Account $name is $dir. Starting Claude Code on it: sign in with /login."
+      launch "$name"
+    else
+      echo "Account $name is $dir, signed in as $(email_of "$dir")."
+    fi
+    ;;
+  run) shift; launch "$(choose "$@")" "$@" ;;
+  /*)
+    # VS Code's claudeProcessWrapper: the extension's own binary first. The
+    # extension owns the process: /account records the choice and ends it
+    # (exec keeps this pid, so CCA_PID is Claude Code's own), and the panel's
+    # next message starts a new one, which this resolves to the recorded account.
+    [[ -x "$1" ]] || die "not an executable: $1"
+    bin="$1"; shift
+    apply "$(choose "$@")"
+    unset CLAUDE_ACCOUNT_SWITCH_FILE
+    export CCA_MODE=stream CCA_PID=$$
+    exec "$bin" "$@"
+    ;;
+  *)
+    require_account "$1"
+    name="$1"; shift
+    launch "$name" "$@"
+    ;;
+esac

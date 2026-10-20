@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in cc-accounts does not work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Paste any cca output.
+    validations:
+      required: true
+  - type: input
+    id: cca
+    attributes:
+      label: cca version
+      description: Output of `cca version`
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options: [Terminal, VS Code, Cursor, Windsurf, Other editor]
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15.4, Ubuntu 24.04, WSL
+    validations:
+      required: true

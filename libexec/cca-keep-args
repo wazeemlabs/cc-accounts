@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""cca-keep-args <claude binary> [args...]
+
+Prints, NUL-separated, the args a relaunch on another account carries over:
+every option except those that choose, start or end a session, and no prompt.
+Which options take a value is read from `<claude binary> --help`.
+Dropped args go to stderr, so the person sees what did not carry over.
+"""
+import re
+import subprocess
+import sys
+
+# Options that pick the conversation (the relaunch adds --resume itself) or
+# start something a second run must not repeat (a worktree, a cloud session,
+# a download, a one-shot print).
+DROP = {
+    '--resume', '--continue', '--session-id', '--fork-session', '--from-pr',
+    '--resume-session-at', '--resume-drops-turn', '--print', '--worktree',
+    '--tmux', '--background', '--bg', '--cloud', '--teleport', '--desktop',
+    '--environment', '--file', '--help', '--version',
+}
+
+# "  -r, --resume [value]", "  --add-dir <directories...>", "  --bg, --background"
+OPTION_LINE = re.compile(
+    r'^  (?:(-[A-Za-z]), )?(--[\w-]+)(?:, (--[\w-]+))?(?: ([<\[])[^>\]]*?(\.\.\.)?[>\]])?(?:\s|$)')
+
+
+def arities(help_text):
+    """Maps every spelling of an option to its long name and arity:
+    'flag', 'one', 'optional' or 'many'."""
+    table = {}
+    for line in help_text.splitlines():
+        match = OPTION_LINE.match(line)
+        if match is None:
+            continue
+        short, first, second, bracket, dots = match.groups()
+        if dots:
+            arity = 'many'
+        elif bracket == '<':
+            arity = 'one'
+        elif bracket == '[':
+            arity = 'optional'
+        else:
+            arity = 'flag'
+        long_name = second or first
+        for spelling in (short, first, second):
+            if spelling:
+                table[spelling] = (long_name, arity)
+    return table
+
+
+def keep(args, table):
+    """Returns (kept, dropped) for a relaunch."""
+    kept, dropped = [], []
+    i = 0
+    while i < len(args):
+        token = args[i]
+        i += 1
+        if token == '--':
+            dropped.extend(args[i - 1:])
+            break
+        if not token.startswith('-') or token == '-':
+            dropped.append(token)  # the prompt
+            continue
+        name, has_inline_value = token.split('=', 1)[0], '=' in token
+        known = table.get(name)
+        group = [token]
+        if known is None:
+            # Unknown arity: its value, if any, cannot be told from a prompt.
+            if not has_inline_value and i < len(args) and not args[i].startswith('-'):
+                group.append(args[i])
+                i += 1
+            dropped.extend(group)
+            continue
+        long_name, arity = known
+        if not has_inline_value:
+            if arity == 'one' and i < len(args):
+                group.append(args[i])
+                i += 1
+            elif arity == 'optional' and i < len(args) and not args[i].startswith('-'):
+                group.append(args[i])
+                i += 1
+            elif arity == 'many':
+                while i < len(args) and not args[i].startswith('-'):
+                    group.append(args[i])
+                    i += 1
+        (dropped if long_name in DROP else kept).extend(group)
+    return kept, dropped
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit('usage: cca-keep-args <claude binary> [args...]')
+    help_text = subprocess.run([sys.argv[1], '--help'], capture_output=True, text=True, check=True).stdout
+    kept, dropped = keep(sys.argv[2:], arities(help_text))
+    if dropped:
+        print('cca: not carried over: ' + ' '.join(dropped), file=sys.stderr)
+    sys.stdout.write(''.join(arg + '\0' for arg in kept))
+
+
+if __name__ == '__main__':
+    main()

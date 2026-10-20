@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""cca-trust <claude binary> <account config> [other account configs...]
+
+Gives the account whose config comes first every folder trust the other
+accounts have (projects[<path>].hasTrustDialogAccepted in each account's
+.claude.json), so a folder trusted on one account opens without the trust
+dialog on all of them. Trust is only added, never taken away.
+
+The write follows Claude Code's own: under its lock (proper-lockfile's
+directory, <config>.lock), a re-read, then a temp file renamed over the
+config with its permissions kept. A lock held by a running session is never
+broken: the sync is skipped and the next launch tries again.
+
+A folder the account has never opened gets Claude Code's default project
+entry with trust set, read from the binary (Claude Code reads an entry as
+written, without filling in defaults) and cached per binary.
+"""
+import copy
+import json
+import mmap
+import os
+import re
+import secrets
+import sys
+import time
+
+CACHE = os.path.join(os.environ.get('CCA_ROOT') or os.path.expanduser('~/.claude-shared/accounts'), 'cache')
+# The default entry, as the bundle spells it:
+# {allowedTools:[],mcpContextUris:[],mcpServers:{},...,hasTrustDialogAccepted:!1,...}
+DEFAULTS_ANCHOR = re.compile(rb'\{allowedTools:\[\],[A-Za-z]+:')
+LITERAL_VALUES = {b'[]': [], b'{}': {}, b'!0': True, b'!1': False}
+LOCK_WAIT_S = 3.0
+
+
+def warn(message):
+    print(f'cca: {message}', file=sys.stderr)
+
+
+def parse_defaults(blob):
+    """The default project entry from a JS bundle, or None when it is not
+    there in the expected shape (every value [], {}, !0 or !1)."""
+    match = DEFAULTS_ANCHOR.search(blob)
+    if match is None:
+        return None
+    depth = 0
+    for end in range(match.start(), min(match.start() + 2000, len(blob))):
+        char = blob[end:end + 1]
+        if char == b'{':
+            depth += 1
+        elif char == b'}':
+            depth -= 1
+            if depth == 0:
+                break
+    else:
+        return None
+    entry = {}
+    for field in bytes(blob[match.start() + 1:end]).split(b','):
+        key, sep, value = field.partition(b':')
+        if not sep or not re.fullmatch(rb'[A-Za-z]+', key) or value not in LITERAL_VALUES:
+            return None
+        entry[key.decode()] = copy.deepcopy(LITERAL_VALUES[value])
+    return entry if entry.get('hasTrustDialogAccepted') is False else None
+
+
+def project_defaults(binary):
+    """parse_defaults of the binary, cached by the binary's real path and size."""
+    real = os.path.realpath(binary)
+    key = re.sub(r'[^A-Za-z0-9.]', '_', f'{os.path.basename(real)}-{os.path.getsize(real)}')
+    cached = os.path.join(CACHE, f'project-defaults-{key}.json')
+    if os.path.exists(cached):
+        with open(cached) as f:
+            return json.load(f)
+    with open(real, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as blob:
+        entry = parse_defaults(blob)
+    if entry is None:
+        warn(f'no default project entry found in {real}; folders an account never opened stay untrusted on it')
+        return None
+    os.makedirs(CACHE, exist_ok=True)
+    with open(cached, 'w') as f:
+        json.dump(entry, f)
+    return entry
+
+
+def trusted(config_path):
+    """The folders a config trusts; an unreadable config trusts none."""
+    try:
+        with open(config_path) as f:
+            projects = json.load(f).get('projects') or {}
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError) as error:
+        warn(f'skipped {config_path} as a source of trust: {error}')
+        return set()
+    return {path for path, entry in projects.items()
+            if isinstance(entry, dict) and entry.get('hasTrustDialogAccepted') is True}
+
+
+def add_trust(config, folders, defaults):
+    """Sets trust on each folder in config (a parsed .claude.json, changed in
+    place); returns the folders it changed."""
+    projects = config.setdefault('projects', {})
+    added = []
+    for folder in sorted(folders):
+        entry = projects.get(folder)
+        if isinstance(entry, dict):
+            if entry.get('hasTrustDialogAccepted') is not True:
+                entry['hasTrustDialogAccepted'] = True
+                added.append(folder)
+        elif defaults is not None:
+            projects[folder] = {**copy.deepcopy(defaults), 'hasTrustDialogAccepted': True}
+            added.append(folder)
+    return added
+
+
+def acquire(lock):
+    deadline = time.monotonic() + LOCK_WAIT_S
+    delay = 0.02
+    while True:
+        try:
+            os.mkdir(lock)
+            return True
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(delay)  # waiting on another process's lock, as proper-lockfile retries
+            delay = min(delay * 2, 0.25)
+
+
+def sync(config_path, sources, defaults):
+    """Adds the sources' trust to config_path; returns the folders added, or
+    None when the config could not be locked or read."""
+    wanted = set()
+    for source in sources:
+        wanted |= trusted(source)
+    if not wanted or not os.path.exists(config_path):
+        return []
+    if not wanted - trusted(config_path):
+        return []
+    lock = f'{config_path}.lock'
+    if not acquire(lock):
+        warn(f'{config_path} stayed locked by a running session; folder trust syncs at the next launch')
+        return None
+    try:
+        with open(config_path) as f:
+            text = f.read()
+        try:
+            config = json.loads(text)
+        except ValueError as error:
+            warn(f'{config_path} does not parse ({error}); left alone')
+            return None
+        added = add_trust(config, wanted, defaults)
+        if not added:
+            return []
+        mode = os.stat(config_path).st_mode & 0o7777
+        temp = f'{config_path}.tmp.cca.{os.getpid()}.{secrets.token_hex(6)}'
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(json.dumps(config, indent=2, ensure_ascii=False))
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(temp, mode)
+            os.rename(temp, config_path)
+        except BaseException:
+            if os.path.exists(temp):
+                os.unlink(temp)
+            raise
+        return added
+    finally:
+        os.rmdir(lock)
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.exit('usage: cca-trust <claude binary> <account config> [other account configs...]')
+    binary, target, sources = sys.argv[1], sys.argv[2], sys.argv[3:]
+    defaults = project_defaults(binary)
+    added = sync(target, sources, defaults)
+    if added:
+        warn(f'trusted {len(added)} folder(s) another account trusts: {", ".join(added)}')
+
+
+if __name__ == '__main__':
+    main()

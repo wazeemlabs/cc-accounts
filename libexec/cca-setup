@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""cca-setup: the edits `cca init` and `cca uninstall` make outside cca's own dir.
+
+  cca-setup install   --rc RC --bin DIR --settings FILE --plugin DIR --wrapper PATH
+  cca-setup uninstall --rc RC --settings FILE --plugin DIR --wrapper PATH
+  cca-setup check     --settings FILE
+  cca-setup running   SESSIONS_DIR
+
+install adds, and uninstall removes:
+  - a marked block in the shell rc file: cca on PATH, and `claude` run through it;
+  - the plugin dir in CLAUDE_CODE_PLUGIN_DIRS, in the env block of Claude Code's
+    settings.json, which loads the /account plugin in every session;
+  - claudeCode.claudeProcessWrapper in each VS Code family editor's user
+    settings, so the extension starts Claude Code through cca. A settings file
+    with comments is not rewritten; the line to add is printed instead.
+check fails, before anything changes, on a settings.json install could not edit.
+running prints the pids of live Claude Code sessions from its session list.
+
+Each change is idempotent and leaves everything else in the file as it was.
+"""
+import argparse
+import json
+import os
+import platform
+import re
+import sys
+
+BEGIN = '# >>> cc-accounts >>>'
+END = '# <<< cc-accounts <<<'
+PLUGIN_ENV = 'CLAUDE_CODE_PLUGIN_DIRS'
+WRAPPER_KEY = 'claudeCode.claudeProcessWrapper'
+EDITORS = ('Code', 'Code - Insiders', 'Cursor', 'Windsurf', 'VSCodium')
+
+
+def say(message):
+    print(f'cca: {message}')
+
+
+def editor_settings_files(home):
+    base = (os.path.join(home, 'Library', 'Application Support') if platform.system() == 'Darwin'
+            else os.path.join(home, '.config'))
+    return [os.path.join(base, name, 'User', 'settings.json') for name in EDITORS]
+
+
+def write_atomic(path, text):
+    """Replaces path with text, keeping its permissions. A symlinked file (a
+    dotfiles repo's rc file) is written at its target, so the link stays."""
+    path = os.path.realpath(path)
+    mode = os.stat(path).st_mode & 0o7777 if os.path.exists(path) else 0o644
+    temp = f'{path}.cca-tmp'
+    with open(temp, 'w', encoding='utf-8') as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(temp, mode)
+    os.replace(temp, path)
+
+
+def indent_of(text):
+    """The indent a JSON file uses, from its first indented line."""
+    match = re.search(r'\n([ \t]+)"', text)
+    return match.group(1) if match else '  '
+
+
+def dump_like(data, original):
+    text = json.dumps(data, indent=indent_of(original), ensure_ascii=False)
+    return text + '\n' if original.endswith('\n') or original == '' else text
+
+
+# --- shell rc --------------------------------------------------------------
+
+def rc_block(bin_dir):
+    return '\n'.join([
+        BEGIN,
+        f'export PATH="{bin_dir}:$PATH"',
+        '# Run Claude Code through cca: a resumed conversation opens on the account',
+        '# it last ran on, and /account can move it.',
+        'claude() { cca run "$@"; }',
+        END,
+    ])
+
+
+def without_block(text):
+    return re.sub(rf'\n?{re.escape(BEGIN)}.*?{re.escape(END)}\n?', '\n', text, flags=re.S).rstrip('\n') + '\n'
+
+
+def rc_install(rc, bin_dir):
+    if not rc:
+        say(f'unknown shell; add these lines to your shell startup file yourself:\n{rc_block(bin_dir)}')
+        return
+    text = open(rc).read() if os.path.exists(rc) else ''
+    base = without_block(text) if BEGIN in text else text
+    new = (base.rstrip('\n') + '\n\n' if base.strip() else '') + rc_block(bin_dir) + '\n'
+    if new != text:
+        write_atomic(rc, new)
+        say(f'added cca to {rc}')
+
+
+def rc_uninstall(rc):
+    if rc and os.path.exists(rc):
+        text = open(rc).read()
+        if BEGIN in text:
+            write_atomic(rc, without_block(text))
+            say(f'removed cca from {rc}')
+
+
+# --- Claude Code settings.json ---------------------------------------------
+
+def load_json(path):
+    text = open(path).read() if os.path.exists(path) else ''
+    if not text.strip():
+        return {}, text
+    try:
+        return json.loads(text), text
+    except ValueError as error:
+        raise SystemExit(f'cca: {path} is not valid JSON ({error}); fix it and run again')
+
+
+def settings_install(path, plugin):
+    data, text = load_json(path)
+    env = data.setdefault('env', {})
+    dirs = [d for d in env.get(PLUGIN_ENV, '').split(os.pathsep) if d]
+    if plugin in dirs:
+        return
+    env[PLUGIN_ENV] = os.pathsep.join(dirs + [plugin])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_atomic(path, dump_like(data, text))
+    say(f'{path}: {PLUGIN_ENV} loads the /account plugin')
+
+
+def settings_uninstall(path, plugin):
+    if not os.path.exists(path):
+        return
+    data, text = load_json(path)
+    env = data.get('env') or {}
+    dirs = [d for d in env.get(PLUGIN_ENV, '').split(os.pathsep) if d]
+    if plugin not in dirs:
+        return
+    rest = [d for d in dirs if d != plugin]
+    if rest:
+        env[PLUGIN_ENV] = os.pathsep.join(rest)
+    else:
+        del env[PLUGIN_ENV]
+    if not env and 'env' in data:
+        del data['env']
+    write_atomic(path, dump_like(data, text))
+    say(f'{path}: removed the /account plugin from {PLUGIN_ENV}')
+
+
+# --- VS Code family settings -------------------------------------------------
+
+def editor_install(path, wrapper):
+    text = open(path).read()
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except ValueError:
+        say(f'{path} has comments or trailing commas, so cca leaves it as it is. Add this line to it:\n'
+            f'    "{WRAPPER_KEY}": "{wrapper}",')
+        return
+    current = data.get(WRAPPER_KEY)
+    if current == wrapper:
+        return
+    if current:
+        say(f'{path} already sets {WRAPPER_KEY} to {current}; left as it is')
+        return
+    data = {WRAPPER_KEY: wrapper, **data}
+    write_atomic(path, dump_like(data, text))
+    say(f'{path}: the Claude Code extension starts through cca (reload the window)')
+
+
+def editor_uninstall(path, wrapper):
+    text = open(path).read()
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except ValueError:
+        if wrapper in text:
+            say(f'{path} has comments; remove the "{WRAPPER_KEY}" line yourself')
+        return
+    if data.get(WRAPPER_KEY) == wrapper:
+        del data[WRAPPER_KEY]
+        write_atomic(path, dump_like(data, text))
+        say(f'{path}: removed {WRAPPER_KEY}')
+
+
+# --- running sessions ------------------------------------------------------
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def running(sessions_dir):
+    pids = []
+    if not os.path.isdir(sessions_dir):
+        return pids
+    for name in os.listdir(sessions_dir):
+        if not name.endswith('.json'):
+            continue
+        try:
+            with open(os.path.join(sessions_dir, name)) as f:
+                pid = json.load(f).get('pid')
+        except (OSError, ValueError):
+            continue  # a record mid-write or left broken names no session to wait for
+        if isinstance(pid, int) and alive(pid):
+            pids.append(pid)
+    return sorted(pids)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='cca-setup')
+    commands = parser.add_subparsers(dest='command', required=True)
+    install = commands.add_parser('install')
+    install.add_argument('--bin', required=True)
+    uninstall = commands.add_parser('uninstall')
+    for sub in (install, uninstall):
+        sub.add_argument('--rc', default='')
+        sub.add_argument('--settings', required=True)
+        sub.add_argument('--plugin', required=True)
+        sub.add_argument('--wrapper', required=True)
+    check = commands.add_parser('check')
+    check.add_argument('--settings', required=True)
+    runs = commands.add_parser('running')
+    runs.add_argument('sessions_dir')
+    args = parser.parse_args(argv)
+    home = os.path.expanduser('~')
+
+    if args.command == 'check':
+        load_json(args.settings)
+        return
+
+    if args.command == 'running':
+        for pid in running(args.sessions_dir):
+            print(pid)
+        return
+    editors = [p for p in editor_settings_files(home) if os.path.exists(p)]
+    if args.command == 'install':
+        rc_install(args.rc, args.bin)
+        settings_install(args.settings, args.plugin)
+        for path in editors:
+            editor_install(path, args.wrapper)
+    else:
+        rc_uninstall(args.rc)
+        settings_uninstall(args.settings, args.plugin)
+        for path in editors:
+            editor_uninstall(path, args.wrapper)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

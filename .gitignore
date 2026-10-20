@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+# Written by Claude Code when it loads the plugin from this folder
+plugin/.claude-plugin/types/
+plugin/tsconfig.json
