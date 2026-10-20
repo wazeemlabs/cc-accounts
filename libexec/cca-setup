@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """cca-setup: the edits `cca init` and `cca uninstall` make outside cca's own dir.
 
-  cca-setup install   --rc RC --bin DIR --settings FILE --plugin DIR --wrapper PATH
+  cca-setup install   --rc RC --shell SHELL --bin DIR --settings FILE --plugin DIR --wrapper PATH
   cca-setup uninstall --rc RC --settings FILE --plugin DIR --wrapper PATH
   cca-setup check     --settings FILE
   cca-setup running   SESSIONS_DIR
@@ -10,9 +10,13 @@ install adds, and uninstall removes:
   - a marked block in the shell rc file: cca on PATH, and `claude` run through it;
   - the plugin dir in CLAUDE_CODE_PLUGIN_DIRS, in the env block of Claude Code's
     settings.json, which loads the /account plugin in every session;
-  - claudeCode.claudeProcessWrapper in each VS Code family editor's user
-    settings, so the extension starts Claude Code through cca. A settings file
-    with comments is not rewritten; the line to add is printed instead.
+  - claudeCode.claudeProcessWrapper in each VS Code family editor's settings
+    on this machine, so the extension starts Claude Code through cca. The
+    setting is machine-scoped: a desktop editor reads it from its user
+    settings, and a remote window (WSL, SSH) from the server's machine
+    settings on the remote, so both are written where the editor is set up.
+    A settings file with comments is not rewritten; the line to add is
+    printed instead.
 check fails, before anything changes, on a settings.json install could not edit.
 running prints the pids of live Claude Code sessions from its session list.
 
@@ -30,6 +34,9 @@ END = '# <<< cc-accounts <<<'
 PLUGIN_ENV = 'CLAUDE_CODE_PLUGIN_DIRS'
 WRAPPER_KEY = 'claudeCode.claudeProcessWrapper'
 EDITORS = ('Code', 'Code - Insiders', 'Cursor', 'Windsurf', 'VSCodium')
+# The server a remote window runs on this machine, per editor.
+EDITOR_SERVERS = ('.vscode-server', '.vscode-server-insiders', '.cursor-server', '.windsurf-server',
+                  '.vscodium-server')
 
 
 def say(message):
@@ -37,9 +44,16 @@ def say(message):
 
 
 def editor_settings_files(home):
+    """The settings files of the editors set up on this machine: a desktop
+    editor's user settings where its User folder exists, and a remote server's
+    machine settings where the server is installed (the file need not exist)."""
     base = (os.path.join(home, 'Library', 'Application Support') if platform.system() == 'Darwin'
             else os.path.join(home, '.config'))
-    return [os.path.join(base, name, 'User', 'settings.json') for name in EDITORS]
+    desktop = [os.path.join(base, name, 'User') for name in EDITORS]
+    servers = [os.path.join(home, server, 'data', 'Machine') for server in EDITOR_SERVERS
+               if os.path.isdir(os.path.join(home, server))]
+    return [os.path.join(folder, 'settings.json') for folder in desktop if os.path.isdir(folder)] + \
+        [os.path.join(folder, 'settings.json') for folder in servers]
 
 
 def write_atomic(path, text):
@@ -69,13 +83,19 @@ def dump_like(data, original):
 
 # --- shell rc --------------------------------------------------------------
 
-def rc_block(bin_dir):
+def rc_block(shell, bin_dir):
+    if shell == 'fish':
+        path = f'fish_add_path --global "{bin_dir}"'
+        function = 'function claude; cca run $argv; end'
+    else:
+        path = f'export PATH="{bin_dir}:$PATH"'
+        function = 'claude() { cca run "$@"; }'
     return '\n'.join([
         BEGIN,
-        f'export PATH="{bin_dir}:$PATH"',
+        path,
         '# Run Claude Code through cca: a resumed conversation opens on the account',
         '# it last ran on, and /account can move it.',
-        'claude() { cca run "$@"; }',
+        function,
         END,
     ])
 
@@ -84,14 +104,16 @@ def without_block(text):
     return re.sub(rf'\n?{re.escape(BEGIN)}.*?{re.escape(END)}\n?', '\n', text, flags=re.S).rstrip('\n') + '\n'
 
 
-def rc_install(rc, bin_dir):
+def rc_install(rc, shell, bin_dir):
     if not rc:
-        say(f'unknown shell; add these lines to your shell startup file yourself:\n{rc_block(bin_dir)}')
+        say('cca does not know your shell. Add these lines to its startup file, '
+            f'in its own syntax:\n{rc_block("sh", bin_dir)}')
         return
     text = open(rc).read() if os.path.exists(rc) else ''
     base = without_block(text) if BEGIN in text else text
-    new = (base.rstrip('\n') + '\n\n' if base.strip() else '') + rc_block(bin_dir) + '\n'
+    new = (base.rstrip('\n') + '\n\n' if base.strip() else '') + rc_block(shell, bin_dir) + '\n'
     if new != text:
+        os.makedirs(os.path.dirname(os.path.realpath(rc)), exist_ok=True)
         write_atomic(rc, new)
         say(f'added cca to {rc}')
 
@@ -150,7 +172,8 @@ def settings_uninstall(path, plugin):
 # --- VS Code family settings -------------------------------------------------
 
 def editor_install(path, wrapper):
-    text = open(path).read()
+    text = open(path).read() if os.path.exists(path) else ''
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
         data = json.loads(text) if text.strip() else {}
     except ValueError:
@@ -165,10 +188,12 @@ def editor_install(path, wrapper):
         return
     data = {WRAPPER_KEY: wrapper, **data}
     write_atomic(path, dump_like(data, text))
-    say(f'{path}: the Claude Code extension starts through cca (reload the window)')
+    say(f'{path}: the Claude Code extension starts through cca (reload the editor window)')
 
 
 def editor_uninstall(path, wrapper):
+    if not os.path.exists(path):
+        return
     text = open(path).read()
     try:
         data = json.loads(text) if text.strip() else {}
@@ -216,6 +241,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     install = commands.add_parser('install')
     install.add_argument('--bin', required=True)
+    install.add_argument('--shell', default='')
     uninstall = commands.add_parser('uninstall')
     for sub in (install, uninstall):
         sub.add_argument('--rc', default='')
@@ -237,9 +263,9 @@ def main(argv=None):
         for pid in running(args.sessions_dir):
             print(pid)
         return
-    editors = [p for p in editor_settings_files(home) if os.path.exists(p)]
+    editors = editor_settings_files(home)
     if args.command == 'install':
-        rc_install(args.rc, args.bin)
+        rc_install(args.rc, args.shell, args.bin)
         settings_install(args.settings, args.plugin)
         for path in editors:
             editor_install(path, args.wrapper)

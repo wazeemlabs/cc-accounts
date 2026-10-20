@@ -87,6 +87,9 @@ check "init refuses while Claude Code runs" "2 1" "$status $(grep -c -- '--yes' 
 check "and moves nothing" "no" "$([[ -L "$HOME/.claude/projects" ]] && echo yes || echo no)"
 "$CCA" init main --yes >/dev/null 2>&1; status=$?
 check "init --yes goes ahead" "0 $HOME/.claude-shared/projects" "$status $(readlink "$HOME/.claude/projects")"
+echo "{\"pid\": $$}" > "$HOME/.claude/sessions/$$.json"
+"$CCA" init main >/dev/null 2>&1; status=$?
+check "init again while Claude Code runs goes ahead: there is nothing left to move" "0" "$status"
 
 fresh
 mkdir -p "$HOME/.claude-shared/projects/-other"
@@ -104,9 +107,30 @@ check "a symlinked rc file stays a symlink, its target gets the block" "$HOME/do
   "$(readlink "$HOME/.zshrc") $(grep -c '>>> cc-accounts >>>' "$HOME/dotfiles/zshrc")"
 
 fresh
-SHELL=/usr/bin/fish "$CCA" init main > "$WORK/out" 2>&1
+SHELL=/bin/tcsh "$CCA" init main > "$WORK/out" 2>&1
 check "for a shell cca does not know, init prints the lines instead of editing a file" "1 export EDITOR=vim" \
-  "$(grep -c 'add these lines to your shell startup file' "$WORK/out") $(cat "$HOME/.zshrc")"
+  "$(grep -c 'Add these lines to its startup file' "$WORK/out") $(cat "$HOME/.zshrc")"
+
+fresh
+SHELL=/usr/bin/fish "$CCA" init main >/dev/null 2>&1
+check "for fish, init writes fish syntax to config.fish" \
+  "fish_add_path --global \"$REPO/bin\"|function claude; cca run \$argv; end" \
+  "$(grep -E '^(fish_add_path|function)' "$HOME/.config/fish/config.fish" | paste -sd'|' -)"
+SHELL=/usr/bin/fish "$CCA" uninstall >/dev/null 2>&1
+check "and uninstall takes it out again" "0" "$(grep -c cc-accounts "$HOME/.config/fish/config.fish")"
+
+fresh
+mkdir -p "$HOME/.vscode-server/bin" "$EDITORS/Windsurf/User"
+"$CCA" init main >/dev/null 2>&1
+check "init sets the wrapper in a remote server's machine settings (WSL, SSH)" "$REPO/bin/cca" \
+  "$(json "$HOME/.vscode-server/data/Machine/settings.json" "d['claudeCode.claudeProcessWrapper']")"
+check "init sets it for an editor installed but never configured" "$REPO/bin/cca" \
+  "$(json "$EDITORS/Windsurf/User/settings.json" "d['claudeCode.claudeProcessWrapper']")"
+check "init leaves alone editors that are not installed" "no" \
+  "$([[ -e "$EDITORS/VSCodium" || -e "$HOME/.cursor-server" ]] && echo yes || echo no)"
+"$CCA" uninstall >/dev/null 2>&1
+check "uninstall removes it from the remote machine settings" "False" \
+  "$(json "$HOME/.vscode-server/data/Machine/settings.json" "'claudeCode.claudeProcessWrapper' in d")"
 
 fresh
 "$CCA" add work 2>"$WORK/err"; status=$?
@@ -125,6 +149,16 @@ fresh
 "$REPO/install.sh" main > "$WORK/out" 2>&1; status=$?
 check "install.sh run from a clone uses it in place and runs init" \
   "0 $REPO/bin" "$status $(grep -o "PATH=\"[^:]*" "$HOME/.zshrc" | cut -d'"' -f2)"
+"$REPO/install.sh" > "$WORK/out" 2>&1; status=$?
+check "install.sh again without a name reports an update" "0 Updated. Your accounts and settings are unchanged." \
+  "$status $(tail -1 "$WORK/out")"
+
+fresh
+mkdir -p "$WORK/winbin"
+printf '#!/bin/sh\necho MINGW64_NT-10.0-26100\n' > "$WORK/winbin/uname" && chmod +x "$WORK/winbin/uname"
+PATH="$WORK/winbin:$PATH" bash "$REPO/install.sh" main > "$WORK/out" 2>&1; status=$?
+check "install.sh on Windows outside WSL says to use WSL, changing nothing" "1 1 no" \
+  "$status $(grep -c 'inside WSL' "$WORK/out") $([[ -L "$HOME/.claude/projects" ]] && echo yes || echo no)"
 
 if git -C "$REPO" rev-parse --verify --quiet HEAD >/dev/null; then
   fresh
@@ -136,10 +170,10 @@ if git -C "$REPO" rev-parse --verify --quiet HEAD >/dev/null; then
     "0 $HOME/.local/share/cc-accounts/bin" "$status $(grep -o "PATH=\"[^:]*" "$HOME/.zshrc" | cut -d'"' -f2)"
   CCA_REPO="$WORK/origin.git" CCA_REF="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" \
     CCA_HOME="$HOME/.local/share/cc-accounts" bash -s < "$REPO/install.sh" > "$WORK/out" 2>&1
-  check "running it again updates the clone and leaves init to you" "0 1" \
-    "$? $(grep -c 'Next: .*cca init <name>' "$WORK/out")"
+  check "running it again updates the clone and says so" "0 1" \
+    "$? $(grep -c '^Updated\.' "$WORK/out")"
   # An annotated tag, as releases are: cloning one by name made git print notes.
-  git -C "$WORK/origin.git" tag -a v9.9.9 -m "test release" HEAD
+  git -C "$WORK/origin.git" -c user.name=test -c user.email=test@example.com tag -a v9.9.9 -m "test release" HEAD
   fresh
   CCA_REPO="$WORK/origin.git" CCA_REF=v9.9.9 CCA_HOME="$HOME/.local/share/cc-accounts" \
     bash -s -- main < "$REPO/install.sh" > "$WORK/out" 2>&1

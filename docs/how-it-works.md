@@ -34,7 +34,7 @@ When Claude Code exits, cca reads the switch file. If it holds a request, cca st
 
 ## Moving a conversation in VS Code
 
-The Claude Code extension starts Claude Code itself, so cca cannot wait on it. Setup sets `claudeCode.claudeProcessWrapper` to cca. The extension then runs `cca <its own claude binary> <args>`. cca picks the account as above and replaces itself with Claude Code (`exec`), keeping its pid, with `CCA_MODE=stream` and `CCA_PID` set to that pid.
+The Claude Code extension starts Claude Code itself, so cca cannot wait on it. Setup sets `claudeCode.claudeProcessWrapper` to cca. The setting is machine-scoped: a desktop window reads it from the editor's user settings, and a remote window (WSL, SSH) from the editor server's machine settings on the remote machine. Setup writes it in both places for every VS Code family editor set up on the machine it runs on. The extension then runs `cca <its own claude binary> <args>`. cca picks the account as above and replaces itself with Claude Code (`exec`), keeping its pid, with `CCA_MODE=stream` and `CCA_PID` set to that pid.
 
 `/account <name>` checks that `CCA_PID` is its own process, records `<name>` for the conversation, and sends its own process SIGINT from a zero-delay timer. In this mode SIGINT ends Claude Code with exit status 0, which the extension treats as a normal end (SIGTERM gives 143, which the panel reports as a failure). The panel then starts a new process at your next message, resuming the same conversation. The new process starts through the wrapper, which reads the record and picks `<name>`.
 
@@ -66,9 +66,9 @@ A folder the account has never opened needs a new entry. Claude Code reads an en
 | `~/.claude-shared/accounts/by-session/<id>` | The account each conversation last ran on. |
 | `~/.claude-shared/accounts/switch/<pid>` | A pending terminal switch, removed when cca exits. |
 | `~/.claude-shared/accounts/cache/` | Claude Code's default project entry, per binary. |
-| Your shell rc file | A block between `# >>> cc-accounts >>>` and `# <<< cc-accounts <<<`. |
+| Your shell's startup file (`.zshrc`, `.bashrc` or fish's `config.fish`) | A block between `# >>> cc-accounts >>>` and `# <<< cc-accounts <<<`. |
 | `~/.claude/settings.json` | `CLAUDE_CODE_PLUGIN_DIRS` in its `env` block. |
-| Editor user settings | `claudeCode.claudeProcessWrapper`. |
+| Editor settings | `claudeCode.claudeProcessWrapper`, in each desktop editor's user settings and each remote editor server's machine settings (`~/.vscode-server/data/Machine/settings.json` and the like). |
 | Each account's `.claude.json` | Trust flags, as above. |
 
 `CCA_ROOT` moves the state directory and `CCA_SHARED` the shared one.
@@ -82,6 +82,10 @@ A folder the account has never opened needs a new entry. Claude Code reads an en
 | `claude --help` option format | Keeping options on a switch | `tests/test_keep_args.py` against the installed Claude Code |
 | The default project entry literal in the binary | New trust entries | `tests/test_cca_trust.py` against the installed Claude Code |
 | `.claude.json` lock and project layout | Folder trust | `tests/test_cca_trust.py` |
-| The extension's `claudeProcessWrapper` call (`wrapper <binary> <args>`) | VS Code | Manual check |
+| The extension's `claudeProcessWrapper` call (`wrapper <binary> <args>`), machine-scoped | VS Code | Manual check |
 | SIGINT ending a stream-json session with status 0 | VS Code switch | Manual check |
 | The plugin API | `/account` | `plugin/tests` with `claude plugin test` |
+
+## Windows
+
+cc-accounts runs in WSL, where Claude Code is a Linux program and everything above applies. Claude Code installed natively on Windows is not supported: cca is a bash script, the shared folders are symbolic links (which need Developer Mode or administrator rights on Windows), the terminal switch and the VS Code switch rely on POSIX processes and signals, and the extension cannot run a bash script as its process wrapper. Native support needs a port of cca to Python with directory junctions, a `.cmd` wrapper, and a different way to end the VS Code session; it is tracked in issue #1.

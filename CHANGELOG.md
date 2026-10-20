@@ -2,9 +2,14 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.1.1 (2026-10-20)
 
-- `install.sh` installs a tag without git's detached-HEAD notes.
+- VS Code in WSL or over SSH: setup now sets the process wrapper in the editor server's machine settings, where a remote window reads it. Before, `/account` did not reach those windows.
+- Setup also covers an editor that is installed but has no settings file yet.
+- fish: setup writes fish syntax to `config.fish`. Other unknown shells get the lines to add.
+- Running `cca init` again while Claude Code is open works; it only asks you to quit when it has folders to move.
+- `install.sh` explains how to use WSL when run on Windows outside it, says "Updated" when run again, and installs a tag without git's detached-HEAD notes.
+- The README is shorter, with step-by-step setup and Windows instructions.
 
 ## 0.1.0 (2026-10-20)
 

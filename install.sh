@@ -4,6 +4,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/wazeemlabs/cc-accounts/main/install.sh | bash -s -- <name>
 #   ./install.sh <name>            from a clone, which stays where it is
 #
+# Run it again without a name to update.
+#
 # <name> is what you call the account you are signed in to now (say, "work").
 # Without it, cc-accounts is installed and `cca init <name>` is left to you.
 #
@@ -21,9 +23,12 @@ fail() { echo "cc-accounts: $*" >&2; exit 1; }
 command -v git >/dev/null || fail "needs git"
 command -v python3 >/dev/null || fail "needs python3 (3.8 or newer)"
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' || fail "needs python3 3.8 or newer"
-case "$(uname)" in
+case "$(uname -s)" in
   Darwin|Linux) ;;
-  *) fail "runs on macOS and Linux (and WSL)" ;;
+  MINGW*|MSYS*|CYGWIN*)
+    fail "on Windows, install and run it inside WSL (Windows Subsystem for Linux):
+  https://github.com/wazeemlabs/cc-accounts#windows" ;;
+  *) fail "runs on macOS, Linux and Windows through WSL" ;;
 esac
 command -v claude >/dev/null || [[ -x "$HOME/.local/bin/claude" ]] \
   || echo "cc-accounts: Claude Code is not installed yet; install it before using cca" >&2
@@ -54,4 +59,8 @@ echo "cc-accounts $(cat "$DEST/VERSION") is in $DEST"
 if [[ $# -gt 0 ]]; then
   exec "$DEST/bin/cca" init "$@"
 fi
-echo "Next: $DEST/bin/cca init <name>, naming the account you are signed in to now."
+if [[ -f "${CCA_ROOT:-$HOME/.claude-shared/accounts}/accounts.tsv" ]]; then
+  echo "Updated. Your accounts and settings are unchanged."
+else
+  echo "Next: $DEST/bin/cca init <name>, naming the account you are signed in to now."
+fi

@@ -3,126 +3,127 @@
 [![CI](https://github.com/wazeemlabs/cc-accounts/actions/workflows/ci.yml/badge.svg)](https://github.com/wazeemlabs/cc-accounts/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Run Claude Code on several accounts and move a conversation from one account to another, in the terminal and in VS Code.
-
-```
-$ cca
-* work       you@company.com                  /Users/you/.claude
-  personal   you@example.com                  /Users/you/.claude-personal
-  client     you@client.org                   /Users/you/.claude-client
-* new sessions start here. Move a running one with /account <name>.
-```
-
-Inside a session:
+Use several Claude Code accounts on one computer, and move a conversation from one account to another without losing it.
 
 ```
 > /account personal
   Switching to personal: this session closes and reopens on it.
 ```
 
-The conversation reopens on the other account with its history, in the same terminal, with the flags you started it with.
+Works in the terminal and in VS Code (also Cursor and Windsurf), on macOS, Linux and Windows (through WSL).
 
-## Why
+## Setup
 
-Claude Code keeps one login per config directory, and each directory keeps its own conversations. If you have more than one account (work and personal, or a client's organization), switching accounts means losing your place: the conversation you were in belongs to the other directory.
+You need [Claude Code](https://code.claude.com/docs/en/overview), git and python3. On Windows, follow [the Windows steps](#windows) instead.
 
-cc-accounts gives each account its own config directory, as Claude Code expects, and shares the conversations, the session list and your settings between them. Any account can pick up any conversation.
+**1. Quit Claude Code**, in every terminal and editor.
 
-## What you get
-
-- `cca <name>` runs Claude Code on that account.
-- `/account <name>` moves the conversation you are in to another account. In a terminal it closes and reopens on the new account with the same flags. In VS Code, the next message you send continues on the new account.
-- `claude --resume <id>` opens a conversation on the account it last ran on.
-- Conversations, the session list (so sessions on different accounts can message each other), `settings.json` and `CLAUDE.md` are shared.
-- Folder trust is synced: a folder you trusted on one account opens without the trust prompt on the others. Set `CCA_TRUST_SYNC=off` to turn this off.
-- The status line shows which account a session runs on.
-
-## Requirements
-
-- macOS or Linux (WSL works as Linux).
-- [Claude Code](https://code.claude.com/docs/en/overview), installed with the native installer.
-- bash, git and python3 3.8 or newer.
-
-`/account` is a Claude Code plugin built on Claude Code's plugin API, which is in early access; cc-accounts is tested with Claude Code 2.1.304. Where the plugin does not load, everything else works, and `cca <name> --resume <id>` moves a conversation by hand.
-
-## Install
-
-Quit Claude Code first: setup moves `~/.claude`'s conversations into a shared folder. Then install, naming the account you are signed in to now:
+**2. Install.** Replace `work` with any short name for the account you are signed in to now:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/wazeemlabs/cc-accounts/main/install.sh | bash -s -- work
 ```
 
-This clones cc-accounts into `~/.local/share/cc-accounts` and runs `cca init work`. Open a new terminal, then add your other accounts. Each one opens Claude Code so you can sign in with `/login`:
+**3. Open a new terminal and add your other accounts**, one name each. Claude Code opens for each one: sign in with `/login`, then quit it.
 
 ```sh
 cca add personal
-cca add client
 ```
 
-To install from a clone instead: `git clone https://github.com/wazeemlabs/cc-accounts && cc-accounts/install.sh work`. To pin a release, set `CCA_REF=v0.1.0`.
+**4. In VS Code**, reload the window once (Command Palette, then "Developer: Reload Window").
 
-## Usage
+Done. Keep using `claude` as before.
 
-| Command | What it does |
+## Everyday use
+
+| To | Do |
 |---|---|
-| `cca` | List the accounts. `*` marks where new sessions start. |
-| `cca <name> [claude args]` | Run Claude Code on `<name>`. |
-| `claude [args]` | After setup, runs through cca: a resumed conversation opens on the account it last ran on, anything else on the default. |
-| `cca use <name>` | Start new sessions on `<name>`. |
-| `cca add <name> [dir]` | Add an account. Its directory defaults to `~/.claude-<name>`. Run it again for an existing account to relink what it shares. |
-| `cca init <name>` | Set up, naming the account in `~/.claude`. `install.sh` runs this. |
-| `cca uninstall` | Undo setup's changes to your shell, settings and editor. |
-| `/account` | Inside a session: list the accounts. |
-| `/account <name>` | Inside a session: move this conversation to `<name>`. |
-| `/account default <name>` | Inside a session: start new sessions on `<name>`. |
+| Move the conversation you are in to another account | Type `/account personal` in Claude Code |
+| See your accounts | Type `/account`, or run `cca` in a terminal |
+| Start Claude Code on a given account | `cca personal` |
+| Choose the account new sessions start on | `cca use personal` |
 
-### Moving a conversation
+In a terminal, `/account` closes the session and reopens the same conversation on the other account, with the options you started it with. In VS Code, the switch happens at the next message you send, in the same tab.
 
-In a terminal started with `claude` or `cca`, `/account <name>` closes the session and cca reopens the same conversation on `<name>`. Options such as `--model`, `--effort` and `--add-dir` carry over. The prompt you started with and one-time options (`--print`, `--worktree`, `--continue`) do not, and cca prints what it left out.
+`claude --resume` opens a conversation on the account it last ran on.
 
-In VS Code, `/account <name>` records the choice and ends the Claude Code process. The next message you send starts a new one on `<name>`, in the same tab, with the conversation intact.
+## What it does
 
-### VS Code and other editors
+Claude Code keeps one login per config folder, and each folder keeps its own conversations. cc-accounts gives each account its own folder and shares these between all of them:
 
-Setup sets `claudeCode.claudeProcessWrapper` in VS Code's user settings (and in Cursor, Windsurf, VS Code Insiders and VSCodium where they are installed), so the Claude Code extension starts Claude through cca. Reload the window after setup. If your settings file has comments, cca does not rewrite it; it prints the line to add.
+- your conversations, so any account can continue any of them;
+- the list of running sessions;
+- `settings.json`, `CLAUDE.md`, `agents`, `commands` and `keybindings.json` (change the list in `~/.claude-shared/accounts/share.conf`);
+- folder trust, so a folder you trusted on one account does not ask again on another (set `CCA_TRUST_SYNC=off` to stop this).
 
-With a process wrapper set, the extension changes two small things on its own: a conversation with no saved permission mode starts in Manual mode, and the session list also shows sessions started by scripts.
+Each account keeps its own login, installed plugins and user-level MCP servers. Add plugins and MCP servers on each account, or put MCP servers in a project's `.mcp.json`.
 
-## What is shared
+How it works, and every file it writes: [docs/how-it-works.md](docs/how-it-works.md).
 
-| | Where it lives |
-|---|---|
-| Conversations, todos, file history, the session list | `~/.claude-shared`, linked into every account |
-| `settings.json`, `CLAUDE.md`, `agents`, `commands`, `keybindings.json` | `~/.claude`, linked into every other account. Edit the list in `~/.claude-shared/accounts/share.conf`. |
-| Folder trust | Each account's `.claude.json`, synced when an account starts |
-| Login | Each account's own credential (the macOS keychain, or the account's directory on Linux). cca never reads it. |
-| Installed plugins, user-scope MCP servers, skills synced from claude.ai | Each account's own. Add them on each account, or use a project's `.mcp.json`. |
+## Windows
 
-## How it works
+Use cc-accounts inside WSL (Windows Subsystem for Linux), with Claude Code installed in WSL too.
 
-Each account is a Claude Code config directory, chosen with the `CLAUDE_CONFIG_DIR` environment variable. cca picks the directory when it starts Claude Code, records which account each conversation ran on, and restarts Claude Code on another account when `/account` asks it to. The details, including what cca writes and why, are in [docs/how-it-works.md](docs/how-it-works.md).
+1. If you do not have WSL, run `wsl --install` in PowerShell and restart.
+2. Open your WSL terminal (for example Ubuntu) and install Claude Code there: `curl -fsSL https://claude.ai/install.sh | bash`.
+3. If you use VS Code: install its "WSL" extension and open a folder in WSL once ("WSL: Connect to WSL"), then close VS Code.
+4. Follow [Setup](#setup) in the WSL terminal.
 
-cc-accounts relies on parts of Claude Code that are not documented: `CLAUDE_CONFIG_DIR`, the layout of `~/.claude`, the VS Code extension's process wrapper, and the format of `claude --help`. A Claude Code update can change them. The test suite checks the formats cca reads against the installed Claude Code, and CI runs it against the latest release.
+Claude Code installed directly on Windows (from PowerShell or CMD) is not supported yet: folder links, process signals and the editor wrapper work differently there. Native support is tracked in [issue #1](https://github.com/wazeemlabs/cc-accounts/issues/1).
 
-## Uninstall
+## Update and uninstall
+
+To update, run the install command again without a name:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/wazeemlabs/cc-accounts/main/install.sh | bash
+```
+
+To uninstall:
 
 ```sh
 cca uninstall
 rm -rf ~/.local/share/cc-accounts
 ```
 
-Your accounts and conversations stay where they are. To stop sharing conversations, replace the links in `~/.claude` (`projects`, `todos`, `file-history`, `sessions`) with the folders in `~/.claude-shared`.
+Your accounts and conversations stay where they are.
 
-## Using several accounts
+## Good to know
 
-Use cc-accounts only with accounts you are allowed to use, and follow the terms that apply to each of them.
+- Installed a new editor, or connected VS Code to WSL or a remote machine, after setup? Run `cca init` again with your first account's name (`cca init work`). It only adds what is missing.
+- `/account` uses Claude Code's plugin API, which is in early access (tested with Claude Code 2.1.304). If your Claude Code does not load the plugin, everything else still works, and `cca personal --resume <conversation id>` moves a conversation by hand.
+- When switching in a terminal, options such as `--model` and `--add-dir` carry over. The first prompt and one-time options such as `--print` and `--worktree` do not; cca says what it left out.
+- If your editor's settings file has comments, setup does not rewrite it and prints the line to add instead.
+- In an editor, a conversation with no saved permission mode starts in Manual mode, and the session list also shows sessions started by scripts. The Claude Code extension does this whenever a process wrapper is set.
+- Sessions on claude.ai (cloud sessions) belong to one account and are not shared.
+- cc-accounts relies on parts of Claude Code that are not documented, and a Claude Code update can change them. CI checks it against the latest Claude Code every week.
+
+## All commands
+
+| Command | What it does |
+|---|---|
+| `cca` | List the accounts. `*` marks where new sessions start. |
+| `cca <name> [claude options]` | Run Claude Code on `<name>`. |
+| `cca add <name> [folder]` | Add an account. Its folder defaults to `~/.claude-<name>`. Running it again for an account relinks what it shares. |
+| `cca use <name>` | Start new sessions on `<name>`. |
+| `cca init <name>` | Set up, naming the account you are signed in to now. The installer runs this. |
+| `cca uninstall` | Undo setup's changes to your shell, settings and editors. |
+| `cca version`, `cca help` | |
+| `/account` | In Claude Code: list the accounts. |
+| `/account <name>` | In Claude Code: move this conversation to `<name>`. |
+| `/account default <name>` | In Claude Code: start new sessions on `<name>`. |
+
+Environment variables: `CCA_TRUST_SYNC=off` stops folder trust syncing. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
+
+## Use only your own accounts
+
+Use cc-accounts only with accounts you are allowed to use, and follow the terms of each one.
 
 cc-accounts is not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.
 
 ## Contributing
 
-Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues as described in [SECURITY.md](SECURITY.md).
+Bug reports and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

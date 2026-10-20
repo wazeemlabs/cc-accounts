@@ -253,6 +253,7 @@ shell_rc() {
   case "$(basename "${SHELL:-}")" in
     zsh) echo "$HOME/.zshrc" ;;
     bash) echo "$HOME/.bashrc" ;;
+    fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
   esac
   return 0
 }
@@ -268,7 +269,13 @@ init() {
     home_name="$(awk -F'\t' -v d="$HOME_DIR" '$2 == d { print $1 }' "$TABLE")"
   fi
   [[ -z "$home_name" || "$home_name" == "$name" ]] || die "$HOME_DIR is already the account '$home_name'"
-  if [[ -n "$(running_sessions)" && "$yes" != yes ]]; then
+  # Moving ~/.claude's folders under a running session is what needs it quit;
+  # a second init, with them already moved, does not.
+  local item to_move=no
+  for item in "${SHARED_STATE[@]}"; do
+    [[ -d "$HOME_DIR/$item" && ! -L "$HOME_DIR/$item" ]] && to_move=yes
+  done
+  if [[ "$to_move" == yes && -n "$(running_sessions)" && "$yes" != yes ]]; then
     die "Claude Code is running (pids: $(running_sessions | paste -sd' ' -)). Quit it first, or run cca init $name --yes"
   fi
   "$LIBEXEC/cca-setup" check --settings "$HOME_DIR/settings.json"
@@ -284,11 +291,11 @@ init() {
     } > "$ROOT/share.conf"
   fi
   "$LIBEXEC/cca-setup" install \
-    --rc "$rc" --bin "$HERE/bin" \
+    --rc "$rc" --shell "$(basename "${SHELL:-}")" --bin "$HERE/bin" \
     --settings "$HOME_DIR/settings.json" --plugin "$PLUGIN" \
     --wrapper "$HERE/bin/cca"
   echo "Account $name is $HOME_DIR. Add the others with: cca add <name>"
-  [[ -n "$rc" ]] && echo "Open a new terminal (or run: source $rc) to use it."
+  [[ -n "$rc" ]] && echo "Open a new terminal to start using it. In an editor, reload the window."
   return 0
 }
 
