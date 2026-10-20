@@ -119,6 +119,16 @@ check "for fish, init writes fish syntax to config.fish" \
 SHELL=/usr/bin/fish "$CCA" uninstall >/dev/null 2>&1
 check "and uninstall takes it out again" "0" "$(grep -c cc-accounts "$HOME/.config/fish/config.fish")"
 
+if [[ "$(uname)" != Darwin ]]; then
+  fresh
+  export XDG_CONFIG_HOME="$HOME/xdg"
+  mkdir -p "$XDG_CONFIG_HOME/Code/User"
+  SHELL=/usr/bin/fish "$CCA" init main >/dev/null 2>&1
+  check "on Linux, init follows XDG_CONFIG_HOME for fish and the editors" "1 $REPO/bin/cca" \
+    "$(grep -c '>>> cc-accounts >>>' "$XDG_CONFIG_HOME/fish/config.fish") $(json "$XDG_CONFIG_HOME/Code/User/settings.json" "d['claudeCode.claudeProcessWrapper']")"
+  unset XDG_CONFIG_HOME
+fi
+
 fresh
 mkdir -p "$HOME/.vscode-server/bin" "$EDITORS/Windsurf/User"
 "$CCA" init main >/dev/null 2>&1

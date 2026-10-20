@@ -48,7 +48,7 @@ def editor_settings_files(home):
     editor's user settings where its User folder exists, and a remote server's
     machine settings where the server is installed (the file need not exist)."""
     base = (os.path.join(home, 'Library', 'Application Support') if platform.system() == 'Darwin'
-            else os.path.join(home, '.config'))
+            else os.environ.get('XDG_CONFIG_HOME') or os.path.join(home, '.config'))
     desktop = [os.path.join(base, name, 'User') for name in EDITORS]
     servers = [os.path.join(home, server, 'data', 'Machine') for server in EDITOR_SERVERS
                if os.path.isdir(os.path.join(home, server))]
