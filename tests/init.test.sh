@@ -138,6 +138,12 @@ if git -C "$REPO" rev-parse --verify --quiet HEAD >/dev/null; then
     CCA_HOME="$HOME/.local/share/cc-accounts" bash -s < "$REPO/install.sh" > "$WORK/out" 2>&1
   check "running it again updates the clone and leaves init to you" "0 1" \
     "$? $(grep -c 'Next: .*cca init <name>' "$WORK/out")"
+  # An annotated tag, as releases are: cloning one by name made git print notes.
+  git -C "$WORK/origin.git" tag -a v9.9.9 -m "test release" HEAD
+  fresh
+  CCA_REPO="$WORK/origin.git" CCA_REF=v9.9.9 CCA_HOME="$HOME/.local/share/cc-accounts" \
+    bash -s -- main < "$REPO/install.sh" > "$WORK/out" 2>&1
+  check "install.sh installs a tag quietly" "0 0" "$? $(grep -c -i 'detached\|not a commit' "$WORK/out")"
 fi
 
 finish

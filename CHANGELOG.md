@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+- `install.sh` installs a tag without git's detached-HEAD notes.
+
 ## 0.1.0 (2026-10-20)
 
 First release.

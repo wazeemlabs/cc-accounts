@@ -37,15 +37,17 @@ if [[ -n "$here" && -x "$here/bin/cca" ]]; then
   DEST="$here"
 elif [[ -d "$DEST/.git" ]]; then
   git -C "$DEST" fetch --quiet --tags origin
+else
+  mkdir -p "$(dirname "$DEST")"
+  git clone --quiet "$REPO" "$DEST"
+fi
+if [[ "$DEST" != "$here" ]]; then
   if git -C "$DEST" show-ref --verify --quiet "refs/remotes/origin/$REF"; then
     git -C "$DEST" checkout --quiet "$REF"
     git -C "$DEST" merge --quiet --ff-only "origin/$REF"
   else
-    git -C "$DEST" checkout --quiet "refs/tags/$REF"
+    git -C "$DEST" -c advice.detachedHead=false checkout --quiet "refs/tags/$REF"
   fi
-else
-  mkdir -p "$(dirname "$DEST")"
-  git clone --quiet --branch "$REF" "$REPO" "$DEST"
 fi
 echo "cc-accounts $(cat "$DEST/VERSION") is in $DEST"
 
