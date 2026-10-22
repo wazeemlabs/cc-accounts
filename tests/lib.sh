@@ -41,7 +41,8 @@ setup() {
 #!/bin/bash
 # var uhe={allowedTools:[],mcpContextUris:[],mcpServers:{},hasTrustDialogAccepted:!1};
 if [[ "$1" == --help ]]; then cat "$FIXTURES/claude-help.txt"; exit 0; fi
-echo "dir=${CLAUDE_CONFIG_DIR-unset} account=${CLAUDE_ACCOUNT-} args=$*" >> "$LOG"
+stdin=""; case "$1" in edit-*) stdin="$(cat)" ;; esac
+echo "dir=${CLAUDE_CONFIG_DIR-unset} account=${CLAUDE_ACCOUNT-} args=$*${stdin:+ stdin=$stdin}" >> "$LOG"
 echo "mode=${CCA_MODE-} parent=$([[ "${CCA_PID-}" == "$PPID" ]] && echo yes || echo no) self=$([[ "${CCA_PID-}" == "$$" ]] && echo yes || echo no) root=${CCA_ROOT-}" >> "$LOG.pid"
 if [[ -n "${FAKE_SWITCH:-}" && ! -e "$LOG.switched" ]]; then
   touch "$LOG.switched"; echo "$FAKE_SWITCH" > "$CLAUDE_ACCOUNT_SWITCH_FILE"; exit 0

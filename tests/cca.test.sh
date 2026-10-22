@@ -95,6 +95,22 @@ check "wrapper mode runs the given binary once on the recorded account" \
   "dir=$HOME/.claude-two account=2 args=--resume $ID --input-format stream-json" "$(cat "$LOG")"
 
 setup
+out="$(echo '{"on":true}' | "$CCA" "$CCA_CLAUDE" edit-chrome-settings --json)"
+check "an editor's preference edit, naming no conversation, runs on every account with the same input" \
+  "dir=unset account=1 args=edit-chrome-settings --json stdin={\"on\":true}|dir=$HOME/.claude-two account=2 args=edit-chrome-settings --json stdin={\"on\":true}" "$(paste -sd'|' "$LOG")"
+check "and prints one result" "" "$out"
+
+setup
+echo '{}' | FAKE_STATUS=4 "$CCA" "$CCA_CLAUDE" edit-memory-settings --json; status=$?
+check "a preference edit that fails on an account stops there with its status" \
+  "4 1" "$status $(wc -l < "$LOG" | tr -d ' ')"
+
+setup
+echo '{}' | CLAUDE_ACCOUNT=2 "$CCA" "$CCA_CLAUDE" edit-chrome-settings --json
+check "a preference edit from inside a session runs on that session's account only" \
+  "dir=$HOME/.claude-two account=2 args=edit-chrome-settings --json stdin={}" "$(cat "$LOG")"
+
+setup
 CLAUDE_ACCOUNT=2 "$CCA" run -p x
 check "an inherited CLAUDE_ACCOUNT (claude run inside a session) keeps that account" \
   "dir=$HOME/.claude-two account=2 args=-p x" "$(cat "$LOG")"

@@ -55,6 +55,7 @@ Claude Code keeps one login per config folder, and each folder keeps its own con
 - the list of running sessions;
 - `settings.json`, `CLAUDE.md`, `agents`, `commands` and `keybindings.json` (change the list in `~/.claude-shared/accounts/share.conf`);
 - folder trust, so a folder you trusted on one account does not ask again on another (set `CCA_TRUST_SYNC=off` to stop this).
+- the preferences VS Code's Claude in Chrome and memory dialogs save, which Claude Code keeps per account: a change in either dialog is applied to every account.
 
 Each account keeps its own login, installed plugins and user-level MCP servers. Add plugins and MCP servers on each account, or put MCP servers in a project's `.mcp.json`.
 

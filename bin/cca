@@ -38,6 +38,12 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # this old belongs to a conversation nobody has opened since; it then opens on
 # the default account.
 RECORD_DAYS=180
+# Settings the editor saves by running the binary once with one of these
+# subcommands (VS Code's Claude in Chrome and memory dialogs). They live in
+# each account's .claude.json, and the editor runs the helper itself, with
+# no conversation named, so nothing says whose panel asked. cca runs it on
+# every account, which keeps the setting the same everywhere, like a shared one.
+PREFERENCE_EDITS=" edit-chrome-settings edit-memory-settings "
 
 # Where this script really is, through the link install.sh makes.
 self="$0"
@@ -310,6 +316,20 @@ list() {
   echo "* new sessions start here. Move a running one with /account <name>."
 }
 
+# Run a preference edit (see PREFERENCE_EDITS) on every account, feeding each
+# the same stdin. Stops at the first account that fails, with its status.
+edit_everywhere() {
+  local bin="$1"; shift
+  local input name dir out status
+  input="$(cat)"
+  while IFS=$'\t' read -r name dir; do
+    out="$(printf '%s' "$input" | (apply "$name"; CCA_MODE=stream CCA_PID=$$ exec "$bin" "$@"))" \
+      || { status=$?; printf '%s\n' "$out"; exit "$status"; }
+  done < "$TABLE"
+  printf '%s\n' "$out"
+  exit 0
+}
+
 case "${1:-}" in
   "") list ;;
   help|-h|--help) sed -n '2,20p' "$self" | sed 's/^# \{0,1\}//' ;;
@@ -356,6 +376,9 @@ case "${1:-}" in
     # next message starts a new one, which this resolves to the recorded account.
     [[ -x "$1" ]] || die "not an executable: $1"
     bin="$1"; shift
+    if [[ -f "$TABLE" && "$PREFERENCE_EDITS" == *" ${1:-} "* && -z "$(resume_id "$@")" && -z "${CLAUDE_ACCOUNT:-}" ]]; then
+      edit_everywhere "$bin" "$@"
+    fi
     apply "$(choose "$@")"
     unset CLAUDE_ACCOUNT_SWITCH_FILE
     export CCA_MODE=stream CCA_PID=$$

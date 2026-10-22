@@ -69,15 +69,20 @@ A folder the account has never opened needs a new entry. Claude Code reads an en
 | Your shell's startup file (`.zshrc`, `.bashrc` or fish's `config.fish`) | A block between `# >>> cc-accounts >>>` and `# <<< cc-accounts <<<`. |
 | `~/.claude/settings.json` | `CLAUDE_CODE_PLUGIN_DIRS` in its `env` block. |
 | Editor settings | `claudeCode.claudeProcessWrapper`, in each desktop editor's user settings and each remote editor server's machine settings (`~/.vscode-server/data/Machine/settings.json` and the like). |
-| Each account's `.claude.json` | Trust flags, as above. |
+| Each account's `.claude.json` | Trust flags, as above, and the preferences below. |
 
 `CCA_ROOT` moves the state directory and `CCA_SHARED` the shared one.
+
+## Preferences the editor saves
+
+VS Code's Claude in Chrome and memory dialogs save their settings by running the binary once, as `claude edit-chrome-settings` or `claude edit-memory-settings`, from the extension itself rather than from a session. That run goes through the process wrapper too, but names no conversation, so nothing says which panel's account asked, and the setting lives in each account's `.claude.json`. cca runs the helper on every account, feeding each the same input, so the setting reads the same everywhere, as a shared one. Without this the setting went to the default account, and a panel on another account kept reporting it off (Claude in Chrome then never connected there). A helper run from inside a session, where `CLAUDE_ACCOUNT` is set, or with `--resume`, runs on that account alone.
 
 ## What a Claude Code update can break
 
 | Claude Code behavior | Used for | Caught by |
 |---|---|---|
 | `CLAUDE_CONFIG_DIR` selects the config directory | Every account | Running cca |
+| `claude edit-chrome-settings` and `edit-memory-settings` write the account's `.claude.json` | Preferences the editor saves | `tests/cca.test.sh` (the fan-out), a VS Code `/chrome` toggle on a non-default account (the effect) |
 | Credentials keyed per config directory | Separate logins | Running cca |
 | `claude --help` option format | Keeping options on a switch | `tests/test_keep_args.py` against the installed Claude Code |
 | The default project entry literal in the binary | New trust entries | `tests/test_cca_trust.py` against the installed Claude Code |
