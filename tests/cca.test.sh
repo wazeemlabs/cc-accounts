@@ -118,7 +118,28 @@ check "an inherited CLAUDE_ACCOUNT (claude run inside a session) keeps that acco
 setup
 rm "$CCA_ROOT/accounts.tsv"
 CLAUDE_CONFIG_DIR=/keep "$CCA" run -p x
-check "with no accounts registered claude runs untouched" "dir=/keep account= args=-p x" "$(cat "$LOG")"
+check "with no accounts registered claude runs untouched" "dir=/keep account= args=-p x memory=unset" \
+  "$(cat "$LOG") memory=$(cat "$LOG.memory")"
+
+setup
+"$CCA" 2 -p x
+"$CCA" "$CCA_CLAUDE" --resume "$ID"
+check "every session, terminal or VS Code, keeps its memory at the shared conversations' real path" \
+  "$HOME/.claude-shared|$HOME/.claude-shared" "$(paste -sd'|' "$LOG.memory")"
+
+setup
+: > "$CCA_ROOT/accounts.tsv"
+echo '{}' | "$CCA" "$CCA_CLAUDE" edit-chrome-settings --json; status=$?
+check "with an empty account table a preference edit runs once, untouched" \
+  "0 dir=unset account= args=edit-chrome-settings --json stdin={}" "$status $(cat "$LOG")"
+
+setup
+"$CCA" add other "$HOME/.claude-two" 2>"$WORK/err"; status=$?
+check "add refuses a folder another account already uses" "2 1 0" \
+  "$status $(grep -c "already the account '2'" "$WORK/err") $(grep -c '^other' "$CCA_ROOT/accounts.tsv")"
+
+check "the plugin's version is the release's" "$(cat "$(dirname "$CCA")/../VERSION")" \
+  "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$(dirname "$CCA")/../plugin/.claude-plugin/plugin.json")"
 
 setup
 echo '{"mine":true}' > "$HOME/.claude-two/settings.json"
@@ -172,5 +193,42 @@ check "CCA_TRUST_SYNC=off leaves trust alone" "False" \
 FAKE_SWITCH="1 $ID" "$CCA" 2 2>"$WORK/err"
 check "a launch syncs what it finds and a relaunch with nothing new is silent" \
   "cca: trusted 1 folder(s) another account trusts: /y|cca: resuming $ID on account 1" "$(paste -sd'|' "$WORK/err")"
+
+# ~/.claude's account has an MCP server and trusts /x; account 2 has neither.
+mcp_setup() {
+  setup
+  python3 - "$HOME/.claude.json" <<'PY'
+import json, sys
+config = json.load(open(sys.argv[1]))
+config.update(mcpServers={'fetch': {'command': 'fetcher'}}, projects={'/x': {'hasTrustDialogAccepted': True}})
+json.dump(config, open(sys.argv[1], 'w'))
+PY
+}
+synced() { # what account 2's config holds: its MCP servers and whether it trusts /x
+  python3 -c "import json,sys;c=json.load(open(sys.argv[1]));print(sorted(c.get('mcpServers',{})),c.get('projects',{}).get('/x',{}).get('hasTrustDialogAccepted'))" \
+    "$HOME/.claude-two/.claude.json"
+}
+
+mcp_setup
+"$CCA" 2 2>"$WORK/err"
+check "a terminal launch gives the account the MCP servers another account has" "['fetch'] True" "$(synced)"
+check "and says so" "cca: MCP servers from the other accounts: added fetch" "$(grep MCP "$WORK/err")"
+
+mcp_setup
+echo 2 > "$CCA_ROOT/by-session/$ID"
+"$CCA" "$CCA_CLAUDE" --output-format stream-json --resume "$ID" 2>/dev/null
+check "a VS Code session start gives its account the MCP servers and trust the others have" "['fetch'] True" "$(synced)"
+
+mcp_setup
+CLAUDE_ACCOUNT=2 "$CCA" "$CCA_CLAUDE" plugin list --json 2>/dev/null
+check "a Claude Code subcommand run through the wrapper syncs nothing" "[] None" "$(synced)"
+
+mcp_setup
+CCA_MCP_SYNC=off "$CCA" 2 2>/dev/null
+check "CCA_MCP_SYNC=off leaves MCP servers alone and still syncs trust" "[] True" "$(synced)"
+
+mcp_setup
+CCA_MCP_SYNC=off CCA_TRUST_SYNC=off "$CCA" 2 2>/dev/null
+check "with both syncs off nothing is synced" "[] None" "$(synced)"
 
 finish
