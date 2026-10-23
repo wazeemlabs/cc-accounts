@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.3.0 (2026-10-23)
+
+- User MCP servers live in one file, `~/.claude-shared/mcp.json`, which every session cca starts loads with `--mcp-config`. Server names, and so tool names, stay the same. At each start cca moves the user servers an account holds into the file, so no account keeps a copy; one added later with `claude mcp add --scope user` on any account is moved in the same way. Edit the file to change or remove a server. Before, 0.2.0 kept a copy in every account.
+- `CCA_MCP_SYNC=off` stops the moving and the per-project sync; the file is still loaded.
+
 ## 0.2.0 (2026-10-23)
 
 - MCP servers are the same on every account: user servers, a project's local servers, and your answers about a project's `.mcp.json` servers. A server added, changed or removed on one account changes on the others when they next start. Before, each account kept its own, so a session's tools depended on its account. `CCA_MCP_SYNC=off` turns this off.

@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
-"""cca-sync --binary BIN --home CONFIG --target CONFIG --state FILE [--no-trust] [--no-mcp] CONFIG...
+"""cca-sync --binary BIN --home CONFIG --target CONFIG --state FILE --servers FILE [--no-trust] [--no-mcp] CONFIG...
 
 Before Claude Code starts on an account, gives the account's config (its
 .claude.json, --target) what every account shares, from the configs of all
 accounts (CONFIG...):
 
+  - user MCP servers live in one file (--servers, in the format
+    `claude --mcp-config` reads), which cca passes to every session. A user
+    server found in an account's config (mcpServers[<name>], where
+    `claude mcp add --scope user` puts it) is moved into the file, and the
+    account starting, and ~/.claude.json, are left holding none. To change
+    or remove a server, edit the file.
   - folder trust, projects[<path>].hasTrustDialogAccepted: the union of all
     accounts. Trust is only added, never taken away.
-  - MCP servers: the user ones (mcpServers[<name>]), the local ones
-    (projects[<path>].mcpServers[<name>]), and the answers given to a
+  - per-project MCP settings: the local servers
+    (projects[<path>].mcpServers[<name>]) and the answers given to a
     project's .mcp.json servers (projects[<path>].enabledMcpjsonServers and
-    disabledMcpjsonServers). A server added, changed or removed on any
-    account is added, changed or removed on all of them.
+    disabledMcpjsonServers). One added, changed or removed on any account is
+    added, changed or removed on all of them; ~/.claude.json (--home) holds
+    the shared copy.
 
-~/.claude.json (--home) holds the shared copy. To tell a change made on an
-account from a change it has not received yet, the state file keeps, per
-account, a digest of each item as cca last saw it there: digests only, never
-a server's command, URL or secrets. An account seen for the first time adds
-what it has without replacing what is shared.
+To tell a change made on an account from a copy it has not caught up on,
+the state file keeps, per account, a digest of each item as cca last saw it
+there: digests only, never a server's command, URL or secrets. An account
+seen for the first time adds what it has without replacing what is shared.
 
 Writes follow Claude Code's own: under its lock (proper-lockfile's directory,
 <config>.lock), a re-read, then a temp file renamed over the config with its
@@ -109,6 +115,10 @@ def is_trust(key):
     return len(key) == 3 and key[2] == TRUST
 
 
+def is_user(key):
+    return len(key) == 2
+
+
 def dict_at(parent, name):
     value = parent.get(name)
     return value if isinstance(value, dict) else {}
@@ -159,6 +169,24 @@ def absorb(shared, current, base):
         key = tuple(json.loads(name))
         if key not in current and not is_trust(key):
             shared.pop(key, None)
+
+
+def adopt(servers, current, base):
+    """Puts into servers (the shared file's, changed in place) the user
+    servers an account added or changed since cca last saw it there: base is
+    that sighting's digests, or None on first sight, when what the account
+    has joins without replacing. A copy cca saw before is left out, so an
+    edit or removal made in the file stands. Returns the names put in."""
+    adopted = []
+    for key, value in current.items():
+        name = key[1]
+        if servers.get(name) == value:
+            continue
+        if (name in servers) if base is None else (base.get(name_of(key)) == digest(value)):
+            continue
+        servers[name] = value
+        adopted.append(name)
+    return adopted
 
 
 def place(config, key, value, defaults):
@@ -279,6 +307,39 @@ def write_config(path, config):
         raise
 
 
+def load_servers(path):
+    """The shared file's servers, none when it does not exist yet. Raises
+    ValueError on a file that is not {"mcpServers": {...}}."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict) or not isinstance(data.get('mcpServers', {}), dict):
+        raise ValueError('not {"mcpServers": {...}}')
+    return dict(data.get('mcpServers', {}))
+
+
+def save_servers(path, servers):
+    """Writes the shared file, private (it holds the servers' secrets) unless
+    its owner has set other permissions."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    mode = os.stat(path).st_mode & 0o7777 if os.path.exists(path) else 0o600
+    temp = f'{path}.tmp.cca.{os.getpid()}.{secrets.token_hex(6)}'
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(json.dumps({'mcpServers': servers}, indent=2, ensure_ascii=False) + '\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temp, mode)
+        os.rename(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.unlink(temp)
+        raise
+
+
 def load_state(path):
     try:
         with open(path) as f:
@@ -313,10 +374,13 @@ def sighting(state, path, current, wanted):
     return {**kept, **{name_of(key): digest(value) for key, value in current.items()}}
 
 
-def report(changes):
+def report(changes, moved, servers_path):
     by = {kind: sorted({label(key) for key, change in changes.items() if change == kind and not is_trust(key)})
           for kind in ('added', 'changed', 'removed')}
     by['trusted'] = sorted(key[1] for key in changes if is_trust(key))
+    by['moved'] = sorted(set(moved))
+    if by['moved']:
+        warn(f'MCP servers moved to {servers_path}, which every account loads: {", ".join(by["moved"])}')
     if by['trusted']:
         warn(f'trusted {len(by["trusted"])} folder(s) another account trusts: {", ".join(by["trusted"])}')
     parts = [f'{kind} {", ".join(by[kind])}' for kind in ('added', 'changed', 'removed') if by[kind]]
@@ -325,21 +389,35 @@ def report(changes):
     return by
 
 
-def sync(home, target, configs, defaults, state_path, trust=True, mcp=True):
-    """Gives target, and home's shared copy, what every account shares.
-    Returns what changed on target ({'trusted', 'added', 'changed', 'removed'}),
-    or None when it could not (target missing, unreadable or locked)."""
-    def wanted(key):
-        return trust if is_trust(key) else mcp
-
-    def selected(config):
-        return {key: value for key, value in items(config).items() if wanted(key)}
+def sync(home, target, configs, defaults, state_path, servers_path, trust=True, mcp=True):
+    """Gives target, home's shared copy and the shared servers file what
+    every account shares. Returns what changed ({'moved', 'trusted', 'added',
+    'changed', 'removed'}), or None when it could not (target missing,
+    unreadable or locked)."""
+    def synced(key):  # what home's shared copy carries
+        return False if is_user(key) else trust if is_trust(key) else mcp
 
     if not os.path.exists(target) or not os.path.exists(home):
         return None
     try:
         with state_lock(state_path):
             state = load_state(state_path)
+            servers = None  # the shared file's servers, None when this run leaves them alone
+            if mcp:
+                try:
+                    servers = load_servers(servers_path)
+                except (OSError, ValueError) as error:
+                    warn(f'{servers_path} does not read ({error}); user MCP servers stay where they are')
+
+            def recorded(key):
+                return synced(key) or (is_user(key) and servers is not None)
+
+            def selected(config):
+                return {key: value for key, value in items(config).items() if recorded(key)}
+
+            def only(found, keep):
+                return {key: value for key, value in found.items() if keep(key)}
+
             seen = {}
             for path in dict.fromkeys(configs):
                 if path in (home, target):
@@ -357,26 +435,38 @@ def sync(home, target, configs, defaults, state_path, trust=True, mcp=True):
                 except (OSError, ValueError) as error:
                     warn(f'{home} or {target} does not read ({error}); left alone')
                     return None
-                shared = selected(home_config)
-                for path, current in seen.items():
-                    absorb(shared, current, state.get(path))
+                # Home first and the account starting last, so its change wins a conflict.
+                owners = [(home, selected(home_config))] + list(seen.items())
                 if target != home:
-                    # Last, so a conflicting change made on the account starting wins.
-                    absorb(shared, selected(target_config), state.get(target))
-                changes = conform(target_config, shared, wanted, defaults)
-                if changes:
+                    owners.append((target, selected(target_config)))
+                shared = only(selected(home_config), synced)
+                for path, current in owners[1:]:
+                    absorb(shared, only(current, synced), state.get(path))
+                moved, emptied = [], set()
+                if servers is not None:
+                    before = dict(servers)
+                    for path, current in owners:
+                        moved += adopt(servers, only(current, is_user), state.get(path))
+                    if servers != before:
+                        save_servers(servers_path, servers)  # before the configs lose their copies
+                    for path, config in ((home, home_config), (target, target_config)):
+                        if dict_at(config, 'mcpServers'):
+                            config['mcpServers'] = {}
+                            emptied.add(path)
+                changes = conform(target_config, shared, synced, defaults)
+                if changes or target in emptied:
                     write_config(target, target_config)
-                if target != home and conform(home_config, shared, wanted, defaults):
+                if target != home and (conform(home_config, shared, synced, defaults) or home in emptied):
                     write_config(home, home_config)
             for path, current in seen.items():
-                state[path] = sighting(state, path, current, wanted)
-            if target != home:  # home holds the shared copy itself, so it needs no sighting
-                state[target] = sighting(state, target, selected(target_config), wanted)
+                state[path] = sighting(state, path, current, recorded)
+            for path, config in {home: home_config, target: target_config}.items():
+                state[path] = sighting(state, path, selected(config), recorded)
             save_state(state_path, state)
     except Locked as error:
         warn(f'{error} stayed locked by a running session; accounts sync at the next start')
         return None
-    return report(changes)
+    return report(changes, moved, servers_path)
 
 
 def main():
@@ -385,11 +475,12 @@ def main():
     parser.add_argument('--home', required=True)
     parser.add_argument('--target', required=True)
     parser.add_argument('--state', required=True)
+    parser.add_argument('--servers', required=True)
     parser.add_argument('--no-trust', dest='trust', action='store_false')
     parser.add_argument('--no-mcp', dest='mcp', action='store_false')
     parser.add_argument('configs', nargs='*')
     args = parser.parse_args()
-    sync(args.home, args.target, args.configs, project_defaults(args.binary), args.state,
+    sync(args.home, args.target, args.configs, project_defaults(args.binary), args.state, args.servers,
          trust=args.trust, mcp=args.mcp)
 
 

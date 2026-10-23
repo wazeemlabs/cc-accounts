@@ -11,7 +11,7 @@ Open an issue with the bug report form. Include `cca version`, `claude --version
 ```
 bin/cca               the command, in bash (it must run on macOS's bash 3.2)
 libexec/cca-keep-args which options a switch keeps, read from claude --help
-libexec/cca-sync      folder trust and MCP server sync between accounts
+libexec/cca-sync      the shared MCP file, and trust and per-project MCP sync
 libexec/cca-setup     init and uninstall's edits to rc, settings and editor files
 plugin/               the /account Claude Code plugin (TypeScript)
 tests/                shell and Python tests; plugin/tests holds the plugin's

@@ -51,9 +51,9 @@ The Claude Code extension starts Claude Code itself, so cca cannot wait on it. S
 Each account's `.claude.json` holds settings that cannot be linked, because the file also holds the account's login. Before every session starts, in a terminal and in VS Code, `libexec/cca-sync` gives the starting account what all accounts share:
 
 - Folder trust: `projects[<path>].hasTrustDialogAccepted`. Claude Code treats a folder as trusted when it, or a folder above it up to the git repository's root, has that flag. A run without a terminal, as VS Code's are, does not ask: without the flag it skips what needs trust, such as an MCP server's `headersHelper` and the MCP servers and hooks an agent definition brings. Each account gets the union of all accounts' trust. Trust is only added, never removed.
-- MCP servers: the user ones (`mcpServers`), a project's local ones (`projects[<path>].mcpServers`) and the answers about a project's `.mcp.json` servers (`projects[<path>].enabledMcpjsonServers` and `disabledMcpjsonServers`). A server added, changed or removed on any account is added, changed or removed on all of them.
+- Per-project MCP settings: a project's local servers (`projects[<path>].mcpServers`) and the answers about its `.mcp.json` servers (`projects[<path>].enabledMcpjsonServers` and `disabledMcpjsonServers`). One added, changed or removed on any account is added, changed or removed on all of them.
 
-`~/.claude.json` holds the shared copy. An MCP change on another account has to be told apart from a change that account has not received yet, so `~/.claude-shared/accounts/sync-state.json` keeps, per account, a digest of each item as cca last saw it there. It holds digests only, never a server's command, URL or secrets. At each start, cca-sync applies every account's changes since its last sighting to the shared copy, then makes the starting account match it. An account seen for the first time adds what it has without replacing what is already shared. When two accounts change the same server, the starting account's change wins. `CCA_TRUST_SYNC=off` and `CCA_MCP_SYNC=off` turn each part off.
+`~/.claude.json` holds the shared copy of these. A change on another account has to be told apart from a copy that account has not caught up on, so `~/.claude-shared/accounts/sync-state.json` keeps, per account, a digest of each item as cca last saw it there. It holds digests only, never a server's command, URL or secrets. At each start, cca-sync applies every account's changes since its last sighting to the shared copy, then makes the starting account match it. An account seen for the first time adds what it has without replacing what is already shared. When two accounts change the same item, the starting account's change wins. `CCA_TRUST_SYNC=off` and `CCA_MCP_SYNC=off` turn each part off.
 
 Running sessions write `.claude.json` often, so cca-sync writes the way Claude Code does:
 
@@ -63,6 +63,12 @@ Running sessions write `.claude.json` often, so cca-sync writes the way Claude C
 Claude Code saves `.claude.json` by applying its change to a fresh read taken under the same lock, so a running session keeps what cca-sync added. It picks up new MCP servers at its next start.
 
 A folder the account has never opened needs a new entry. Claude Code reads an entry as written, without filling in defaults, so a new entry must have every field Claude Code's own default entry has. cca-sync reads that default from the installed Claude Code binary (it is a literal, `{allowedTools:[],mcpContextUris:[],...,hasTrustDialogAccepted:!1,...}`), checks it holds only empty lists, empty objects and booleans, and caches it per binary in `~/.claude-shared/accounts/cache/`. If the literal is not there in that shape, cca-sync only changes folders the account already has entries for, and says so.
+
+## User MCP servers in one file
+
+User MCP servers live in `~/.claude-shared/mcp.json`, in the `{"mcpServers": {...}}` format `claude --mcp-config` reads. cca passes it to every session it starts, as `--mcp-config=<file>` before the other arguments: the option takes several values, and the `=` form leaves a prompt or subcommand after it alone. In VS Code it goes in front of the extension's own options, beside any `--mcp-config` of the extension's. The servers keep their names, so their tools are `mcp__<server>__<tool>` as before. Claude Code started some other way does not load the file.
+
+`claude mcp add --scope user` writes to the account's `.claude.json`. At each start cca-sync moves every user server the starting account and `~/.claude.json` hold into the file and leaves those two configs holding none; it also takes in servers added or changed on the other accounts, which are emptied when they start. A server cca saw on an account before and that is unchanged there is a stale copy: it is not taken back into the file, so an edit or removal made in the file stands. The file is written before the configs lose their copies, created private (0600, it holds the servers' secrets), and never rewritten when it does not parse: then every server stays where it is until it is fixed. `CCA_MCP_SYNC=off` stops the moving; the file is still loaded.
 
 ## The plugin
 
@@ -79,11 +85,12 @@ A folder the account has never opened needs a new entry. Claude Code reads an en
 | `~/.claude-shared/accounts/by-session/<id>` | The account each conversation last ran on. |
 | `~/.claude-shared/accounts/switch/<pid>` | A pending terminal switch, removed when cca exits. |
 | `~/.claude-shared/accounts/cache/` | Claude Code's default project entry, per binary. |
+| `~/.claude-shared/mcp.json` | The user MCP servers every session loads. |
 | `~/.claude-shared/accounts/sync-state.json` | Per account, digests of its trust and MCP items as cca last saw them. |
 | Your shell's startup file (`.zshrc`, `.bashrc` or fish's `config.fish`) | A block between `# >>> cc-accounts >>>` and `# <<< cc-accounts <<<`. |
 | `~/.claude/settings.json` | `CLAUDE_CODE_PLUGIN_DIRS` in its `env` block. |
 | Editor settings | `claudeCode.claudeProcessWrapper`, in each desktop editor's user settings and each remote editor server's machine settings (`~/.vscode-server/data/Machine/settings.json` and the like). |
-| Each account's `.claude.json` | Trust flags and MCP servers, as above, and the preferences below. |
+| Each account's `.claude.json` | Trust flags and per-project MCP settings, user MCP servers moved out, as above, and the preferences below. |
 
 `CCA_ROOT` moves the state directory and `CCA_SHARED` the shared one.
 
@@ -101,6 +108,7 @@ VS Code's Claude in Chrome and memory dialogs save their settings by running the
 | `claude --help` option format | Keeping options on a switch | `tests/test_keep_args.py` against the installed Claude Code |
 | The default project entry literal in the binary | New project entries | `tests/test_cca_sync.py` against the installed Claude Code |
 | `.claude.json` lock, project layout and MCP fields | Folder trust and MCP servers | `tests/test_cca_sync.py` |
+| `--mcp-config=<file>` before a prompt or subcommand, with server names kept in tool names | The shared MCP file | Manual check: a headless run lists `mcp__<server>__` tools |
 | Claude Code saves `.claude.json` as a change to a fresh read under its lock | Synced items surviving running sessions | Manual check |
 | A run without a terminal skips what needs trust unless the folder's flag is set | Trust synced before VS Code sessions | Manual check |
 | `CLAUDE_CODE_REMOTE_MEMORY_DIR` names the folder holding `projects/<project>/memory` | Memory writes without a prompt | Manual check: a memory write in a headless run on a non-default account |

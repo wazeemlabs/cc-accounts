@@ -30,6 +30,9 @@ HOME_DIR="$HOME/.claude"
 # Kept in the shared dir and linked into every account: what makes one
 # account's conversations and sessions visible to the others.
 SHARED_STATE=(projects todos file-history sessions)
+# The user MCP servers, in one file every session cca starts loads with
+# --mcp-config; cca-sync moves a server added to an account's config here.
+MCP_FILE="$SHARED/mcp.json"
 # Linked from ~/.claude into every other account unless share.conf says otherwise.
 DEFAULT_SHARE=(settings.json CLAUDE.md agents commands keybindings.json)
 RESERVED=" init add use run uninstall version help "
@@ -145,10 +148,11 @@ claude_bin() {
   command -v claude || die "no claude binary found; install Claude Code first"
 }
 
-# Before a session starts, give its account the folder trust and MCP servers
-# the other accounts have (libexec/cca-sync), so every account loads the same
-# tools. CCA_TRUST_SYNC=off and CCA_MCP_SYNC=off turn each off. A failure is
-# reported, not fatal.
+# Before a session starts, move the user MCP servers its account holds into
+# MCP_FILE and give it the folder trust and per-project MCP settings the
+# other accounts have (libexec/cca-sync), so every account loads the same
+# tools. CCA_TRUST_SYNC=off and CCA_MCP_SYNC=off turn each off; MCP_FILE is
+# loaded either way. A failure is reported, not fatal.
 sync_account() {
   local bin="$1" account="$2" name dir configs=() kinds=()
   [[ -n "$account" && -f "$TABLE" ]] || return 0
@@ -158,7 +162,7 @@ sync_account() {
   while IFS=$'\t' read -r name dir; do configs+=("$(config_of "$dir")"); done < "$TABLE"
   [[ ${#configs[@]} -gt 1 ]] || return 0
   "$LIBEXEC/cca-sync" --binary "$bin" --home "$(config_of "$HOME_DIR")" \
-    --target "$(config_of "$(dir_of "$account")")" --state "$ROOT/sync-state.json" \
+    --target "$(config_of "$(dir_of "$account")")" --state "$ROOT/sync-state.json" --servers "$MCP_FILE" \
     ${kinds[@]+"${kinds[@]}"} "${configs[@]}" \
     || echo "cca: trust and MCP servers were not synced to $account" >&2
 }
@@ -183,8 +187,11 @@ launch() {
     rm -f "$switch"
     apply "$account"
     sync_account "$bin" "$account"
-    local status=0
-    "$bin" ${args[@]+"${args[@]}"} || status=$?
+    # In front, as --mcp-config=FILE: the option takes several values, and
+    # this form leaves a prompt or subcommand after it alone.
+    local status=0 load=()
+    if [[ -f "$MCP_FILE" ]]; then load=("--mcp-config=$MCP_FILE"); fi
+    "$bin" ${load[@]+"${load[@]}"} ${args[@]+"${args[@]}"} || status=$?
     [[ -s "$switch" ]] || return "$status"
     local next_account id
     read -r next_account id < "$switch"
@@ -393,8 +400,11 @@ case "${1:-}" in
     name="$(choose "$@")"
     apply "$name"
     # A session starts with an option; a subcommand (plugin list, edit-hook)
-    # starts none and needs nothing synced.
-    if [[ -z "${1:-}" || "$1" == -* ]]; then sync_account "$bin" "$name"; fi
+    # starts none and needs nothing synced or loaded.
+    if [[ -z "${1:-}" || "$1" == -* ]]; then
+      sync_account "$bin" "$name"
+      if [[ -f "$MCP_FILE" ]]; then set -- "--mcp-config=$MCP_FILE" "$@"; fi
+    fi
     unset CLAUDE_ACCOUNT_SWITCH_FILE
     export CCA_MODE=stream CCA_PID=$$
     exec "$bin" "$@"
