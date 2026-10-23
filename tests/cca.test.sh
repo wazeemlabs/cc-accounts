@@ -198,6 +198,7 @@ check "a launch syncs what it finds and a relaunch with nothing new is silent" \
 # ~/.claude's account has an MCP server and trusts /x; account 2 has neither.
 mcp_setup() {
   setup
+  FILE="$HOME/.claude-shared/mcp.json"
   python3 - "$HOME/.claude.json" <<'PY'
 import json, sys
 config = json.load(open(sys.argv[1]))
@@ -205,31 +206,49 @@ config.update(mcpServers={'fetch': {'command': 'fetcher'}}, projects={'/x': {'ha
 json.dump(config, open(sys.argv[1], 'w'))
 PY
 }
-synced() { # what account 2's config holds: its MCP servers and whether it trusts /x
-  python3 -c "import json,sys;c=json.load(open(sys.argv[1]));print(sorted(c.get('mcpServers',{})),c.get('projects',{}).get('/x',{}).get('hasTrustDialogAccepted'))" \
-    "$HOME/.claude-two/.claude.json"
+synced() { # the servers ~/.claude and account 2 hold, the shared file's, and whether account 2 trusts /x
+  python3 -c "
+import json, os, sys
+home, two, shared = (json.load(open(p)) if os.path.exists(p) else None for p in sys.argv[1:])
+print(sorted(home.get('mcpServers', {})), sorted(two.get('mcpServers', {})),
+      sorted(shared['mcpServers']) if shared else None, two.get('projects', {}).get('/x', {}).get('hasTrustDialogAccepted'))" \
+    "$HOME/.claude.json" "$HOME/.claude-two/.claude.json" "$FILE"
 }
 
 mcp_setup
-"$CCA" 2 2>"$WORK/err"
-check "a terminal launch gives the account the MCP servers another account has" "['fetch'] True" "$(synced)"
-check "and says so" "cca: MCP servers from the other accounts: added fetch" "$(grep MCP "$WORK/err")"
+"$CCA" 2 -p x 2>"$WORK/err"
+check "a terminal start moves the user MCP servers into the shared file and syncs trust" "[] [] ['fetch'] True" "$(synced)"
+check "and says so" "cca: MCP servers moved to $FILE, which every account loads: fetch" "$(grep MCP "$WORK/err")"
+check "and the session loads the shared file" "dir=$HOME/.claude-two account=2 args=--mcp-config=$FILE -p x" "$(cat "$LOG")"
 
 mcp_setup
 echo 2 > "$CCA_ROOT/by-session/$ID"
 "$CCA" "$CCA_CLAUDE" --output-format stream-json --resume "$ID" 2>/dev/null
-check "a VS Code session start gives its account the MCP servers and trust the others have" "['fetch'] True" "$(synced)"
+check "a VS Code session start does the same" "[] [] ['fetch'] True" "$(synced)"
+check "and loads the shared file ahead of the extension's own options" \
+  "dir=$HOME/.claude-two account=2 args=--mcp-config=$FILE --output-format stream-json --resume $ID" "$(cat "$LOG")"
 
 mcp_setup
 CLAUDE_ACCOUNT=2 "$CCA" "$CCA_CLAUDE" plugin list --json 2>/dev/null
-check "a Claude Code subcommand run through the wrapper syncs nothing" "[] None" "$(synced)"
+check "a Claude Code subcommand run through the wrapper syncs nothing and loads nothing" \
+  "['fetch'] [] None None|account=2 args=plugin list --json" "$(synced)|$(cut -d' ' -f2- "$LOG")"
+
+mcp_setup
+FAKE_SWITCH="1 $ID" "$CCA" 2 --model opus 2>/dev/null
+check "a relaunch after a switch loads the shared file once" \
+  "args=--mcp-config=$FILE --model opus|args=--mcp-config=$FILE --model opus --resume $ID" "$(cut -d' ' -f3- "$LOG" | paste -sd'|' -)"
 
 mcp_setup
 CCA_MCP_SYNC=off "$CCA" 2 2>/dev/null
-check "CCA_MCP_SYNC=off leaves MCP servers alone and still syncs trust" "[] True" "$(synced)"
+check "CCA_MCP_SYNC=off leaves MCP servers where they are and still syncs trust" "['fetch'] [] None True" "$(synced)"
+
+mcp_setup
+mkdir -p "$(dirname "$FILE")" && echo '{"mcpServers":{}}' > "$FILE"
+CCA_MCP_SYNC=off "$CCA" 2 2>/dev/null
+check "with CCA_MCP_SYNC=off a session still loads the shared file" "args=--mcp-config=$FILE" "$(cut -d' ' -f3- "$LOG")"
 
 mcp_setup
 CCA_MCP_SYNC=off CCA_TRUST_SYNC=off "$CCA" 2 2>/dev/null
-check "with both syncs off nothing is synced" "[] None" "$(synced)"
+check "with both syncs off nothing is synced" "['fetch'] [] None None" "$(synced)"
 
 finish

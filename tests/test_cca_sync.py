@@ -52,13 +52,15 @@ class Defaults(unittest.TestCase):
 
 
 class Accounts(unittest.TestCase):
-    """Three accounts: home (~/.claude.json, which holds the shared copy), a and b."""
+    """Three accounts: home (~/.claude.json, which holds the shared copy of
+    per-project items), a and b; user MCP servers live in the shared file."""
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.dir.name)
         self.home, self.a, self.b = (self.root / name for name in ('home.json', 'a.json', 'b.json'))
         self.state = self.root / 'state' / 'sync-state.json'
+        self.file = self.root / 'shared' / 'mcp.json'
 
     def tearDown(self):
         self.dir.cleanup()
@@ -74,11 +76,18 @@ class Accounts(unittest.TestCase):
     def servers(self, path):
         return self.read(path).get('mcpServers', {})
 
+    def shared(self):
+        return self.read(self.file)['mcpServers'] if self.file.exists() else None
+
+    def write_shared(self, servers):
+        self.file.parent.mkdir(exist_ok=True)
+        self.file.write_text(json.dumps({'mcpServers': servers}))
+
     def sync(self, target, defaults=DEFAULTS, **kinds):
         err = StringIO()
         with redirect_stderr(err):
             report = cca_sync.sync(str(self.home), str(target), [str(p) for p in (self.home, self.a, self.b)],
-                                   defaults, str(self.state), **kinds)
+                                   defaults, str(self.state), str(self.file), **kinds)
         return report, err.getvalue()
 
 
@@ -142,68 +151,94 @@ class Trust(Accounts):
         self.write(self.a)
         self.write(self.b)
         self.sync(self.b, trust=False)
-        self.assertEqual((self.read(self.b)['projects'], self.servers(self.b)), ({}, {'fetch': FETCH}))
+        self.assertEqual((self.read(self.b)['projects'], self.shared()), ({}, {'fetch': FETCH}))
 
 
-class McpServers(Accounts):
-    def test_gives_the_target_the_servers_another_account_has(self):
-        self.write(self.home, mcpServers={'fetch': FETCH, 'search': SEARCH})
-        self.write(self.a, mcpServers={'fetch': FETCH})
-        self.write(self.b)
-        report, err = self.sync(self.b)
-        self.assertEqual(self.servers(self.b), {'fetch': FETCH, 'search': SEARCH})
-        self.assertEqual(report['added'], ['fetch', 'search'])
-        self.assertEqual(err, 'cca: MCP servers from the other accounts: added fetch, search\n')
-
-    def test_a_server_added_on_any_account_reaches_the_others(self):
-        self.write(self.home)
-        self.write(self.a)
-        self.write(self.b)
-        self.sync(self.a)
-        self.sync(self.b)
-        self.write(self.a, mcpServers={'search': SEARCH})
-        self.sync(self.b)
-        self.assertEqual((self.servers(self.home), self.servers(self.b)), ({'search': SEARCH}, {'search': SEARCH}))
-
-    def test_a_server_removed_on_any_account_is_removed_from_the_others(self):
-        for path in (self.home, self.a, self.b):
-            self.write(path, mcpServers={'fetch': FETCH, 'search': SEARCH})
-        self.sync(self.a)
-        self.sync(self.b)
-        self.write(self.a, mcpServers={'fetch': FETCH})
-        report, err = self.sync(self.b)
-        self.assertEqual((self.servers(self.home), self.servers(self.b)), ({'fetch': FETCH}, {'fetch': FETCH}))
-        self.assertEqual(report['removed'], ['search'])
-        self.assertIn('removed search', err)
-
-    def test_a_server_changed_on_one_account_changes_everywhere(self):
-        for path in (self.home, self.a, self.b):
-            self.write(path, mcpServers={'fetch': FETCH})
-        self.sync(self.a)
-        self.sync(self.b)
-        moved = {**FETCH, 'args': ['fetcher', '--v2']}
-        self.write(self.a, mcpServers={'fetch': moved})
-        report, _ = self.sync(self.b)
-        self.assertEqual((self.servers(self.home), self.servers(self.b)), ({'fetch': moved}, {'fetch': moved}))
-        self.assertEqual(report['changed'], ['fetch'])
-
-    def test_the_targets_own_change_is_kept(self):
-        for path in (self.home, self.a, self.b):
-            self.write(path, mcpServers={'fetch': FETCH})
-        self.sync(self.b)
-        mine = {**FETCH, 'command': 'uvx'}
-        self.write(self.b, mcpServers={'fetch': mine})
-        report, err = self.sync(self.b)
-        self.assertEqual((self.servers(self.home), self.servers(self.b)), ({'fetch': mine}, {'fetch': mine}))
-        self.assertEqual((report['changed'], err), ([], ''))
-
-    def test_an_account_seen_for_the_first_time_adds_but_does_not_overwrite(self):
+class UserServers(Accounts):
+    def test_moves_the_user_servers_into_the_shared_file(self):
         self.write(self.home, mcpServers={'fetch': FETCH})
         self.write(self.a, mcpServers={'fetch': {'command': 'old'}, 'search': SEARCH})
         self.write(self.b)
-        self.sync(self.b)
-        self.assertEqual(self.servers(self.b), {'fetch': FETCH, 'search': SEARCH})
+        report, err = self.sync(self.b)
+        self.assertEqual(self.shared(), {'fetch': FETCH, 'search': SEARCH})
+        self.assertEqual((self.servers(self.home), self.servers(self.b)), ({}, {}))
+        self.assertEqual(report['moved'], ['fetch', 'search'])
+        self.assertEqual(err, f'cca: MCP servers moved to {self.file}, which every account loads: fetch, search\n')
+        self.assertEqual(stat.S_IMODE(os.stat(self.file).st_mode), 0o600)
 
+    def test_an_account_that_starts_is_left_holding_none(self):
+        self.write(self.home, mcpServers={'fetch': FETCH})
+        self.write(self.a, mcpServers={'fetch': {'command': 'old'}})
+        self.write(self.b)
+        self.sync(self.b)
+        self.assertEqual(self.servers(self.a), {'fetch': {'command': 'old'}}, 'not touched while another starts')
+        report, err = self.sync(self.a)
+        self.assertEqual((self.servers(self.a), self.shared(), report['moved'], err), ({}, {'fetch': FETCH}, [], ''))
+
+    def test_a_server_added_on_any_account_reaches_the_file(self):
+        for path in (self.home, self.a, self.b):
+            self.write(path)
+        self.sync(self.b)
+        self.write(self.a, mcpServers={'search': SEARCH})
+        report, _ = self.sync(self.b)
+        self.assertEqual((self.shared(), report['moved']), ({'search': SEARCH}, ['search']))
+        self.sync(self.a)
+        self.assertEqual((self.servers(self.a), self.shared()), ({}, {'search': SEARCH}))
+
+    def test_a_server_changed_on_an_account_replaces_the_shared_one(self):
+        for path in (self.home, self.a, self.b):
+            self.write(path, mcpServers={'fetch': FETCH})
+        self.sync(self.b)
+        moved = {**FETCH, 'args': ['fetcher', '--v2']}
+        self.write(self.a, mcpServers={'fetch': moved})
+        self.sync(self.b)
+        self.assertEqual(self.shared(), {'fetch': moved})
+
+    def test_a_server_removed_from_the_file_stays_removed(self):
+        for path in (self.home, self.a, self.b):
+            self.write(path, mcpServers={'fetch': FETCH, 'search': SEARCH})
+        self.sync(self.b)
+        self.write_shared({'fetch': FETCH})
+        self.sync(self.a)
+        self.assertEqual((self.shared(), self.servers(self.a)), ({'fetch': FETCH}, {}))
+
+    def test_an_edit_in_the_file_is_not_undone_by_an_old_copy(self):
+        for path in (self.home, self.a, self.b):
+            self.write(path, mcpServers={'fetch': FETCH})
+        self.sync(self.b)
+        edited = {**FETCH, 'command': 'uvx'}
+        self.write_shared({'fetch': edited})
+        self.sync(self.a)
+        self.assertEqual(self.shared(), {'fetch': edited})
+
+    def test_a_shared_file_that_does_not_parse_is_left_alone(self):
+        self.write(self.home, mcpServers={'fetch': FETCH})
+        self.write(self.a, {'/a': {'hasTrustDialogAccepted': True}})
+        self.write(self.b)
+        self.file.parent.mkdir()
+        self.file.write_text('{broken')
+        report, err = self.sync(self.b)
+        self.assertEqual(self.file.read_text(), '{broken')
+        self.assertEqual(self.servers(self.home), {'fetch': FETCH}, 'servers stay where they are')
+        self.assertIn('does not read', err)
+        self.assertEqual(report['trusted'], ['/a'], 'the rest still syncs')
+
+    def test_with_no_user_servers_anywhere_no_file_is_made(self):
+        for path in (self.home, self.a, self.b):
+            self.write(path)
+        self.sync(self.b)
+        self.assertFalse(self.file.exists())
+
+    def test_mcp_off_leaves_user_servers_alone(self):
+        self.write(self.home, {'/a': {'hasTrustDialogAccepted': True}}, mcpServers={'fetch': FETCH})
+        self.write(self.a)
+        self.write(self.b)
+        self.sync(self.b, mcp=False)
+        self.assertEqual((self.servers(self.home), self.shared()), ({'fetch': FETCH}, None))
+        self.assertIs(self.read(self.b)['projects']['/a']['hasTrustDialogAccepted'], True)
+
+
+class ProjectServers(Accounts):
     def test_local_servers_and_mcp_json_approvals_follow_the_project(self):
         self.write(self.home)
         self.write(self.a, {'/p': {**DEFAULTS, 'hasTrustDialogAccepted': True, 'mcpServers': {'db': FETCH},
@@ -239,14 +274,6 @@ class McpServers(Accounts):
         self.assertNotIn('npx', self.state.read_text())
         self.assertEqual(stat.S_IMODE(os.stat(self.state).st_mode), 0o600)
 
-    def test_mcp_off_leaves_servers_alone(self):
-        self.write(self.home, {'/a': {'hasTrustDialogAccepted': True}}, mcpServers={'fetch': FETCH})
-        self.write(self.a)
-        self.write(self.b)
-        self.sync(self.b, mcp=False)
-        self.assertEqual(self.servers(self.b), {})
-        self.assertIs(self.read(self.b)['projects']['/a']['hasTrustDialogAccepted'], True)
-
 
 class Writing(Accounts):
     def test_keeps_each_configs_permissions_and_leaves_no_lock_or_temp(self):
@@ -256,7 +283,8 @@ class Writing(Accounts):
         self.sync(self.b)
         self.assertEqual((stat.S_IMODE(os.stat(self.home).st_mode), stat.S_IMODE(os.stat(self.b).st_mode)),
                          (0o644, 0o640))
-        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['a.json', 'b.json', 'home.json', 'state'])
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['a.json', 'b.json', 'home.json', 'shared', 'state'])
+        self.assertEqual(sorted(p.name for p in self.file.parent.iterdir()), ['mcp.json'])
 
     def test_writes_nothing_when_every_account_agrees(self):
         for path in (self.home, self.a, self.b):
@@ -279,6 +307,7 @@ class Writing(Accounts):
             self.assertEqual((self.read(self.b)['projects'], self.servers(self.b)), ({}, {}))
             self.assertNotIn('/a', self.read(self.home)['projects'])
             self.assertTrue(os.path.isdir(f'{locked}.lock'), 'the other process still owns its lock')
+            self.assertEqual((self.servers(self.home), self.shared()), ({'fetch': FETCH}, None))
             os.rmdir(f'{locked}.lock')
 
     def test_a_corrupt_source_is_skipped_and_a_corrupt_target_left_alone(self):
@@ -302,11 +331,12 @@ class Writing(Accounts):
         self.assertFalse(self.b.exists())
 
     def test_the_home_account_as_target_is_written_once(self):
-        self.write(self.home)
-        self.write(self.a, mcpServers={'fetch': FETCH})
+        self.write(self.home, mcpServers={'fetch': FETCH})
+        self.write(self.a, {'/a': {'hasTrustDialogAccepted': True}})
         self.write(self.b)
         report, _ = self.sync(self.home)
-        self.assertEqual((report['added'], self.servers(self.home)), (['fetch'], {'fetch': FETCH}))
+        self.assertEqual((report['moved'], report['trusted']), (['fetch'], ['/a']))
+        self.assertEqual((self.servers(self.home), self.shared()), ({}, {'fetch': FETCH}))
 
 
 if __name__ == '__main__':
