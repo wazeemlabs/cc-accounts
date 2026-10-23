@@ -35,7 +35,7 @@ setup() {
   LOG="$WORK/log-$RANDOM$RANDOM"; : > "$LOG"; export LOG
   # The stand-in records its account and args; with FAKE_SWITCH it asks for a
   # switch on its first run, as /account does. Its comment holds Claude Code's
-  # default project entry, which cca-trust reads from the binary.
+  # default project entry, which cca-sync reads from the binary.
   export CCA_CLAUDE="$WORK/fake-claude"
   cat > "$CCA_CLAUDE" <<'FAKE'
 #!/bin/bash

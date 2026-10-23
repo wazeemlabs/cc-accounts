@@ -132,6 +132,11 @@ apply() {
   local dir; dir="$(dir_of "$1")"
   export CLAUDE_ACCOUNT="$1"
   if [[ "$dir" == "$HOME_DIR" ]]; then unset CLAUDE_CONFIG_DIR; else export CLAUDE_CONFIG_DIR="$dir"; fi
+  # Claude Code lets a memory write through by comparing the file's real path
+  # with the memory folder's path as configured, and every account reaches
+  # the conversations (where memory lives) through a link to the shared
+  # folder, so each write would ask. This names the folder by its real path.
+  export CLAUDE_CODE_REMOTE_MEMORY_DIR="$SHARED"
 }
 
 claude_bin() {
@@ -140,18 +145,22 @@ claude_bin() {
   command -v claude || die "no claude binary found; install Claude Code first"
 }
 
-# Give the account every folder the others trust, so no account asks to trust
-# a folder another one already trusts. CCA_TRUST_SYNC=off turns it off. A
-# failure is reported, not fatal.
-sync_trust() {
-  local bin="$1" account="$2" name dir others=()
-  [[ "${CCA_TRUST_SYNC:-on}" != off && -n "$account" && -f "$TABLE" ]] || return 0
-  while IFS=$'\t' read -r name dir; do
-    [[ "$name" == "$account" ]] || others+=("$(config_of "$dir")")
-  done < "$TABLE"
-  [[ ${#others[@]} -gt 0 ]] || return 0
-  "$LIBEXEC/cca-trust" "$bin" "$(config_of "$(dir_of "$account")")" "${others[@]}" \
-    || echo "cca: folder trust was not synced to $account" >&2
+# Before a session starts, give its account the folder trust and MCP servers
+# the other accounts have (libexec/cca-sync), so every account loads the same
+# tools. CCA_TRUST_SYNC=off and CCA_MCP_SYNC=off turn each off. A failure is
+# reported, not fatal.
+sync_account() {
+  local bin="$1" account="$2" name dir configs=() kinds=()
+  [[ -n "$account" && -f "$TABLE" ]] || return 0
+  [[ "${CCA_TRUST_SYNC:-on}" == off ]] && kinds+=(--no-trust)
+  [[ "${CCA_MCP_SYNC:-on}" == off ]] && kinds+=(--no-mcp)
+  [[ ${#kinds[@]} -lt 2 ]] || return 0
+  while IFS=$'\t' read -r name dir; do configs+=("$(config_of "$dir")"); done < "$TABLE"
+  [[ ${#configs[@]} -gt 1 ]] || return 0
+  "$LIBEXEC/cca-sync" --binary "$bin" --home "$(config_of "$HOME_DIR")" \
+    --target "$(config_of "$(dir_of "$account")")" --state "$ROOT/sync-state.json" \
+    ${kinds[@]+"${kinds[@]}"} "${configs[@]}" \
+    || echo "cca: trust and MCP servers were not synced to $account" >&2
 }
 
 # Run in the terminal, relaunching on the account a /account switch asks for.
@@ -173,7 +182,7 @@ launch() {
   while :; do
     rm -f "$switch"
     apply "$account"
-    sync_trust "$bin" "$account"
+    sync_account "$bin" "$account"
     local status=0
     "$bin" ${args[@]+"${args[@]}"} || status=$?
     [[ -s "$switch" ]] || return "$status"
@@ -359,6 +368,8 @@ case "${1:-}" in
     dir="$(mkdir -p "$dir" && cd "$dir" && pwd -P)"
     existing="$(dir_of "$name")"
     [[ -z "$existing" || "$existing" == "$dir" ]] || die "'$name' is already $existing"
+    owner="$(awk -F'\t' -v d="$dir" -v n="$name" '$2 == d && $1 != n { print $1 }' "$TABLE")"
+    [[ -z "$owner" ]] || die "$dir is already the account '$owner'"
     if [[ -z "$existing" ]]; then printf '%s\t%s\n' "$name" "$dir" >> "$TABLE"; fi
     link_shared "$dir"
     if [[ -z "$(email_of "$dir")" ]]; then
@@ -376,10 +387,14 @@ case "${1:-}" in
     # next message starts a new one, which this resolves to the recorded account.
     [[ -x "$1" ]] || die "not an executable: $1"
     bin="$1"; shift
-    if [[ -f "$TABLE" && "$PREFERENCE_EDITS" == *" ${1:-} "* && -z "$(resume_id "$@")" && -z "${CLAUDE_ACCOUNT:-}" ]]; then
+    if [[ -n "$(names)" && "$PREFERENCE_EDITS" == *" ${1:-} "* && -z "$(resume_id "$@")" && -z "${CLAUDE_ACCOUNT:-}" ]]; then
       edit_everywhere "$bin" "$@"
     fi
-    apply "$(choose "$@")"
+    name="$(choose "$@")"
+    apply "$name"
+    # A session starts with an option; a subcommand (plugin list, edit-hook)
+    # starts none and needs nothing synced.
+    if [[ -z "${1:-}" || "$1" == -* ]]; then sync_account "$bin" "$name"; fi
     unset CLAUDE_ACCOUNT_SWITCH_FILE
     export CCA_MODE=stream CCA_PID=$$
     exec "$bin" "$@"

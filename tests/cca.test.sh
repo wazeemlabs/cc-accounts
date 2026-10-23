@@ -142,15 +142,16 @@ check "the plugin's version is the release's" "$(cat "$(dirname "$CCA")/../VERSI
   "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$(dirname "$CCA")/../plugin/.claude-plugin/plugin.json")"
 
 setup
-echo '{"mine":true}' > "$HOME/.claude-two/settings.json"
-"$CCA" add two-b "$HOME/.claude-two" >/dev/null 2>&1; status=$?
+mkdir -p "$HOME/.claude-old" && echo '{"oauthAccount":{"emailAddress":"old@example.com"}}' > "$HOME/.claude-old/.claude.json"
+echo '{"mine":true}' > "$HOME/.claude-old/settings.json"
+"$CCA" add old "$HOME/.claude-old" >/dev/null 2>&1; status=$?
 check "add adopts an existing dir" "0" "$status"
-check "add links the shared settings" "$HOME/.claude/settings.json" "$(readlink "$HOME/.claude-two/settings.json")"
-check "add keeps the account's own settings as a backup" '{"mine":true}' "$(cat "$HOME"/.claude-two/settings.json.bak-*)"
-check "add links the shared conversations" "$HOME/.claude-shared/projects" "$(readlink "$HOME/.claude-two/projects")"
-"$CCA" add two-b "$HOME/.claude-two" >/dev/null 2>&1
+check "add links the shared settings" "$HOME/.claude/settings.json" "$(readlink "$HOME/.claude-old/settings.json")"
+check "add keeps the account's own settings as a backup" '{"mine":true}' "$(cat "$HOME"/.claude-old/settings.json.bak-*)"
+check "add links the shared conversations" "$HOME/.claude-shared/projects" "$(readlink "$HOME/.claude-old/projects")"
+"$CCA" add old "$HOME/.claude-old" >/dev/null 2>&1
 check "add is idempotent: one row, one backup" "1 1" \
-  "$(grep -c '^two-b' "$CCA_ROOT/accounts.tsv") $(find "$HOME/.claude-two" -maxdepth 1 -name 'settings.json.bak-*' | wc -l | tr -d ' ')"
+  "$(grep -c '^old' "$CCA_ROOT/accounts.tsv") $(find "$HOME/.claude-old" -maxdepth 1 -name 'settings.json.bak-*' | wc -l | tr -d ' ')"
 
 setup
 "$CCA" add three >/dev/null 2>&1

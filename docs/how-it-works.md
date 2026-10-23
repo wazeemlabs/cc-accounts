@@ -12,7 +12,15 @@ The account in `~/.claude` is special. Claude Code runs it with `CLAUDE_CONFIG_D
 
 `cca init` moves four folders out of `~/.claude` into `~/.claude-shared` and links them back: `projects` (the conversations), `todos`, `file-history` and `sessions` (the list of running sessions, which lets sessions on different accounts find and message each other). `cca add` links the same four into each new account's directory.
 
-`cca add` also links the items named in `~/.claude-shared/accounts/share.conf` from `~/.claude` into the new account, so all accounts use one `settings.json` and one `CLAUDE.md`. Anything already at a link's place is kept beside it as `<name>.bak-<time>`. Claude Code writes `settings.json` through the link (checked: a settings write keeps the link).
+`cca add` also links the items named in `~/.claude-shared/accounts/share.conf` from `~/.claude` into the new account, so all accounts use one `settings.json` and one `CLAUDE.md`. Anything already at a link's place is kept beside it as `<name>.bak-<time>`. Claude Code writes `settings.json` through the link (checked: a settings write keeps the link). Plugins follow from it: `enabledPlugins` is in `settings.json`, and Claude Code installs every plugin it enables when it starts, on each account.
+
+Not everything can be a link. Claude Code refuses to prune `history.jsonl` when it is not a regular file, so prompt history stays per account. `plansDirectory` must be inside the project, so plan files stay per account too; a resumed conversation still holds its plan.
+
+## Auto memory and the shared folder
+
+Auto memory lives in the conversations folder (`<config>/projects/<project>/memory/`), which every account reaches through its `projects` link. Claude Code lets a memory write through without asking only when the file's real path starts with the memory folder's path as configured. Through the link the two never match (`~/.claude-shared/projects/...` against `~/.claude/projects/...`), and the folder is inside the protected `~/.claude`, so every memory write asked for permission, or was refused in a headless run.
+
+cca sets `CLAUDE_CODE_REMOTE_MEMORY_DIR` to `~/.claude-shared` for every session. Claude Code then names the memory folder by its real path, `~/.claude-shared/projects/<project>/memory/`, the same folder as before, and memory writes go through. The variable also moves agent memory: a `user` agent's to `~/.claude-shared/agent-memory/`, shared by every account, and a `local` one's from `<project>/.claude/agent-memory-local/` to `~/.claude-shared/projects/<project>/agent-memory-local/`.
 
 ## Choosing the account for a run
 
@@ -38,18 +46,23 @@ The Claude Code extension starts Claude Code itself, so cca cannot wait on it. S
 
 `/account <name>` checks that `CCA_PID` is its own process, records `<name>` for the conversation, and sends its own process SIGINT from a zero-delay timer. In this mode SIGINT ends Claude Code with exit status 0, which the extension treats as a normal end (SIGTERM gives 143, which the panel reports as a failure). The panel then starts a new process at your next message, resuming the same conversation. The new process starts through the wrapper, which reads the record and picks `<name>`.
 
-## Folder trust
+## Folder trust and MCP servers
 
-Each account's `.claude.json` records the folders you have trusted: `projects[<path>].hasTrustDialogAccepted`. Claude Code treats a folder as trusted when it, or a folder above it up to the git repository's root, has that flag. Before each terminal launch, `libexec/cca-trust` gives the starting account every folder any account trusts. Taking the union keeps the answer the same on every account. Trust is only added, never removed. `CCA_TRUST_SYNC=off` turns the sync off.
+Each account's `.claude.json` holds settings that cannot be linked, because the file also holds the account's login. Before every session starts, in a terminal and in VS Code, `libexec/cca-sync` gives the starting account what all accounts share:
 
-Running sessions write `.claude.json` often, so cca-trust writes the way Claude Code does:
+- Folder trust: `projects[<path>].hasTrustDialogAccepted`. Claude Code treats a folder as trusted when it, or a folder above it up to the git repository's root, has that flag. A run without a terminal, as VS Code's are, does not ask: without the flag it skips what needs trust, such as an MCP server's `headersHelper` and the MCP servers and hooks an agent definition brings. Each account gets the union of all accounts' trust. Trust is only added, never removed.
+- MCP servers: the user ones (`mcpServers`), a project's local ones (`projects[<path>].mcpServers`) and the answers about a project's `.mcp.json` servers (`projects[<path>].enabledMcpjsonServers` and `disabledMcpjsonServers`). A server added, changed or removed on any account is added, changed or removed on all of them.
 
-- It takes Claude Code's lock: the directory `<config>.lock`, created with `mkdir` (the `proper-lockfile` convention). If a running session holds the lock for 3 seconds, cca-trust gives up, says so, and tries again at the next launch. It never breaks a lock.
-- Under the lock it reads the file again, adds the trust, writes a temporary file with the original permissions, syncs it to disk and renames it over the config.
+`~/.claude.json` holds the shared copy. An MCP change on another account has to be told apart from a change that account has not received yet, so `~/.claude-shared/accounts/sync-state.json` keeps, per account, a digest of each item as cca last saw it there. It holds digests only, never a server's command, URL or secrets. At each start, cca-sync applies every account's changes since its last sighting to the shared copy, then makes the starting account match it. An account seen for the first time adds what it has without replacing what is already shared. When two accounts change the same server, the starting account's change wins. `CCA_TRUST_SYNC=off` and `CCA_MCP_SYNC=off` turn each part off.
 
-Claude Code re-reads the file under the same lock before each of its own writes, so a running session keeps the added trust.
+Running sessions write `.claude.json` often, so cca-sync writes the way Claude Code does:
 
-A folder the account has never opened needs a new entry. Claude Code reads an entry as written, without filling in defaults, so a new entry must have every field Claude Code's own default entry has. cca-trust reads that default from the installed Claude Code binary (it is a literal, `{allowedTools:[],mcpContextUris:[],...,hasTrustDialogAccepted:!1,...}`), checks it holds only empty lists, empty objects and booleans, and caches it per binary in `~/.claude-shared/accounts/cache/`. If the literal is not there in that shape, cca-trust only marks folders the account already has entries for, and says so.
+- It takes Claude Code's lock on the shared copy and on the starting account's config: the directory `<config>.lock`, created with `mkdir` (the `proper-lockfile` convention). If a running session holds a lock for 3 seconds, cca-sync gives up, says so, and tries again at the next start. It never breaks a lock. One cca-sync runs at a time, under an OS lock on `sync-state.json.lock`.
+- Under the lock it reads the file again, makes the change, writes a temporary file with the original permissions, syncs it to disk and renames it over the config.
+
+Claude Code saves `.claude.json` by applying its change to a fresh read taken under the same lock, so a running session keeps what cca-sync added. It picks up new MCP servers at its next start.
+
+A folder the account has never opened needs a new entry. Claude Code reads an entry as written, without filling in defaults, so a new entry must have every field Claude Code's own default entry has. cca-sync reads that default from the installed Claude Code binary (it is a literal, `{allowedTools:[],mcpContextUris:[],...,hasTrustDialogAccepted:!1,...}`), checks it holds only empty lists, empty objects and booleans, and caches it per binary in `~/.claude-shared/accounts/cache/`. If the literal is not there in that shape, cca-sync only changes folders the account already has entries for, and says so.
 
 ## The plugin
 
@@ -66,10 +79,11 @@ A folder the account has never opened needs a new entry. Claude Code reads an en
 | `~/.claude-shared/accounts/by-session/<id>` | The account each conversation last ran on. |
 | `~/.claude-shared/accounts/switch/<pid>` | A pending terminal switch, removed when cca exits. |
 | `~/.claude-shared/accounts/cache/` | Claude Code's default project entry, per binary. |
+| `~/.claude-shared/accounts/sync-state.json` | Per account, digests of its trust and MCP items as cca last saw them. |
 | Your shell's startup file (`.zshrc`, `.bashrc` or fish's `config.fish`) | A block between `# >>> cc-accounts >>>` and `# <<< cc-accounts <<<`. |
 | `~/.claude/settings.json` | `CLAUDE_CODE_PLUGIN_DIRS` in its `env` block. |
 | Editor settings | `claudeCode.claudeProcessWrapper`, in each desktop editor's user settings and each remote editor server's machine settings (`~/.vscode-server/data/Machine/settings.json` and the like). |
-| Each account's `.claude.json` | Trust flags, as above, and the preferences below. |
+| Each account's `.claude.json` | Trust flags and MCP servers, as above, and the preferences below. |
 
 `CCA_ROOT` moves the state directory and `CCA_SHARED` the shared one.
 
@@ -85,8 +99,12 @@ VS Code's Claude in Chrome and memory dialogs save their settings by running the
 | `claude edit-chrome-settings` and `edit-memory-settings` write the account's `.claude.json` | Preferences the editor saves | `tests/cca.test.sh` (the fan-out), a VS Code `/chrome` toggle on a non-default account (the effect) |
 | Credentials keyed per config directory | Separate logins | Running cca |
 | `claude --help` option format | Keeping options on a switch | `tests/test_keep_args.py` against the installed Claude Code |
-| The default project entry literal in the binary | New trust entries | `tests/test_cca_trust.py` against the installed Claude Code |
-| `.claude.json` lock and project layout | Folder trust | `tests/test_cca_trust.py` |
+| The default project entry literal in the binary | New project entries | `tests/test_cca_sync.py` against the installed Claude Code |
+| `.claude.json` lock, project layout and MCP fields | Folder trust and MCP servers | `tests/test_cca_sync.py` |
+| Claude Code saves `.claude.json` as a change to a fresh read under its lock | Synced items surviving running sessions | Manual check |
+| A run without a terminal skips what needs trust unless the folder's flag is set | Trust synced before VS Code sessions | Manual check |
+| `CLAUDE_CODE_REMOTE_MEMORY_DIR` names the folder holding `projects/<project>/memory` | Memory writes without a prompt | Manual check: a memory write in a headless run on a non-default account |
+| Claude Code installs the plugins `settings.json` enables | Plugins on every account | Manual check |
 | The extension's `claudeProcessWrapper` call (`wrapper <binary> <args>`), machine-scoped | VS Code | Manual check |
 | SIGINT ending a stream-json session with status 0 | VS Code switch | Manual check |
 | The plugin API | `/account` | `plugin/tests` with `claude plugin test` |

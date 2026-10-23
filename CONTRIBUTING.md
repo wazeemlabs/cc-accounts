@@ -11,7 +11,7 @@ Open an issue with the bug report form. Include `cca version`, `claude --version
 ```
 bin/cca               the command, in bash (it must run on macOS's bash 3.2)
 libexec/cca-keep-args which options a switch keeps, read from claude --help
-libexec/cca-trust     folder trust sync between accounts
+libexec/cca-sync      folder trust and MCP server sync between accounts
 libexec/cca-setup     init and uninstall's edits to rc, settings and editor files
 plugin/               the /account Claude Code plugin (TypeScript)
 tests/                shell and Python tests; plugin/tests holds the plugin's
@@ -37,6 +37,6 @@ The tests run cca against a stand-in `claude` in a throwaway home directory; the
 
 ## Releasing
 
-1. Update `VERSION`, `plugin/.claude-plugin/plugin.json` and `CHANGELOG.md`.
+1. Update `VERSION`, `plugin/.claude-plugin/plugin.json` and `CHANGELOG.md`. The tests fail while the first two differ.
 2. Merge to `main` with CI green.
 3. Tag `vX.Y.Z` and publish a GitHub release with the changelog entry.

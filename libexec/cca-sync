@@ -1,21 +1,38 @@
 #!/usr/bin/env python3
-"""cca-trust <claude binary> <account config> [other account configs...]
+"""cca-sync --binary BIN --home CONFIG --target CONFIG --state FILE [--no-trust] [--no-mcp] CONFIG...
 
-Gives the account whose config comes first every folder trust the other
-accounts have (projects[<path>].hasTrustDialogAccepted in each account's
-.claude.json), so a folder trusted on one account opens without the trust
-dialog on all of them. Trust is only added, never taken away.
+Before Claude Code starts on an account, gives the account's config (its
+.claude.json, --target) what every account shares, from the configs of all
+accounts (CONFIG...):
 
-The write follows Claude Code's own: under its lock (proper-lockfile's
-directory, <config>.lock), a re-read, then a temp file renamed over the
-config with its permissions kept. A lock held by a running session is never
-broken: the sync is skipped and the next launch tries again.
+  - folder trust, projects[<path>].hasTrustDialogAccepted: the union of all
+    accounts. Trust is only added, never taken away.
+  - MCP servers: the user ones (mcpServers[<name>]), the local ones
+    (projects[<path>].mcpServers[<name>]), and the answers given to a
+    project's .mcp.json servers (projects[<path>].enabledMcpjsonServers and
+    disabledMcpjsonServers). A server added, changed or removed on any
+    account is added, changed or removed on all of them.
+
+~/.claude.json (--home) holds the shared copy. To tell a change made on an
+account from a change it has not received yet, the state file keeps, per
+account, a digest of each item as cca last saw it there: digests only, never
+a server's command, URL or secrets. An account seen for the first time adds
+what it has without replacing what is shared.
+
+Writes follow Claude Code's own: under its lock (proper-lockfile's directory,
+<config>.lock), a re-read, then a temp file renamed over the config with its
+permissions kept. A lock held by a running session is never broken: the sync
+is skipped and the next start tries again.
 
 A folder the account has never opened gets Claude Code's default project
-entry with trust set, read from the binary (Claude Code reads an entry as
-written, without filling in defaults) and cached per binary.
+entry, read from the binary (Claude Code reads an entry as written, without
+filling in defaults) and cached per binary.
 """
+import argparse
+import contextlib
 import copy
+import fcntl
+import hashlib
 import json
 import mmap
 import os
@@ -30,6 +47,8 @@ CACHE = os.path.join(os.environ.get('CCA_ROOT') or os.path.expanduser('~/.claude
 DEFAULTS_ANCHOR = re.compile(rb'\{allowedTools:\[\],[A-Za-z]+:')
 LITERAL_VALUES = {b'[]': [], b'{}': {}, b'!0': True, b'!1': False}
 LOCK_WAIT_S = 3.0
+TRUST = 'hasTrustDialogAccepted'
+APPROVALS = ('enabledMcpjsonServers', 'disabledMcpjsonServers')
 
 
 def warn(message):
@@ -59,7 +78,7 @@ def parse_defaults(blob):
         if not sep or not re.fullmatch(rb'[A-Za-z]+', key) or value not in LITERAL_VALUES:
             return None
         entry[key.decode()] = copy.deepcopy(LITERAL_VALUES[value])
-    return entry if entry.get('hasTrustDialogAccepted') is False else None
+    return entry if entry.get(TRUST) is False else None
 
 
 def project_defaults(binary):
@@ -73,7 +92,7 @@ def project_defaults(binary):
     with open(real, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as blob:
         entry = parse_defaults(blob)
     if entry is None:
-        warn(f'no default project entry found in {real}; folders an account never opened stay untrusted on it')
+        warn(f'no default project entry found in {real}; folders an account never opened get nothing synced')
         return None
     os.makedirs(CACHE, exist_ok=True)
     with open(cached, 'w') as f:
@@ -81,103 +100,297 @@ def project_defaults(binary):
     return entry
 
 
-def trusted(config_path):
-    """The folders a config trusts; an unreadable config trusts none."""
-    try:
-        with open(config_path) as f:
-            projects = json.load(f).get('projects') or {}
-    except FileNotFoundError:
-        return set()
-    except (OSError, ValueError) as error:
-        warn(f'skipped {config_path} as a source of trust: {error}')
-        return set()
-    return {path for path, entry in projects.items()
-            if isinstance(entry, dict) and entry.get('hasTrustDialogAccepted') is True}
+# --- the shared items of a config ------------------------------------------
+# A config's shared items are a flat map from a key, the path to the value
+# (a tuple), to the value: ('mcpServers', name), ('projects', folder, TRUST),
+# ('projects', folder, 'mcpServers', name), ('projects', folder, <approvals>).
+
+def is_trust(key):
+    return len(key) == 3 and key[2] == TRUST
 
 
-def add_trust(config, folders, defaults):
-    """Sets trust on each folder in config (a parsed .claude.json, changed in
-    place); returns the folders it changed."""
-    projects = config.setdefault('projects', {})
-    added = []
-    for folder in sorted(folders):
-        entry = projects.get(folder)
-        if isinstance(entry, dict):
-            if entry.get('hasTrustDialogAccepted') is not True:
-                entry['hasTrustDialogAccepted'] = True
-                added.append(folder)
-        elif defaults is not None:
-            projects[folder] = {**copy.deepcopy(defaults), 'hasTrustDialogAccepted': True}
-            added.append(folder)
-    return added
+def dict_at(parent, name):
+    value = parent.get(name)
+    return value if isinstance(value, dict) else {}
 
 
-def acquire(lock):
+def items(config):
+    """Every shared item of a parsed config. An untrusted folder and an empty
+    approvals list hold no item."""
+    found = {('mcpServers', name): server for name, server in dict_at(config, 'mcpServers').items()}
+    for folder, entry in dict_at(config, 'projects').items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get(TRUST) is True:
+            found[('projects', folder, TRUST)] = True
+        for name, server in dict_at(entry, 'mcpServers').items():
+            found[('projects', folder, 'mcpServers', name)] = server
+        for field in APPROVALS:
+            if entry.get(field):
+                found[('projects', folder, field)] = entry[field]
+    return found
+
+
+def label(key):
+    if len(key) == 2:
+        return key[1]
+    if len(key) == 4:
+        return f'{key[3]} in {key[1]}'
+    return f'.mcp.json approvals in {key[1]}'
+
+
+def name_of(key):
+    return json.dumps(list(key))
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def absorb(shared, current, base):
+    """Applies to shared (changed in place) what changed on an account since
+    cca last saw it there: base is that sighting's digests, None on first sight."""
+    for key, value in current.items():
+        if base is None:
+            shared.setdefault(key, value)
+        elif base.get(name_of(key)) != digest(value):
+            shared[key] = value
+    for name in base or {}:
+        key = tuple(json.loads(name))
+        if key not in current and not is_trust(key):
+            shared.pop(key, None)
+
+
+def place(config, key, value, defaults):
+    """Sets key to value in config; False when the folder has no entry and
+    there is no default entry to make one from."""
+    value = copy.deepcopy(value)
+    if key[0] == 'mcpServers':
+        config['mcpServers'] = {**dict_at(config, 'mcpServers'), key[1]: value}
+        return True
+    projects = config['projects'] = dict_at(config, 'projects')
+    entry = projects.get(key[1])
+    if not isinstance(entry, dict):
+        if defaults is None:
+            return False
+        entry = projects[key[1]] = copy.deepcopy(defaults)
+    if len(key) == 4:
+        entry['mcpServers'] = {**dict_at(entry, 'mcpServers'), key[3]: value}
+    else:
+        entry[key[2]] = value
+    return True
+
+
+def drop(config, key):
+    """Removes an item config holds. Trust is never removed."""
+    if key[0] == 'mcpServers':
+        del config['mcpServers'][key[1]]
+    elif len(key) == 4:
+        del config['projects'][key[1]]['mcpServers'][key[3]]
+    else:
+        config['projects'][key[1]][key[2]] = []
+
+
+def conform(config, shared, wanted, defaults):
+    """Makes config (changed in place) hold the shared items; returns the
+    changes, {key: 'added' | 'changed' | 'removed'}."""
+    have = {key: value for key, value in items(config).items() if wanted(key)}
+    changes = {}
+    for key in sorted(have.keys() - shared.keys()):
+        if not is_trust(key):
+            drop(config, key)
+            changes[key] = 'removed'
+    for key in sorted(shared):
+        if key not in have:
+            if place(config, key, shared[key], defaults):
+                changes[key] = 'added'
+        elif have[key] != shared[key]:
+            place(config, key, shared[key], defaults)
+            changes[key] = 'changed'
+    return changes
+
+
+# --- files and locks ---------------------------------------------------------
+
+class Locked(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def claude_lock(config_path):
+    """Claude Code's lock on a config: the directory <config>.lock."""
+    lock = f'{config_path}.lock'
     deadline = time.monotonic() + LOCK_WAIT_S
     delay = 0.02
     while True:
         try:
             os.mkdir(lock)
-            return True
+            break
         except FileExistsError:
             if time.monotonic() >= deadline:
-                return False
+                raise Locked(config_path)
             time.sleep(delay)  # waiting on another process's lock, as proper-lockfile retries
             delay = min(delay * 2, 0.25)
-
-
-def sync(config_path, sources, defaults):
-    """Adds the sources' trust to config_path; returns the folders added, or
-    None when the config could not be locked or read."""
-    wanted = set()
-    for source in sources:
-        wanted |= trusted(source)
-    if not wanted or not os.path.exists(config_path):
-        return []
-    if not wanted - trusted(config_path):
-        return []
-    lock = f'{config_path}.lock'
-    if not acquire(lock):
-        warn(f'{config_path} stayed locked by a running session; folder trust syncs at the next launch')
-        return None
     try:
-        with open(config_path) as f:
-            text = f.read()
-        try:
-            config = json.loads(text)
-        except ValueError as error:
-            warn(f'{config_path} does not parse ({error}); left alone')
-            return None
-        added = add_trust(config, wanted, defaults)
-        if not added:
-            return []
-        mode = os.stat(config_path).st_mode & 0o7777
-        temp = f'{config_path}.tmp.cca.{os.getpid()}.{secrets.token_hex(6)}'
-        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(json.dumps(config, indent=2, ensure_ascii=False))
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(temp, mode)
-            os.rename(temp, config_path)
-        except BaseException:
-            if os.path.exists(temp):
-                os.unlink(temp)
-            raise
-        return added
+        yield
     finally:
         os.rmdir(lock)
 
 
+@contextlib.contextmanager
+def state_lock(state_path):
+    """One cca-sync at a time: a lock the OS releases if this process dies."""
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    with open(f'{state_path}.lock', 'a') as handle:
+        deadline = time.monotonic() + LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise Locked(state_path)
+                time.sleep(0.05)  # another cca starting a session at the same moment
+        yield
+
+
+def read_config(path):
+    with open(path) as f:
+        config = json.load(f)
+    if not isinstance(config, dict):
+        raise ValueError('not a JSON object')
+    return config
+
+
+def write_config(path, config):
+    mode = os.stat(path).st_mode & 0o7777
+    temp = f'{path}.tmp.cca.{os.getpid()}.{secrets.token_hex(6)}'
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(config, indent=2, ensure_ascii=False))
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temp, mode)
+        os.rename(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.unlink(temp)
+        raise
+
+
+def load_state(path):
+    try:
+        with open(path) as f:
+            state = json.load(f)
+        if isinstance(state, dict):
+            return state
+        warn(f'{path} is not a JSON object; every account counts as seen for the first time')
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as error:
+        warn(f'{path} does not read ({error}); every account counts as seen for the first time')
+    return {}
+
+
+def save_state(path, state):
+    temp = f'{path}.tmp'
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(state, f, indent=1, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(temp, 0o600)
+    os.replace(temp, path)
+
+
+# --- the sync ----------------------------------------------------------------
+
+def sighting(state, path, current, wanted):
+    """The state entry for an account seen holding `current`, keeping the
+    digests of the kinds this run did not sync."""
+    kept = {name: value for name, value in (state.get(path) or {}).items() if not wanted(tuple(json.loads(name)))}
+    return {**kept, **{name_of(key): digest(value) for key, value in current.items()}}
+
+
+def report(changes):
+    by = {kind: sorted({label(key) for key, change in changes.items() if change == kind and not is_trust(key)})
+          for kind in ('added', 'changed', 'removed')}
+    by['trusted'] = sorted(key[1] for key in changes if is_trust(key))
+    if by['trusted']:
+        warn(f'trusted {len(by["trusted"])} folder(s) another account trusts: {", ".join(by["trusted"])}')
+    parts = [f'{kind} {", ".join(by[kind])}' for kind in ('added', 'changed', 'removed') if by[kind]]
+    if parts:
+        warn(f'MCP servers from the other accounts: {"; ".join(parts)}')
+    return by
+
+
+def sync(home, target, configs, defaults, state_path, trust=True, mcp=True):
+    """Gives target, and home's shared copy, what every account shares.
+    Returns what changed on target ({'trusted', 'added', 'changed', 'removed'}),
+    or None when it could not (target missing, unreadable or locked)."""
+    def wanted(key):
+        return trust if is_trust(key) else mcp
+
+    def selected(config):
+        return {key: value for key, value in items(config).items() if wanted(key)}
+
+    if not os.path.exists(target) or not os.path.exists(home):
+        return None
+    try:
+        with state_lock(state_path):
+            state = load_state(state_path)
+            seen = {}
+            for path in dict.fromkeys(configs):
+                if path in (home, target):
+                    continue
+                try:
+                    seen[path] = selected(read_config(path))
+                except FileNotFoundError:
+                    continue  # an account never started has nothing to share yet
+                except (OSError, ValueError) as error:
+                    warn(f'skipped {path} as a source: {error}')
+            with claude_lock(home), (claude_lock(target) if target != home else contextlib.nullcontext()):
+                try:
+                    home_config = read_config(home)
+                    target_config = home_config if target == home else read_config(target)
+                except (OSError, ValueError) as error:
+                    warn(f'{home} or {target} does not read ({error}); left alone')
+                    return None
+                shared = selected(home_config)
+                for path, current in seen.items():
+                    absorb(shared, current, state.get(path))
+                if target != home:
+                    # Last, so a conflicting change made on the account starting wins.
+                    absorb(shared, selected(target_config), state.get(target))
+                changes = conform(target_config, shared, wanted, defaults)
+                if changes:
+                    write_config(target, target_config)
+                if target != home and conform(home_config, shared, wanted, defaults):
+                    write_config(home, home_config)
+            for path, current in seen.items():
+                state[path] = sighting(state, path, current, wanted)
+            if target != home:  # home holds the shared copy itself, so it needs no sighting
+                state[target] = sighting(state, target, selected(target_config), wanted)
+            save_state(state_path, state)
+    except Locked as error:
+        warn(f'{error} stayed locked by a running session; accounts sync at the next start')
+        return None
+    return report(changes)
+
+
 def main():
-    if len(sys.argv) < 3:
-        sys.exit('usage: cca-trust <claude binary> <account config> [other account configs...]')
-    binary, target, sources = sys.argv[1], sys.argv[2], sys.argv[3:]
-    defaults = project_defaults(binary)
-    added = sync(target, sources, defaults)
-    if added:
-        warn(f'trusted {len(added)} folder(s) another account trusts: {", ".join(added)}')
+    parser = argparse.ArgumentParser(prog='cca-sync')
+    parser.add_argument('--binary', required=True)
+    parser.add_argument('--home', required=True)
+    parser.add_argument('--target', required=True)
+    parser.add_argument('--state', required=True)
+    parser.add_argument('--no-trust', dest='trust', action='store_false')
+    parser.add_argument('--no-mcp', dest='mcp', action='store_false')
+    parser.add_argument('configs', nargs='*')
+    args = parser.parse_args()
+    sync(args.home, args.target, args.configs, project_defaults(args.binary), args.state,
+         trust=args.trust, mcp=args.mcp)
 
 
 if __name__ == '__main__':

@@ -55,9 +55,10 @@ Claude Code keeps one login per config folder, and each folder keeps its own con
 - the list of running sessions;
 - `settings.json`, `CLAUDE.md`, `agents`, `commands` and `keybindings.json` (change the list in `~/.claude-shared/accounts/share.conf`);
 - folder trust, so a folder you trusted on one account does not ask again on another (set `CCA_TRUST_SYNC=off` to stop this).
+- your MCP servers: user ones, a project's local ones, and your answers about a project's `.mcp.json` servers. A server you add, change or remove on one account changes on all of them when they next start (set `CCA_MCP_SYNC=off` to stop this).
 - the preferences VS Code's Claude in Chrome and memory dialogs save, which Claude Code keeps per account: a change in either dialog is applied to every account.
 
-Each account keeps its own login, installed plugins and user-level MCP servers. Add plugins and MCP servers on each account, or put MCP servers in a project's `.mcp.json`.
+Plugins follow the shared `settings.json`: each account installs the plugins it enables when it starts. Each account keeps its own login and its claude.ai connectors.
 
 How it works, and every file it writes: [docs/how-it-works.md](docs/how-it-works.md).
 
@@ -92,11 +93,13 @@ Your accounts and conversations stay where they are.
 ## Good to know
 
 - Installed a new editor, or connected VS Code to WSL or a remote machine, after setup? Run `cca init` again with your first account's name (`cca init work`). It only adds what is missing.
-- `/account` uses Claude Code's plugin API, which is in early access (tested with Claude Code 2.1.304). If your Claude Code does not load the plugin, everything else still works, and `cca personal --resume <conversation id>` moves a conversation by hand.
+- `/account` uses Claude Code's plugin API, which is in early access (tested with Claude Code 2.1.305). If your Claude Code does not load the plugin, everything else still works, and `cca personal --resume <conversation id>` moves a conversation by hand.
 - When switching in a terminal, options such as `--model` and `--add-dir` carry over. The first prompt and one-time options such as `--print` and `--worktree` do not; cca says what it left out.
 - If your editor's settings file has comments, setup does not rewrite it and prints the line to add instead.
 - In an editor, a conversation with no saved permission mode starts in Manual mode, and the session list also shows sessions started by scripts. The Claude Code extension does this whenever a process wrapper is set.
 - Sessions on claude.ai (cloud sessions) belong to one account and are not shared.
+- Prompt history (the up arrow) and plan files stay on the account that wrote them. After a switch, the plan is still in the conversation.
+- The editor's plugin manager and its claude.ai design sign-in run on the account new sessions start on, because nothing tells cca which panel asked.
 - cc-accounts relies on parts of Claude Code that are not documented, and a Claude Code update can change them. CI checks it against the latest Claude Code every week.
 
 ## All commands
@@ -114,7 +117,7 @@ Your accounts and conversations stay where they are.
 | `/account <name>` | In Claude Code: move this conversation to `<name>`. |
 | `/account default <name>` | In Claude Code: start new sessions on `<name>`. |
 
-Environment variables: `CCA_TRUST_SYNC=off` stops folder trust syncing. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
+Environment variables: `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` MCP server syncing. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
 
 ## Use only your own accounts
 
