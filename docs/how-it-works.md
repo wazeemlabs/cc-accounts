@@ -44,7 +44,7 @@ When Claude Code exits, cca reads the switch file. If it holds a request, cca st
 
 The Claude Code extension starts Claude Code itself, so cca cannot wait on it. Setup sets `claudeCode.claudeProcessWrapper` to cca. The setting is machine-scoped: a desktop window reads it from the editor's user settings, and a remote window (WSL, SSH) from the editor server's machine settings on the remote machine. Setup writes it in both places for every VS Code family editor set up on the machine it runs on. The extension then runs `cca <its own claude binary> <args>`. cca picks the account as above and replaces itself with Claude Code (`exec`), keeping its pid, with `CCA_MODE=stream` and `CCA_PID` set to that pid.
 
-`/account <name>` checks that `CCA_PID` is its own process, records `<name>` for the conversation, and sends its own process SIGINT from a zero-delay timer. In this mode SIGINT ends Claude Code with exit status 0, which the extension treats as a normal end (SIGTERM gives 143, which the panel reports as a failure). The panel then starts a new process at your next message, resuming the same conversation. The new process starts through the wrapper, which reads the record and picks `<name>`.
+`/account <name>` checks that `CCA_PID` is its own process, records `<name>` for the conversation, and ends its own process from a zero-delay timer. In this mode SIGINT ends an idle Claude Code with exit status 0, which the extension treats as a normal end; a session in the middle of a turn reads its first SIGINT as "stop the turn" and keeps running, so the hook waits up to three seconds for the exit, sends SIGINT again, and sends SIGTERM last (143, which the panel reports as a failure, though the conversation still reopens). A process that survives all three is reported in the session log with the advice to close the tab and reopen the conversation. The panel then starts a new process at your next message, resuming the same conversation. The new process starts through the wrapper, which reads the record and picks `<name>`.
 
 ## Folder trust and MCP servers
 
@@ -114,7 +114,7 @@ VS Code's Claude in Chrome and memory dialogs save their settings by running the
 | `CLAUDE_CODE_REMOTE_MEMORY_DIR` names the folder holding `projects/<project>/memory` | Memory writes without a prompt | Manual check: a memory write in a headless run on a non-default account |
 | Claude Code installs the plugins `settings.json` enables | Plugins on every account | Manual check |
 | The extension's `claudeProcessWrapper` call (`wrapper <binary> <args>`), machine-scoped | VS Code | Manual check |
-| SIGINT ending a stream-json session with status 0 | VS Code switch | Manual check |
+| SIGINT ending an idle stream-json session with status 0; a second SIGINT ending one that was mid-turn | VS Code switch | Manual check |
 | The plugin API | `/account` | `plugin/tests` with `claude plugin test` |
 
 ## Windows

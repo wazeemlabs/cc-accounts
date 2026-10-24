@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.3.1 (2026-10-24)
+
+- In VS Code, `/account` on a session in the middle of a turn ended the turn instead of the process, so the conversation ran twice: the old process beside the one the panel started on the new account. The switch now waits for the process to exit, sends SIGINT again to the now idle session, and SIGTERM last; a process that survives is reported in the session log.
+
 ## 0.3.0 (2026-10-23)
 
 - User MCP servers live in one file, `~/.claude-shared/mcp.json`, which every session cca starts loads with `--mcp-config`. Server names, and so tool names, stay the same. At each start cca moves the user servers an account holds into the file, so no account keeps a copy; one added later with `claude mcp add --scope user` on any account is moved in the same way. Edit the file to change or remove a server. Before, 0.2.0 kept a copy in every account.

@@ -53,6 +53,39 @@ async function processIds($: EngineInterface): Promise<{ self: string; parent: s
   return exitCode === 0 && self && parent ? { self, parent } : undefined
 }
 
+// Whether a process still runs.
+async function alive($: EngineInterface, pid: string): Promise<boolean> {
+  const { exitCode } = await $.process.run(['kill', '-0', pid])
+  return exitCode === 0
+}
+
+// Ends this process so the extension restarts the conversation on the target
+// account. SIGINT ends an idle stream-json session with exit 0, but a session
+// in the middle of a turn reads its first SIGINT as "stop the turn" and keeps
+// running, which left two processes on one conversation (2026-10-24). So each
+// signal is followed by a wait for the exit, the second SIGINT ends the now
+// idle session, and SIGTERM is the last resort (exit 143, which the panel
+// shows as a failure, though the conversation still reopens at the next
+// message). The waits stay well inside a dispatch's budget.
+const END_STEPS: readonly { signal: string; waitMs: number }[] = [
+  { signal: '-INT', waitMs: 3000 },
+  { signal: '-INT', waitMs: 2000 },
+  { signal: '-TERM', waitMs: 2000 },
+]
+const END_POLL_MS = 500
+
+async function endProcess($: EngineInterface, pid: string): Promise<string | undefined> {
+  for (const step of END_STEPS) {
+    const { exitCode, stderr } = await $.process.run(['kill', step.signal, pid])
+    if (exitCode !== 0) return `kill ${step.signal} failed: ${stderr.trim()}`
+    for (let waited = 0; waited < step.waitMs; waited += END_POLL_MS) {
+      await $.clock.sleep(END_POLL_MS)
+      if (!(await alive($, pid))) return undefined
+    }
+  }
+  return `still running after ${END_STEPS.map(step => `SIG${step.signal.slice(1)}`).join(', ')}`
+}
+
 // cca resumes a conversation on the account it last ran on.
 async function record($: EngineInterface, ctx: Context, sessionId: string, name: string): Promise<void> {
   await $.fs.write(`${ctx.root}/by-session/${sessionId}`, `${name}\n`)
@@ -128,13 +161,14 @@ export const register: Register = on => {
     }
 
     // VS Code: the extension owns this process and starts a new one, through
-    // cca, at the next message once it ends. SIGINT ends a stream-json session
-    // with exit 0 (SIGTERM gives 143, which the panel shows as a failure).
+    // cca, at the next message once it ends.
     if (mode === 'stream' && ids !== undefined && ids.self === ccaPid) {
       const self = ids.self
       await $.clock.after(0, async () => {
-        const { exitCode, stderr } = await $.process.run(['kill', '-INT', self])
-        if (exitCode !== 0) $.ui.log(`cc-accounts: could not end this session (${stderr.trim()}).`)
+        const failure = await endProcess($, self)
+        if (failure !== undefined) {
+          $.ui.log(`cc-accounts: could not end this session (${failure}); close this tab and reopen the conversation.`)
+        }
       })
       return { text: `Switched to ${target.name}: your next message continues this conversation on it.${signIn}` }
     }

@@ -14,7 +14,9 @@ const STREAM = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'stream', CCA_PID: SELF }
 
 // The world beneath the mod: an in-memory disk, the session's id, and a
 // record of the commands it runs and registers.
-function world(on: On, env: Record<string, string>) {
+// `signalsToDie`: how many signals the process takes before it exits; a
+// session in the middle of a turn survives its first SIGINT.
+function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const files = new Map<string, string>([
     [`${ROOT}/accounts.tsv`, `1\t${HOME}/.claude\n2\t${HOME}/.claude-two\n3\t${HOME}/.claude-three\n`],
     [`${HOME}/.claude.json`, '{"oauthAccount":{"emailAddress":"one@example.com"}}'],
@@ -43,11 +45,18 @@ function world(on: On, env: Record<string, string>) {
     ran.push(e.command)
     return {}
   })
+  let signals = 0
   on('process.run', async (_$, e) => {
     if (e.argv[0] === '/bin/sh') {
       return { value: { exitCode: 0, stdout: `${SELF}\n ${PARENT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    const exited = signals >= signalsToDie
+    if (e.argv[1] === '-0') {
+      // kill -0: whether the process still runs.
+      return { value: { exitCode: exited ? 1 : 0, stdout: '', stderr: exited ? 'No such process' : '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     killed.push([...e.argv])
+    signals += 1
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.log', async (_$, e) => {
@@ -150,8 +159,34 @@ describe('/account', () => {
     expect(w.killed).toEqual([])
     await w.clock.advance(0)
     expect(w.killed).toEqual([['kill', '-INT', SELF]])
+    await w.clock.advance(10000)
+    expect(w.killed).toEqual([['kill', '-INT', SELF]])
     expect(w.ran).toEqual([])
     expect(w.logs).toEqual([])
+  })
+
+  test('a session mid-turn survives its first SIGINT and is ended by a second', async ($, on) => {
+    const w = world(on, STREAM, 2)
+    await $.session.start(START)
+    await $.command.run(run('2'))
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([['kill', '-INT', SELF]])
+    await w.clock.advance(2500)
+    expect(w.killed).toEqual([['kill', '-INT', SELF]])
+    await w.clock.advance(10000)
+    expect(w.killed).toEqual([['kill', '-INT', SELF], ['kill', '-INT', SELF]])
+    expect(w.logs).toEqual([])
+  })
+
+  test('a session that survives both SIGINTs gets SIGTERM, and one that survives that is reported', async ($, on) => {
+    const w = world(on, STREAM, Infinity)
+    await $.session.start(START)
+    await $.command.run(run('2'))
+    await w.clock.advance(10000)
+    expect(w.killed).toEqual([['kill', '-INT', SELF], ['kill', '-INT', SELF], ['kill', '-TERM', SELF]])
+    expect(w.logs).toEqual([
+      'cc-accounts: could not end this session (still running after SIGINT, SIGINT, SIGTERM); close this tab and reopen the conversation.',
+    ])
   })
 
   test('a claude started inside a cca terminal session does not switch its parent', async ($, on) => {
