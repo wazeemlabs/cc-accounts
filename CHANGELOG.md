@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+- `/account` no longer cuts work short. Ending the process for a switch stopped the turn in flight and every subagent, Monitor and background command, which then had to be resumed by hand. A switch now waits until the turn has ended and the background work has finished, replying at once with what it waits for, and happens on its own when the last task's notification turn ends. `/account <name> now` switches at once; `/account <current account>` cancels a queued switch. The plugin learns the session's background work from a Stop command hook, `record-tasks.py`, because hooks modules do not get the Stop event where the built-in security plugin is seated.
+- `cca help` prints the whole comment block however long it is.
+
 ## 0.3.1 (2026-10-24)
 
 - In VS Code, `/account` on a session in the middle of a turn ended the turn instead of the process, so the conversation ran twice: the old process beside the one the panel started on the new account. The switch now waits for the process to exit, sends SIGINT again to the now idle session, and SIGTERM last; a process that survives is reported in the session log.

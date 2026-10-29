@@ -9,6 +9,18 @@ import {
   USAGE,
   type Account,
 } from './accounts'
+import { taskStarted, turnMark } from './background'
+import {
+  afterOf,
+  carryOut,
+  describeWait,
+  leadOf,
+  newState,
+  readRecord,
+  recordFile,
+  waitingFor,
+  type Exit,
+} from './switching'
 
 type Context = {
   home: string
@@ -53,58 +65,61 @@ async function processIds($: EngineInterface): Promise<{ self: string; parent: s
   return exitCode === 0 && self && parent ? { self, parent } : undefined
 }
 
-// Whether a process still runs.
-async function alive($: EngineInterface, pid: string): Promise<boolean> {
-  const { exitCode } = await $.process.run(['kill', '-0', pid])
-  return exitCode === 0
-}
-
-// Ends this process so the extension restarts the conversation on the target
-// account. SIGINT ends an idle stream-json session with exit 0, but a session
-// in the middle of a turn reads its first SIGINT as "stop the turn" and keeps
-// running, which left two processes on one conversation (2026-10-24). So each
-// signal is followed by a wait for the exit, the second SIGINT ends the now
-// idle session, and SIGTERM is the last resort (exit 143, which the panel
-// shows as a failure, though the conversation still reopens at the next
-// message). The waits stay well inside a dispatch's budget.
-const END_STEPS: readonly { signal: string; waitMs: number }[] = [
-  { signal: '-INT', waitMs: 3000 },
-  { signal: '-INT', waitMs: 2000 },
-  { signal: '-TERM', waitMs: 2000 },
-]
-const END_POLL_MS = 500
-
-async function endProcess($: EngineInterface, pid: string): Promise<string | undefined> {
-  for (const step of END_STEPS) {
-    const { exitCode, stderr } = await $.process.run(['kill', step.signal, pid])
-    if (exitCode !== 0) return `kill ${step.signal} failed: ${stderr.trim()}`
-    for (let waited = 0; waited < step.waitMs; waited += END_POLL_MS) {
-      await $.clock.sleep(END_POLL_MS)
-      if (!(await alive($, pid))) return undefined
-    }
-  }
-  return `still running after ${END_STEPS.map(step => `SIG${step.signal.slice(1)}`).join(', ')}`
-}
-
 // cca resumes a conversation on the account it last ran on.
 async function record($: EngineInterface, ctx: Context, sessionId: string, name: string): Promise<void> {
   await $.fs.write(`${ctx.root}/by-session/${sessionId}`, `${name}\n`)
 }
 
 export const register: Register = on => {
+  const state = newState()
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await $.command.register({
       name: 'account',
       description: 'Show or switch the Claude account this session runs on',
-      argumentHint: '[name | default <name>]',
+      argumentHint: '[name [now] | default <name>]',
     })
     const ctx = await context($)
+    state.root = ctx?.root
     if (ctx?.current !== undefined) {
       $.ui.status(`account ${ctx.current.name}`)
       await record($, ctx, await $.session.id(), ctx.current.name)
     }
     return result
+  })
+
+  // A main-loop turn in flight, marked in the record file so that its end
+  // tells whether its Stop hook ran.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      state.turns += 1
+      if (state.root !== undefined) await $.fs.write(recordFile(state.root, await $.session.id()), turnMark(e.turnId))
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId !== undefined) return result
+    state.turns = Math.max(0, state.turns - 1)
+    await readRecord($, state)
+    if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
+    return result
+  })
+
+  // Background work started since the last Stop hook, for a turn that ends
+  // without one.
+  on('tool.call', async ($, e, next) => {
+    const answer = await next(e)
+    if (answer.result !== undefined) {
+      const task = taskStarted(e.tool, e as unknown as Record<string, unknown>, answer.result)
+      if (task !== undefined) state.tasks.set(task.id, task)
+    }
+    return answer
+  }).catch(async ($, e, next) => {
+    $.ui.log(`cc-accounts: could not note what a ${e.tool} call started (${String(next.error)}).`)
+    return next(e)
   })
 
   on('command.run', { command: 'account' }, async ($, e) => {
@@ -130,8 +145,17 @@ export const register: Register = on => {
       return { text: `New sessions start on ${target.name}.` }
     }
 
-    if (target.name === ctx.current?.name) return { text: `This session already runs on ${target.name}.` }
+    if (state.ending) return { text: 'This session is already switching accounts.' }
     const sessionId = await $.session.id()
+    const current = ctx.current?.name
+    if (target.name === current) {
+      if (state.pending === undefined) return { text: `This session already runs on ${target.name}.` }
+      const dropped = state.pending.target
+      state.pending = undefined
+      await record($, ctx, sessionId, target.name)
+      $.ui.status(`account ${target.name}`)
+      return { text: `Cancelled the switch to ${dropped}: this session stays on ${target.name}.` }
+    }
     await record($, ctx, sessionId, target.name)
     const signIn = (await emailOf($, target, ctx.home)) === undefined
       ? ` ${target.name} is not signed in yet: sign in with /login when it opens.`
@@ -142,43 +166,38 @@ export const register: Register = on => {
     const mode = await $.env.get('CCA_MODE')
     const ccaPid = await $.env.get('CCA_PID')
     const ids = mode === undefined ? undefined : await processIds($)
-
-    // A terminal: cca waits on this process. Leave the request and exit; cca
-    // resumes the conversation on the target account, flags kept.
     const switchFile = await $.env.get('CLAUDE_ACCOUNT_SWITCH_FILE')
-    if (mode === 'terminal' && switchFile && ids?.parent === ccaPid) {
-      await $.fs.write(switchFile, `${target.name} ${sessionId}\n`)
-      // A command.run hook may not run a command (it would wait on itself), so
-      // the timer's own dispatch runs /exit, queued until this one has finished.
-      await $.clock.after(0, async () => {
-        try {
-          await $.command.run({ command: 'exit', args: '' })
-        } catch (error) {
-          $.ui.log(`cc-accounts: /exit failed (${String(error)}); exit and cca will switch.`)
-        }
-      })
-      return { text: `Switching to ${target.name}: this session closes and reopens on it.${signIn}` }
-    }
-
-    // VS Code: the extension owns this process and starts a new one, through
-    // cca, at the next message once it ends.
-    if (mode === 'stream' && ids !== undefined && ids.self === ccaPid) {
-      const self = ids.self
-      await $.clock.after(0, async () => {
-        const failure = await endProcess($, self)
-        if (failure !== undefined) {
-          $.ui.log(`cc-accounts: could not end this session (${failure}); close this tab and reopen the conversation.`)
-        }
-      })
-      return { text: `Switched to ${target.name}: your next message continues this conversation on it.${signIn}` }
-    }
+    let exit: Exit | undefined
+    if (mode === 'terminal' && switchFile && ids?.parent === ccaPid) exit = { kind: 'terminal', switchFile, sessionId }
+    if (mode === 'stream' && ids !== undefined && ids.self === ccaPid) exit = { kind: 'stream', pid: ids.self }
 
     // Started without cca: the process cannot change its own login, so the
     // choice waits for the conversation's next open.
+    if (exit === undefined) {
+      return {
+        text:
+          `This conversation opens on ${target.name} from now on.${signIn}\n` +
+          `Terminal: exit, then run \`claude --resume ${sessionId}\`. VS Code: close this tab and reopen the conversation.`,
+      }
+    }
+
+    // A newer ask replaces a queued one. Idle, or forced, the switch happens
+    // as soon as this command has finished.
+    state.pending = { target: target.name, force: ask.force, exit }
+    const wait = await waitingFor($, state)
+    const count = wait.tasks.length + (wait.turn ? 1 : 0)
+    if (ask.force || count === 0) {
+      await $.clock.after(0, () => carryOut($, state))
+      const stopping = count === 0 ? '' : `, stopping ${describeWait(wait)}`
+      return { text: `${leadOf(exit, target.name)}${stopping}: ${afterOf(exit, 'it')}${signIn}` }
+    }
+    $.ui.status(`account ${current ?? '(unknown)'}, switching to ${target.name}`)
+    const stay = current === undefined ? '' : ` To stay on ${current}, type /account ${current}.`
     return {
       text:
-        `This conversation opens on ${target.name} from now on.${signIn}\n` +
-        `Terminal: exit, then run \`claude --resume ${sessionId}\`. VS Code: close this tab and reopen the conversation.`,
+        `Switch to ${target.name} queued: waiting for ${describeWait(wait)} to end. ` +
+        `Then ${afterOf(exit, target.name)}${signIn}\n` +
+        `To switch now and stop ${count === 1 ? 'it' : 'them'}, type /account ${target.name} now.${stay}`,
     }
   })
 }

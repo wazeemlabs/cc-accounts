@@ -45,6 +45,12 @@ Done. Keep using `claude` as before.
 
 In a terminal, `/account` closes the session and reopens the same conversation on the other account, with the options you started it with. In VS Code, the switch happens at the next message you send, in the same tab.
 
+A switch does not cut work short. If Claude is in the middle of a turn, or a subagent, a Monitor or a background command is still running, `/account` replies at once that the switch is queued and names what it is waiting for. The switch happens when the turn has ended and that work has finished; a finished task wakes the session, so the switch follows on its own. Until then the session stays on its account, and messages you send run there.
+
+- `/account personal now` switches at once and stops whatever is running.
+- `/account <this session's account>` cancels a queued switch.
+- Scheduled wakeups (`/loop` and the like) are not waited for.
+
 `claude --resume` opens a conversation on the account it last ran on.
 
 ## What it does
@@ -115,7 +121,8 @@ Your accounts and conversations stay where they are.
 | `cca uninstall` | Undo setup's changes to your shell, settings and editors. |
 | `cca version`, `cca help` | |
 | `/account` | In Claude Code: list the accounts. |
-| `/account <name>` | In Claude Code: move this conversation to `<name>`. |
+| `/account <name>` | In Claude Code: move this conversation to `<name>` once its turn and background work have finished. |
+| `/account <name> now` | In Claude Code: move it at once, stopping that work. |
 | `/account default <name>` | In Claude Code: start new sessions on `<name>`. |
 
 Environment variables: `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.

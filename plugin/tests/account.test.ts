@@ -1,83 +1,6 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import { describe, expect, test } from 'claude-code/testing'
 import { currentAccount, parseAsk, parseTable } from '../hooks/accounts'
-
-const HOME = '/Users/me'
-const ROOT = `${HOME}/.claude-shared/accounts`
-const SESSION = '0f4a6c1e-1111-4222-8333-944455556666'
-const SWITCH = `${ROOT}/switch/123`
-// This process is 500; cca (terminal) is its parent, 400.
-const SELF = '500'
-const PARENT = '400'
-const TERMINAL = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'terminal', CCA_PID: PARENT, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH }
-const STREAM = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'stream', CCA_PID: SELF }
-
-// The world beneath the mod: an in-memory disk, the session's id, and a
-// record of the commands it runs and registers.
-// `signalsToDie`: how many signals the process takes before it exits; a
-// session in the middle of a turn survives its first SIGINT.
-function world(on: On, env: Record<string, string>, signalsToDie = 1) {
-  const files = new Map<string, string>([
-    [`${ROOT}/accounts.tsv`, `1\t${HOME}/.claude\n2\t${HOME}/.claude-two\n3\t${HOME}/.claude-three\n`],
-    [`${HOME}/.claude.json`, '{"oauthAccount":{"emailAddress":"one@example.com"}}'],
-    [`${HOME}/.claude-two/.claude.json`, '{"oauthAccount":{"emailAddress":"two@example.com"}}'],
-  ])
-  const ran: string[] = []
-  const statuses: (string | undefined)[] = []
-  const logs: string[] = []
-  const killed: string[][] = []
-  mock.env(on, { HOME, ...env })
-  const clock = mock.clock(on)
-  on('fs.exists', async (_$, e) => ({ value: files.has(e.path) }))
-  on('fs.read', async (_$, e) => {
-    const text = files.get(e.path)
-    if (text === undefined) throw new Error(`ENOENT ${e.path}`)
-    return { value: text }
-  })
-  on('fs.write', async (_$, e) => {
-    files.set(e.path, e.text)
-    return { value: undefined }
-  })
-  on('session.id', async () => ({ value: SESSION }))
-  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
-  on('command.run', { command: 'exit' }, async (_$, e) => {
-    ran.push(e.command)
-    return {}
-  })
-  let signals = 0
-  on('process.run', async (_$, e) => {
-    if (e.argv[0] === '/bin/sh') {
-      return { value: { exitCode: 0, stdout: `${SELF}\n ${PARENT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-    }
-    const exited = signals >= signalsToDie
-    if (e.argv[1] === '-0') {
-      // kill -0: whether the process still runs.
-      return { value: { exitCode: exited ? 1 : 0, stdout: '', stderr: exited ? 'No such process' : '', isStdoutTruncated: false, isStderrTruncated: false } }
-    }
-    killed.push([...e.argv])
-    signals += 1
-    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-  })
-  on('ui.log', async (_$, e) => {
-    logs.push(e.text)
-    return { value: undefined }
-  })
-  on('ui.status', async (_$, e) => {
-    statuses.push(e.text)
-    return { value: undefined }
-  })
-  return { files, ran, statuses, logs, clock, killed }
-}
-
-const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
-
-const run = (args: string) => ({
-  command: 'account',
-  args,
-  origin: { kind: 'composer' },
-  presentation: { isFullscreen: false, columns: 100 },
-}) as const
+import { HOME, ROOT, SELF, SESSION, START, STREAM, SWITCH, TERMINAL, run, world } from './world'
 
 describe('parsing', () => {
   test('reads the account table, skipping blank and malformed lines', () => {
@@ -89,10 +12,13 @@ describe('parsing', () => {
 
   test('reads /account arguments', () => {
     expect(parseAsk('')).toEqual({ kind: 'list' })
-    expect(parseAsk('  2 ')).toEqual({ kind: 'switch', name: '2' })
+    expect(parseAsk('  2 ')).toEqual({ kind: 'switch', name: '2', force: false })
+    expect(parseAsk('2 now')).toEqual({ kind: 'switch', name: '2', force: true })
     expect(parseAsk('default 3')).toEqual({ kind: 'default', name: '3' })
+    expect(parseAsk('default now')).toEqual({ kind: 'default', name: 'now' })
     expect(parseAsk('default')).toEqual({ kind: 'usage' })
     expect(parseAsk('2 3')).toEqual({ kind: 'usage' })
+    expect(parseAsk('2 now please')).toEqual({ kind: 'usage' })
   })
 
   test('names the current account by CLAUDE_ACCOUNT, else by config dir, ~/.claude when unset', () => {
@@ -135,10 +61,10 @@ describe('/account', () => {
     await $.session.start(START)
     const { text } = await $.command.run(run('2'))
     expect(text).toBe('Switching to 2: this session closes and reopens on it.')
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n`)
     expect(w.files.get(`${ROOT}/by-session/${SESSION}`)).toBe('2\n')
     expect(w.ran).toEqual([])
     await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n`)
     expect(w.logs).toEqual([])
     expect(w.ran).toEqual(['exit'])
   })
@@ -165,7 +91,7 @@ describe('/account', () => {
     expect(w.logs).toEqual([])
   })
 
-  test('a session mid-turn survives its first SIGINT and is ended by a second', async ($, on) => {
+  test('a session a new turn reaches before the signal survives its first SIGINT and is ended by a second', async ($, on) => {
     const w = world(on, STREAM, 2)
     await $.session.start(START)
     await $.command.run(run('2'))

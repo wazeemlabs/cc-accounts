@@ -5,11 +5,13 @@ export type Account = { name: string; dir: string }
 
 export type Ask =
   | { kind: 'list' }
-  | { kind: 'switch'; name: string }
+  | { kind: 'switch'; name: string; force: boolean }
   | { kind: 'default'; name: string }
   | { kind: 'usage' }
 
-export const USAGE = 'Usage: /account (list), /account <name> (switch this session), /account default <name>'
+export const USAGE =
+  'Usage: /account (list), /account <name> (switch this session once its work is done), ' +
+  '/account <name> now (switch at once, stopping that work), /account default <name>'
 
 export function parseTable(text: string): Account[] {
   return text
@@ -24,8 +26,10 @@ export function parseAsk(args: string): Ask {
   const words = args.trim().split(/\s+/).filter(word => word !== '')
   const [first, second, ...rest] = words
   if (first === undefined) return { kind: 'list' }
-  if (second === undefined) return first === 'default' ? { kind: 'usage' } : { kind: 'switch', name: first }
-  if (first === 'default' && rest.length === 0) return { kind: 'default', name: second }
+  if (second === undefined) return first === 'default' ? { kind: 'usage' } : { kind: 'switch', name: first, force: false }
+  if (rest.length > 0) return { kind: 'usage' }
+  if (first === 'default') return { kind: 'default', name: second }
+  if (second === 'now') return { kind: 'switch', name: first, force: true }
   return { kind: 'usage' }
 }
 

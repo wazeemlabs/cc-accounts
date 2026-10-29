@@ -15,9 +15,10 @@
 #   cca uninstall              undo init's shell, settings and VS Code changes
 #   cca version | help
 #
-# Inside a session, /account <name> moves the conversation to <name>: in a
-# terminal it closes and reopens on <name> with the same flags; in VS Code the
-# next message you send continues it on <name>.
+# Inside a session, /account <name> moves the conversation to <name> once its
+# turn and background work have finished (/account <name> now does not wait):
+# in a terminal it closes and reopens on <name> with the same flags; in VS Code
+# the next message you send continues it on <name>.
 set -euo pipefail
 
 ROOT="${CCA_ROOT:-$HOME/.claude-shared/accounts}"
@@ -41,6 +42,10 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # this old belongs to a conversation nobody has opened since; it then opens on
 # the default account.
 RECORD_DAYS=180
+# The plugin's Stop hook leaves each session's background work in
+# background/<id>, read only at the end of the turn that wrote it, so a day-old
+# one is never read again.
+BACKGROUND_DAYS=1
 # Settings the editor saves by running the binary once with one of these
 # subcommands (VS Code's Claude in Chrome and memory dialogs). They live in
 # each account's .claude.json, and the editor runs the helper itself, with
@@ -167,6 +172,12 @@ sync_account() {
     || echo "cca: trust and MCP servers were not synced to $account" >&2
 }
 
+prune_background() {
+  if [[ -d "$ROOT/background" ]]; then
+    find "$ROOT/background" -type f -mtime +"$BACKGROUND_DAYS" -delete
+  fi
+}
+
 # Run in the terminal, relaunching on the account a /account switch asks for.
 launch() {
   local account="$1"; shift
@@ -183,6 +194,7 @@ launch() {
   if [[ -d "$ROOT/by-session" ]]; then
     find "$ROOT/by-session" -type f -mtime +"$RECORD_DAYS" -delete
   fi
+  prune_background
   while :; do
     rm -f "$switch"
     apply "$account"
@@ -348,7 +360,8 @@ edit_everywhere() {
 
 case "${1:-}" in
   "") list ;;
-  help|-h|--help) sed -n '2,20p' "$self" | sed 's/^# \{0,1\}//' ;;
+  # The comment block at the top, whatever its length.
+  help|-h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$self" ;;
   version|-v|--version) echo "cca $(cat "$HERE/VERSION")" ;;
   init)
     [[ $# -ge 2 && $# -le 3 ]] || die "usage: cca init <name> [--yes]"
@@ -403,6 +416,7 @@ case "${1:-}" in
     # starts none and needs nothing synced or loaded.
     if [[ -z "${1:-}" || "$1" == -* ]]; then
       sync_account "$bin" "$name"
+      prune_background
       if [[ -f "$MCP_FILE" ]]; then set -- "--mcp-config=$MCP_FILE" "$@"; fi
     fi
     unset CLAUDE_ACCOUNT_SWITCH_FILE

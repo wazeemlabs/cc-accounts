@@ -171,8 +171,23 @@ touch -t 202001010000 "$CCA_ROOT/by-session/aaaaaaaa-1111-4222-8333-944455556666
 "$CCA" run
 check "a terminal run drops records older than RECORD_DAYS and keeps fresh ones" "$ID" "$(ls "$CCA_ROOT/by-session")"
 
+setup
+mkdir -p "$CCA_ROOT/background"
+echo '{"tasks":[]}' > "$CCA_ROOT/background/$ID"
+echo '{"tasks":[]}' > "$CCA_ROOT/background/aaaaaaaa-1111-4222-8333-944455556666"
+touch -t 202001010000 "$CCA_ROOT/background/aaaaaaaa-1111-4222-8333-944455556666"
+"$CCA" run
+check "a terminal run drops background-work records older than a day" "$ID" "$(ls "$CCA_ROOT/background")"
+
+setup
+mkdir -p "$CCA_ROOT/background"
+echo '{"tasks":[]}' > "$CCA_ROOT/background/aaaaaaaa-1111-4222-8333-944455556666"
+touch -t 202001010000 "$CCA_ROOT/background/aaaaaaaa-1111-4222-8333-944455556666"
+"$CCA" "$CCA_CLAUDE" --resume "$ID"
+check "a VS Code session start drops them too" "" "$(ls "$CCA_ROOT/background")"
+
 check "help prints the usage block" "cca: run Claude Code on several accounts and move a conversation between them." "$("$CCA" help | head -1)"
-check "help ends at the end of the comment block" "next message you send continues it on <name>." "$("$CCA" help | tail -1)"
+check "help ends at the end of the comment block" "the next message you send continues it on <name>." "$("$CCA" help | tail -1)"
 check "version prints the release" "cca $(cat "$(dirname "$CCA")/../VERSION")" "$("$CCA" version)"
 
 setup
