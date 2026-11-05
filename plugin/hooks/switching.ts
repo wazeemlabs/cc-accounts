@@ -5,7 +5,7 @@
 import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
 import { liveCrons } from './crons'
-import { followUpText, type Move } from './usage'
+import { followUpText, type Move, type Stop } from './usage'
 import { describeError, record, type Context } from './context'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
@@ -21,8 +21,8 @@ export type Exit =
   | { kind: 'stream'; pid: string; switchFile: string | undefined; supervisor: string | undefined; sessionId: string }
 
 // The switch asked for and not carried out yet: from which account, and, for
-// a move the usage limit forced, which window ran out.
-export type Pending = { target: string; force: boolean; exit: Exit; from: string | undefined; limit: string | undefined }
+// a move the account forced by stopping a turn, what stopped it.
+export type Pending = { target: string; force: boolean; exit: Exit; from: string | undefined; stop: Stop | undefined }
 
 // What a switch waits for: the turn in flight and the background work.
 export type Wait = { turn: boolean; tasks: Task[] }
@@ -210,14 +210,14 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
   state.pending = undefined
   state.ending = true
   state.cutTurn = false
-  const { exit, target, from, limit } = pending
+  const { exit, target, from, stop } = pending
   try {
     // What the reopened conversation is told, as things stand now: the work a
-    // forced move stops, which a limit-forced one asks it to start again, and
-    // the wakeups every move drops. Only a switch file carries a follow-up.
-    const stopped = limit === undefined ? [] : (await waitingFor($, state)).tasks.map(nameTask)
+    // forced move stops, which one the account forced asks it to start again,
+    // and the wakeups every move drops. Only a switch file carries a follow-up.
+    const stopped = stop === undefined ? [] : (await waitingFor($, state)).tasks.map(nameTask)
     const crons = exit.switchFile === undefined ? [] : ((await liveCrons($)) ?? [])
-    await runExit($, state, pending, { from, to: target, limit, interrupted: false, stopped, crons })
+    await runExit($, state, pending, { from, to: target, stop, interrupted: false, stopped, crons })
   } catch (error) {
     $.ui.log(`cc-accounts: the switch to ${target} failed (${describeError(error)}); type /account ${target} again.`)
   } finally {
@@ -242,11 +242,11 @@ export async function requestSwitch(
   state: SwitchState,
   ctx: Context,
   exit: Exit | undefined,
-  ask: { target: string; force: boolean; limit?: string },
+  ask: { target: string; force: boolean; stop?: Stop },
 ): Promise<SwitchAsked> {
   await record($, ctx, await $.session.id(), ask.target)
   if (exit === undefined) return { kind: 'recorded' }
-  state.pending = { target: ask.target, force: ask.force, exit, from: ctx.current?.name, limit: ask.limit }
+  state.pending = { target: ask.target, force: ask.force, exit, from: ctx.current?.name, stop: ask.stop }
   const wait = await waitingFor($, state)
   if (ask.force || (!wait.turn && wait.tasks.length === 0)) {
     await $.clock.after(0, () => carryOut($, state))

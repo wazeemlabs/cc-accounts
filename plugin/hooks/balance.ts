@@ -2,26 +2,32 @@
 // its account's rate-limit readings to usage/<account>.json; at the end of
 // each main-loop turn, a session whose account has a window at its leave
 // threshold moves to the account with the most room (usage.ts decides which).
-// A turn the limit itself stopped moves at once and reopens with a follow-up
-// message, so the work carries on with nobody typing; otherwise the move waits
-// for the session's background work, as /account does. CCA_BALANCE=off stops
-// the moves; readings are still written.
+// A turn the account itself stopped (a window at its limit, or an API error
+// of the account's: a per-model limit, a lost login) moves at once and
+// reopens with a follow-up message, so the work carries on with nobody
+// typing; otherwise the move waits for the session's background work, as
+// /account does. CCA_BALANCE=off stops the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
 import type { Account } from './accounts'
 import { context, emailOf, exitOf, writeAtomic, type Context } from './context'
 import { liveCrons } from './crons'
+import { block, blockedAt, turnFailure } from './failures'
 import { requestSwitch, type SwitchState } from './switching'
 import {
+  ACCOUNT_FAILURES,
   chooseTarget,
   describeUse,
   formatReading,
   fullWindow,
-  windowAtLimit,
   parseReading,
+  POLICY,
   readingOf,
+  resetsSoon,
+  windowAtLimit,
   windowName,
   type Candidate,
   type Reading,
+  type Stop,
 } from './usage'
 
 export function usageFile(root: string, account: string): string {
@@ -96,6 +102,7 @@ export async function candidates($: EngineInterface, ctx: Context): Promise<Cand
       name: account.name,
       reading: await readReading($, ctx.root, account.name),
       sessions: sessions.get(account.name) ?? 0,
+      blockedAt: await blockedAt($, ctx.root, account.name),
     })),
   )
 }
@@ -114,12 +121,32 @@ export async function noteMeasure($: EngineInterface, state: SwitchState): Promi
   }
 }
 
-// At a main-loop turn's end: move off an account that is nearly spent.
-// `stopped`: whether the turn ended on an API error. Only a session that
-// reopens moves: a VS Code panel (at once under cca-stream; one started
-// before cca-stream at its next message, which then goes to the new
-// account), or a terminal session a person is at. A `-p` run would come back
-// as an interactive one, and a process cca did not start never reopens.
+// Why a stopped turn's account cannot go on: its window at the limit by the
+// readings, else the API error that ended the turn when it is the account's.
+// The account is recorded as failing for the latter, so no session moves
+// onto it for a while.
+async function stopOf(
+  $: EngineInterface,
+  ctx: Context,
+  from: string,
+  reading: Reading | undefined,
+  now: number,
+): Promise<Stop | undefined> {
+  const failure = await turnFailure($, ctx)
+  const refused = failure !== undefined && ACCOUNT_FAILURES.has(failure)
+  if (refused) await block($, ctx.root, from, failure, now)
+  const window = windowAtLimit(reading, now)
+  if (window !== undefined) return { window }
+  return refused ? { error: failure } : undefined
+}
+
+// At a main-loop turn's end: move off an account that is nearly spent, or
+// that stopped the turn. `stopped`: whether the turn ended on an API error.
+// Only a session that reopens moves: a VS Code panel (at once under
+// cca-stream; one started before cca-stream at its next message, which then
+// goes to the new account), or a terminal session a person is at. A `-p` run
+// would come back as an interactive one, and a process cca did not start
+// never reopens.
 export async function balance($: EngineInterface, state: SwitchState, stopped: boolean): Promise<void> {
   if (state.pending !== undefined || state.ending) return
   if ((await $.env.get('CCA_BALANCE')) === 'off') return
@@ -129,24 +156,31 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const now = await $.clock.now()
   const reading = await ownReading($, from)
   const full = fullWindow(reading, now)
-  if (reading === undefined || full === undefined) return
+  const stop = stopped ? await stopOf($, ctx, from, reading, now) : undefined
+  if (stop === undefined && full === undefined) return
   const exit = await exitOf($, await $.session.id())
   if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
-  const limit = stopped ? windowAtLimit(reading, now) : undefined
-  // A session the extension started before cca-stream cannot be told to set
-  // its wakeups again, so it keeps them, or wakeups it cannot rule out, until
-  // the limit leaves no choice.
-  if (limit === undefined && exit.switchFile === undefined && (await liveCrons($))?.length !== 0) return
-  const target = chooseTarget(from, await candidates($, ctx), now)
+  if (stop === undefined && full !== undefined) {
+    // A session the extension started before cca-stream cannot be told to
+    // set its wakeups again, so it keeps them, or wakeups it cannot rule out,
+    // until its account stops a turn.
+    if (exit.switchFile === undefined && (await liveCrons($))?.length !== 0) return
+    if (resetsSoon(reading, full, now)) {
+      $.ui.log(`cc-accounts: ${from}'s ${windowName(full)} window is at ${describeUse(reading, now)} but resets within ${POLICY.resetGraceMs / 60_000} minutes; staying.`)
+      return
+    }
+  }
+  const target = chooseTarget(from, await candidates($, ctx), now, stop === undefined ? POLICY.take : POLICY.leave)
+  // `full` is set whenever `stop` is not.
+  const why = stop !== undefined && 'error' in stop
+    ? `${from} failed the last turn (${stop.error})`
+    : `${from}'s ${windowName(stop !== undefined && 'window' in stop ? stop.window : full ?? 'five_hour')} window is at ${describeUse(reading, now)}`
   if (target === undefined) {
-    $.ui.log(`cc-accounts: ${from} is at ${describeUse(reading, now)}, and no other account has room to move to.`)
+    $.ui.log(`cc-accounts: ${why}, and no other account has room to move to.`)
     return
   }
-  const asked = await requestSwitch($, state, ctx, exit, { target, force: limit !== undefined, limit })
+  const asked = await requestSwitch($, state, ctx, exit, { target, force: stop !== undefined, stop })
   const waits = asked.kind === 'queued'
   if (waits) $.ui.status(`account ${from}, moving to ${target}`)
-  $.ui.log(
-    `cc-accounts: ${from}'s ${windowName(limit ?? full)} window is at ${describeUse(reading, now)}; ` +
-      `moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`,
-  )
+  $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
 }

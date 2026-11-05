@@ -2,6 +2,13 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.4.4 (2026-11-06)
+
+- A session stopped by a limit the usage readings do not show now moves. That covers a per-model weekly cap (on 2026-10-26 one conversation hit its Fable limit 23 times in a row and stayed) and a login the account lost. The balancer reads the error class Claude Code writes to the transcript (`rate_limit`, `authentication_failed`, `billing_error` and the like). That class means the same as the StopFailure hook's word, but StopFailure only runs after the turn has completed.
+- A session the limit stopped takes any account below the leave line, 90% of five hours or 95% of the week. Before, it waited for one below 70% and 90% and stayed stopped when none was.
+- An account that failed a call for a reason of its own is skipped by every session for an hour, so sessions cannot bounce between accounts that both hit a per-model limit.
+- A planned move is skipped when the full window resets within 15 minutes. A move makes the new account read the whole conversation uncached, and a limit hit in those minutes still moves at once.
+
 ## 0.4.3 (2026-11-06)
 
 - A message sent as a switch begins is no longer lost. If the old process never took it, cca-stream sends it to the new one. If the switch cut short the turn it started, the reopened conversation is told to carry on.

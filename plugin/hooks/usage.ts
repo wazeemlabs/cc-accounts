@@ -13,24 +13,48 @@ export type Window = { percentUsed: number; resetsAt?: string }
 
 export type Reading = { account: string; at: number; windows: Record<string, Window> }
 
-// One account a session could move to: its last reading and how many live
-// sessions already run on it.
-export type Candidate = { name: string; reading: Reading | undefined; sessions: number }
+// One account a session could move to: its last reading, how many live
+// sessions already run on it, and when an API call on it last failed for a
+// reason of the account's (`blockedAt`), if it did.
+export type Candidate = { name: string; reading: Reading | undefined; sessions: number; blockedAt?: number }
+
+const HOUR_MS = 3_600_000
 
 // The thresholds, in percent of a window. A session leaves its account at the
-// end of a turn once a window reaches `leave`. It moves only to an account
-// whose windows are all below `take`, preferring the one with the most room
-// after counting `perSession` points for each live session already on it, so
-// that sessions leaving one account together spread out. A turn that ended on
-// an API error with a window at `limit` or more was stopped by the limit.
+// end of a turn once a window reaches `leave`. A planned move goes only to an
+// account whose windows are all below `take`, preferring the one with the
+// most room after counting `perSession` points for each live session already
+// on it, so that sessions leaving one account together spread out. A session
+// whose turn was already stopped takes any account below `leave`: any room
+// beats none. A turn that ended on an API error with a window at `limit` or
+// more was stopped by the limit. An account whose API call failed for a
+// reason of its own is skipped for `blockMs`. A planned move is not made when
+// the full window resets within `resetGraceMs`: a move costs the new account
+// the whole context uncached, and a limit hit before the reset still moves.
 export const POLICY = {
   leave: { five_hour: 90, seven_day: 95 } as Record<string, number>,
   take: { five_hour: 70, seven_day: 90 } as Record<string, number>,
   perSession: 10,
   limit: 99,
+  blockMs: HOUR_MS,
+  resetGraceMs: 15 * 60_000,
 }
 
-const HOUR_MS = 3_600_000
+// API errors that are the account's, as Claude Code classifies them (the
+// word StopFailure carries): another account does not share them.
+// `rate_limit` covers every limit, the per-model ones the readings do not show.
+export const ACCOUNT_FAILURES: ReadonlySet<string> = new Set([
+  'rate_limit',
+  'authentication_failed',
+  'oauth_org_not_allowed',
+  'account_on_hold',
+  'verification_required',
+  'billing_error',
+])
+
+// What stopped the last turn, when a move must not wait: a window at its
+// limit by the readings, or the API's classification of an account failure.
+export type Stop = { window: string } | { error: string }
 // How long each window runs: a reading without a reset time stops counting
 // once a whole window has passed since it was taken.
 const WINDOW_MS: Record<string, number> = { five_hour: 5 * HOUR_MS, seven_day: 7 * 24 * HOUR_MS }
@@ -101,6 +125,15 @@ export function fullWindow(reading: Reading | undefined, now: number): string | 
   return Object.keys(POLICY.leave).find(kind => percentNow(reading, kind, now) >= POLICY.leave[kind]!)
 }
 
+// Whether `kind` resets within the grace period, so a planned move off it
+// would cost more than it saves.
+export function resetsSoon(reading: Reading | undefined, kind: string, now: number): boolean {
+  const resetsAt = reading?.windows[kind]?.resetsAt
+  if (resetsAt === undefined) return false
+  const resets = Date.parse(resetsAt)
+  return !Number.isNaN(resets) && resets > now && resets - now <= POLICY.resetGraceMs
+}
+
 // The window at its limit, or undefined.
 export function windowAtLimit(reading: Reading | undefined, now: number): string | undefined {
   return Object.keys(POLICY.leave).find(kind => percentNow(reading, kind, now) >= POLICY.limit)
@@ -111,12 +144,19 @@ export function windowAtLimit(reading: Reading | undefined, now: number): string
 // is only a last resort. A reading whose window has reset is known empty.
 const UNMEASURED_PERCENT = POLICY.take.five_hour! - 1
 
-// The account to move to, or undefined when none has room.
-export function chooseTarget(current: string, candidates: readonly Candidate[], now: number): string | undefined {
+// The account to move to, or undefined when none has room below `bar`
+// (POLICY.take for a planned move, POLICY.leave for a stopped turn's).
+export function chooseTarget(
+  current: string,
+  candidates: readonly Candidate[],
+  now: number,
+  bar: Readonly<Record<string, number>>,
+): string | undefined {
   let best: { name: string; score: number } | undefined
   for (const candidate of candidates) {
     if (candidate.name === current) continue
-    const roomy = Object.keys(POLICY.take).every(kind => percentNow(candidate.reading, kind, now) < POLICY.take[kind]!)
+    if (candidate.blockedAt !== undefined && now - candidate.blockedAt < POLICY.blockMs) continue
+    const roomy = Object.keys(bar).every(kind => percentNow(candidate.reading, kind, now) < bar[kind]!)
     if (!roomy) continue
     const used = candidate.reading === undefined ? UNMEASURED_PERCENT : percentNow(candidate.reading, 'five_hour', now)
     const score = used + POLICY.perSession * candidate.sessions
@@ -133,24 +173,31 @@ export function describeUse(reading: Reading | undefined, now: number): string {
 }
 
 // What the conversation is told when it reopens on `to`, or undefined when
-// it needs to be told nothing: `limit`, the window whose limit stopped its
-// last turn; `interrupted`, whether ending the process cut short a turn a
-// message started after the switch was decided; `stopped`, the background
-// work the move ended; `crons`, the scheduled wakeups the move dropped.
+// it needs to be told nothing: `stop`, what stopped its last turn;
+// `interrupted`, whether ending the process cut short a turn a message
+// started after the switch was decided; `stopped`, the background work the
+// move ended; `crons`, the scheduled wakeups the move dropped.
 export type Move = {
   from: string | undefined
   to: string
-  limit: string | undefined
+  stop: Stop | undefined
   interrupted: boolean
   stopped: readonly string[]
   crons: readonly Cron[]
 }
 
+// How the conversation is told what stopped its last turn.
+function describeStop(from: string | undefined, stop: Stop): string {
+  if ('window' in stop) return `The ${from} account reached its ${windowName(stop.window)} usage limit and stopped your last turn.`
+  if (stop.error === 'rate_limit') return `The ${from} account reached a usage limit and stopped your last turn.`
+  return `The ${from} account could not serve your last turn (${stop.error}).`
+}
+
 export function followUpText(move: Move): string | undefined {
   const parts: string[] = []
-  if (move.limit !== undefined) {
+  if (move.stop !== undefined) {
     parts.push(
-      `The ${move.from} account reached its ${windowName(move.limit)} usage limit and stopped your last turn. ` +
+      `${describeStop(move.from, move.stop)} ` +
         `This conversation now runs on the ${move.to} account. Carry on from where you stopped.`,
     )
     if (move.stopped.length > 0) {

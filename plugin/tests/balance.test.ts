@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Cron } from '../hooks/crons'
-import { followUpText, formatReading, parseReading, readingOf, type Move } from '../hooks/usage'
+import { followUpText, parseReading } from '../hooks/usage'
 import {
   BY_SESSION,
-  HOME,
+  LATER,
   ROOT,
   SELF,
   SESSION,
@@ -14,49 +14,20 @@ import {
   SWITCH,
   TERMINAL,
   endTurn,
+  limits,
+  request,
   run,
+  saved,
   schedule,
+  session,
+  signInThree,
   startTurn,
   turn,
   world,
 } from './world'
 
 const SIGINT = ['kill', '-INT', SELF]
-const LATER = '2100-01-01T00:00:00Z'
-const SESSIONS = `${HOME}/.claude-shared/sessions`
 const LOOP: Cron = { schedule: '*/5 * * * *', recurring: true, prompt: 'check CI' }
-
-// The switch request for a move from 1 to 2.
-function request(move: Partial<Move> = {}): string {
-  const text = followUpText({ from: '1', to: '2', limit: undefined, interrupted: false, stopped: [], crons: [], ...move })
-  return `2 ${SESSION}\n${text === undefined ? '' : `${text}\n`}`
-}
-
-type World = ReturnType<typeof world>
-
-// The session's own account (1) reports these windows.
-function limits(w: World, fiveHour: number, weekly = 0): void {
-  w.limits.splice(0, w.limits.length,
-    { kind: 'five_hour', percentUsed: fiveHour, resetsAt: LATER },
-    { kind: 'seven_day', percentUsed: weekly, resetsAt: LATER })
-}
-
-// Another account's reading, as one of its sessions saved it.
-function saved(w: World, account: string, fiveHour: number): void {
-  const reading = readingOf(account, 0, [{ kind: 'five_hour', percentUsed: fiveHour, resetsAt: LATER }])
-  w.files.set(`${ROOT}/usage/${account}.json`, formatReading(reading))
-}
-
-function signInThree(w: World): void {
-  w.files.set(`${HOME}/.claude-three/.claude.json`, '{"oauthAccount":{"emailAddress":"three@example.com"}}')
-}
-
-// Another live (or ended) session on `account`.
-function session(w: World, pid: number, account: string, live = true): void {
-  w.files.set(`${SESSIONS}/${pid}.json`, JSON.stringify({ pid, sessionId: `s-${pid}`, cwd: '/x' }))
-  w.files.set(`${ROOT}/by-session/s-${pid}`, `${account}\n`)
-  if (live) w.running.add(String(pid))
-}
 
 describe('every session saves its account usage', () => {
   test('a measurement that moved the rate limits is saved for the other sessions and shown in the status line', async ($, on) => {
@@ -131,7 +102,7 @@ describe('a session leaves an account that is nearly spent', () => {
     limits(w, 100)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: 'five_hour', stopped: ['shell "npm test"'], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'five_hour' }, stopped: ['shell "npm test"'], crons: [] })}\n`)
     expect(w.killed).toEqual([SIGINT])
   })
 
@@ -168,7 +139,7 @@ describe('a session leaves an account that is nearly spent', () => {
     await w.clock.advance(0)
     expect(w.killed).toEqual([])
     expect(w.files.get(BY_SESSION)).toBe('1\n')
-    expect(w.logs.at(-1)).toBe('cc-accounts: 1 is at 5h 95%, week 0%, and no other account has room to move to.')
+    expect(w.logs.at(-1)).toBe("cc-accounts: 1's 5-hour window is at 5h 95%, week 0%, and no other account has room to move to.")
   })
 
   test('CCA_BALANCE=off keeps every session where it is', async ($, on) => {
@@ -230,7 +201,7 @@ describe('a move is carried out once, and the reopened conversation is told what
     limits(w, 100)
     await endTurn($, w, turnId)
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(request({ limit: 'five_hour', crons: [long] }))
+    expect(w.files.get(SWITCH)).toBe(request({ stop: { window: 'five_hour' }, crons: [long] }))
   })
 
   test('a turn a queued message starts as the move ends the process is cut, and the conversation is told to carry on', async ($, on) => {
@@ -289,7 +260,7 @@ describe('how the move reopens the conversation', () => {
     limits(w, 99.5)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: 'five_hour', stopped: [], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'five_hour' }, stopped: [], crons: [] })}\n`)
     expect(w.ran).toEqual(['exit'])
   })
 
@@ -331,7 +302,7 @@ describe('how the move reopens the conversation', () => {
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.logs).toContain("cc-accounts: 1's weekly window is at 5h 92%, week 100%; moving this conversation to 2.")
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: 'seven_day', stopped: [], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'seven_day' }, stopped: [], crons: [] })}\n`)
   })
 
   test('a move hands the reopened conversation the wakeups it dropped', async ($, on) => {
@@ -341,7 +312,7 @@ describe('how the move reopens the conversation', () => {
     await turn($, w, [], [LOOP])
     await w.clock.advance(0)
     expect(w.files.get(SWITCH)).toBe(
-      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: undefined, stopped: [], crons: [LOOP] })}\n`,
+      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: undefined, stopped: [], crons: [LOOP] })}\n`,
     )
   })
 
@@ -387,7 +358,7 @@ describe('how the move reopens the conversation', () => {
     await $.command.run(run('2'))
     await w.clock.advance(0)
     expect(w.files.get(SWITCH)).toBe(
-      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: undefined, stopped: [], crons: [LOOP] })}\n`,
+      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: undefined, stopped: [], crons: [LOOP] })}\n`,
     )
   })
 })

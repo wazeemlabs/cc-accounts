@@ -8,7 +8,9 @@ import {
   windowAtLimit,
   parseReading,
   percentNow,
+  POLICY,
   readingOf,
+  resetsSoon,
   type Candidate,
   type Reading,
 } from '../hooks/usage'
@@ -86,40 +88,69 @@ describe('when a session leaves its account', () => {
 describe('which account a session moves to', () => {
   test('the one with the most room, never the one it is on', () => {
     const all = [candidate('a', reading('a', 5)), candidate('b', reading('b', 40)), candidate('c', reading('c', 20))]
-    expect(chooseTarget('a', all, NOW)).toBe('c')
+    expect(chooseTarget('a', all, NOW, POLICY.take)).toBe('c')
   })
 
   test('counts each live session on an account against it, so movers spread out', () => {
     const all = [candidate('b', reading('b', 0), 3), candidate('c', reading('c', 25), 0)]
-    expect(chooseTarget('a', all, NOW)).toBe('c')
-    expect(chooseTarget('a', [candidate('b', reading('b', 0), 2), candidate('c', reading('c', 25), 0)], NOW)).toBe('b')
+    expect(chooseTarget('a', all, NOW, POLICY.take)).toBe('c')
+    expect(chooseTarget('a', [candidate('b', reading('b', 0), 2), candidate('c', reading('c', 25), 0)], NOW, POLICY.take)).toBe('b')
   })
 
   test('takes no account at 70% of five hours or 90% of the week', () => {
-    expect(chooseTarget('a', [candidate('b', reading('b', 70))], NOW)).toBe(undefined)
-    expect(chooseTarget('a', [candidate('b', reading('b', 10, 90))], NOW)).toBe(undefined)
-    expect(chooseTarget('a', [candidate('b', reading('b', 69.9, 89.9))], NOW)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', reading('b', 70))], NOW, POLICY.take)).toBe(undefined)
+    expect(chooseTarget('a', [candidate('b', reading('b', 10, 90))], NOW, POLICY.take)).toBe(undefined)
+    expect(chooseTarget('a', [candidate('b', reading('b', 69.9, 89.9))], NOW, POLICY.take)).toBe('b')
   })
 
   test('an account whose window has reset counts as empty', () => {
-    expect(chooseTarget('a', [candidate('b', reading('b', 95, 0, EARLIER))], NOW)).toBe('b')
-    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 95, 0, EARLIER))], NOW)).toBe('c')
+    expect(chooseTarget('a', [candidate('b', reading('b', 95, 0, EARLIER))], NOW, POLICY.take)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 95, 0, EARLIER))], NOW, POLICY.take)).toBe('c')
   })
 
   test('an account nobody has measured is a last resort behind any measured account with room', () => {
-    expect(chooseTarget('a', [candidate('b', undefined)], NOW)).toBe('b')
-    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 68))], NOW)).toBe('c')
-    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 70))], NOW)).toBe('b')
-    expect(chooseTarget('a', [candidate('b', undefined, 0), candidate('c', reading('c', 60), 1)], NOW)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined)], NOW, POLICY.take)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 68))], NOW, POLICY.take)).toBe('c')
+    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 70))], NOW, POLICY.take)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined, 0), candidate('c', reading('c', 60), 1)], NOW, POLICY.take)).toBe('b')
+  })
+
+  test('a stopped turn takes any account below the leave line; a planned move only one below the take line', () => {
+    const all = [candidate('b', reading('b', 80, 92))]
+    expect(chooseTarget('a', all, NOW, POLICY.take)).toBe(undefined)
+    expect(chooseTarget('a', all, NOW, POLICY.leave)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', reading('b', 90))], NOW, POLICY.leave)).toBe(undefined)
+    expect(chooseTarget('a', [candidate('b', reading('b', 10, 95))], NOW, POLICY.leave)).toBe(undefined)
+  })
+
+  test('skips an account that failed a call for an hour, then takes it again', () => {
+    const failed = { ...candidate('b', reading('b', 5)), blockedAt: NOW - HOUR + 1 }
+    expect(chooseTarget('a', [failed, candidate('c', reading('c', 50))], NOW, POLICY.take)).toBe('c')
+    expect(chooseTarget('a', [failed], NOW, POLICY.leave)).toBe(undefined)
+    expect(chooseTarget('a', [{ ...failed, blockedAt: NOW - HOUR }], NOW, POLICY.take)).toBe('b')
   })
 
   test('nowhere to go when no other account is listed', () => {
-    expect(chooseTarget('a', [], NOW)).toBe(undefined)
-    expect(chooseTarget('a', [candidate('a', undefined)], NOW)).toBe(undefined)
+    expect(chooseTarget('a', [], NOW, POLICY.take)).toBe(undefined)
+    expect(chooseTarget('a', [candidate('a', undefined)], NOW, POLICY.take)).toBe(undefined)
   })
 
   test('ties go to the account listed first', () => {
-    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', undefined)], NOW)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', undefined)], NOW, POLICY.take)).toBe('b')
+  })
+})
+
+describe('a window about to reset', () => {
+  const at = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString()
+  const resetting = (minutes: number) => readingOf('a', NOW, [{ kind: 'five_hour', percentUsed: 92, resetsAt: at(minutes) }])
+
+  test('resets soon within fifteen minutes, and not once it has reset or further off', () => {
+    expect(resetsSoon(resetting(15), 'five_hour', NOW)).toBe(true)
+    expect(resetsSoon(resetting(1), 'five_hour', NOW)).toBe(true)
+    expect(resetsSoon(resetting(16), 'five_hour', NOW)).toBe(false)
+    expect(resetsSoon(resetting(0), 'five_hour', NOW)).toBe(false)
+    expect(resetsSoon(readingOf('a', NOW, [{ kind: 'five_hour', percentUsed: 92 }]), 'five_hour', NOW)).toBe(false)
+    expect(resetsSoon(undefined, 'five_hour', NOW)).toBe(false)
   })
 })
 
@@ -132,11 +163,11 @@ describe('what the session is told', () => {
 
   test('the follow-up after a limit names both accounts, the window, and any work the move stopped', () => {
     const move = { from: 'a', to: 'b', interrupted: false, stopped: [] as string[], crons: [] }
-    expect(followUpText({ ...move, limit: 'five_hour' })).toBe(
+    expect(followUpText({ ...move, stop: { window: 'five_hour' } })).toBe(
       '[cc-accounts] The a account reached its 5-hour usage limit and stopped your last turn. ' +
         'This conversation now runs on the b account. Carry on from where you stopped.',
     )
-    expect(followUpText({ ...move, limit: 'seven_day', stopped: ['shell "npm test"'] })).toBe(
+    expect(followUpText({ ...move, stop: { window: 'seven_day' }, stopped: ['shell "npm test"'] })).toBe(
       '[cc-accounts] The a account reached its weekly usage limit and stopped your last turn. ' +
         'This conversation now runs on the b account. Carry on from where you stopped. ' +
         'The move stopped this background work, so start again whatever of it is still needed: shell "npm test".',
@@ -146,21 +177,33 @@ describe('what the session is told', () => {
   test('the follow-up hands over the wakeups the move dropped, with or without a limit', () => {
     const loop = { schedule: '*/5 * * * *', recurring: true, prompt: 'check "CI"' }
     const once = { schedule: '30 14 6 11 *', recurring: false, prompt: 'look again' }
-    expect(followUpText({ from: 'a', to: 'b', interrupted: false, limit: undefined, stopped: [], crons: [loop, once] })).toBe(
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, stop: undefined, stopped: [], crons: [loop, once] })).toBe(
       '[cc-accounts] This conversation moved to the b account. The move dropped your scheduled wakeups. ' +
         'Schedule them again: recurring at "*/5 * * * *" with the prompt "check \\"CI\\""; ' +
         'once at "30 14 6 11 *" with the prompt "look again". Nothing else is needed.',
     )
-    expect(followUpText({ from: 'a', to: 'b', interrupted: false, limit: 'five_hour', stopped: [], crons: [once] })).toBe(
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, stop: { window: 'five_hour' }, stopped: [], crons: [once] })).toBe(
       '[cc-accounts] The a account reached its 5-hour usage limit and stopped your last turn. ' +
         'This conversation now runs on the b account. Carry on from where you stopped. ' +
         'The move dropped your scheduled wakeups. Schedule them again: once at "30 14 6 11 *" with the prompt "look again".',
     )
   })
 
+  test('a turn an account failure stopped is told so, and to carry on', () => {
+    const move = { from: 'a', to: 'b', interrupted: false, stopped: [] as string[], crons: [] }
+    expect(followUpText({ ...move, stop: { error: 'rate_limit' } })).toBe(
+      '[cc-accounts] The a account reached a usage limit and stopped your last turn. ' +
+        'This conversation now runs on the b account. Carry on from where you stopped.',
+    )
+    expect(followUpText({ ...move, stop: { error: 'authentication_failed' } })).toBe(
+      '[cc-accounts] The a account could not serve your last turn (authentication_failed). ' +
+        'This conversation now runs on the b account. Carry on from where you stopped.',
+    )
+  })
+
   test('a move that cut a turn short tells the conversation to carry on, wakeups or not', () => {
     const once = { schedule: '30 14 6 11 *', recurring: false, prompt: 'look again' }
-    const move = { from: 'a', to: 'b', interrupted: true, limit: undefined, stopped: [] }
+    const move = { from: 'a', to: 'b', interrupted: true, stop: undefined, stopped: [] }
     expect(followUpText({ ...move, crons: [] })).toBe(
       '[cc-accounts] Moving this conversation to the b account interrupted your turn. Carry on from where you stopped.',
     )
@@ -171,6 +214,6 @@ describe('what the session is told', () => {
   })
 
   test('a move with no limit and no wakeups needs no follow-up', () => {
-    expect(followUpText({ from: 'a', to: 'b', interrupted: false, limit: undefined, stopped: ['shell "x"'], crons: [] })).toBe(undefined)
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, stop: undefined, stopped: ['shell "x"'], crons: [] })).toBe(undefined)
   })
 })

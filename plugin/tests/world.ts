@@ -6,6 +6,7 @@ import { mock, type Engine } from 'claude-code/testing'
 import type { AgentInfo, On } from 'claude-code'
 import type { Task } from '../hooks/background'
 import type { Cron } from '../hooks/crons'
+import { followUpText, formatReading, readingOf, type Move } from '../hooks/usage'
 
 export const HOME = '/Users/me'
 export const ROOT = `${HOME}/.claude-shared/accounts`
@@ -84,6 +85,8 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     ran.push(e.command)
     return {}
   })
+  // The last lines of the conversation's transcript.
+  const transcript: { tail: string | null } = { tail: '' }
   // How long the agent list takes to answer, in clock milliseconds: a wait
   // that lets another timer run meanwhile.
   const slow = { agentsMs: 0 }
@@ -123,6 +126,13 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
       const stdout = asked.filter(pid => running.has(pid)).map(pid => `${pid}\n`).join('')
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (e.argv[0] === '/bin/sh' && (e.argv[2] ?? '').startsWith('tail ')) {
+      // The transcript's last lines, for why a turn failed; null: unreadable.
+      const tail = transcript.tail
+      return tail === null
+        ? done(1, 'tail: No such file or directory')
+        : { value: { exitCode: 0, stdout: tail, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === '/bin/sh') {
       return { value: { exitCode: 0, stdout: `${SELF}\n ${PARENT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -143,7 +153,12 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     statuses.push(e.text)
     return { value: undefined }
   })
-  return { files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow }
+  return { files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript }
+}
+
+// The API-error row Claude Code appends to the transcript when `error` ends a turn.
+export function apiError(error: string): string {
+  return `${JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error, message: { role: 'assistant', content: [] } })}\n`
 }
 
 // The session holds these wakeups, as CronList lists them.
@@ -193,4 +208,39 @@ export async function turn(
 ): Promise<void> {
   schedule(w, crons)
   await endTurn($, w, await startTurn($), stop)
+}
+
+type World = ReturnType<typeof world>
+
+// A reset time no test reaches.
+export const LATER = '2100-01-01T00:00:00Z'
+
+// The switch request for a move from 1 to 2.
+export function request(move: Partial<Move> = {}): string {
+  const text = followUpText({ from: '1', to: '2', stop: undefined, interrupted: false, stopped: [], crons: [], ...move })
+  return `2 ${SESSION}\n${text === undefined ? '' : `${text}\n`}`
+}
+
+// The session's own account (1) reports these windows.
+export function limits(w: World, fiveHour: number, weekly = 0, resetsAt = LATER): void {
+  w.limits.splice(0, w.limits.length,
+    { kind: 'five_hour', percentUsed: fiveHour, resetsAt },
+    { kind: 'seven_day', percentUsed: weekly, resetsAt: LATER })
+}
+
+// Another account's reading, as one of its sessions saved it.
+export function saved(w: World, account: string, fiveHour: number): void {
+  const reading = readingOf(account, 0, [{ kind: 'five_hour', percentUsed: fiveHour, resetsAt: LATER }])
+  w.files.set(`${ROOT}/usage/${account}.json`, formatReading(reading))
+}
+
+export function signInThree(w: World): void {
+  w.files.set(`${HOME}/.claude-three/.claude.json`, '{"oauthAccount":{"emailAddress":"three@example.com"}}')
+}
+
+// Another live (or ended) session on `account`.
+export function session(w: World, pid: number, account: string, live = true): void {
+  w.files.set(`${HOME}/.claude-shared/sessions/${pid}.json`, JSON.stringify({ pid, sessionId: `s-${pid}`, cwd: '/x' }))
+  w.files.set(`${ROOT}/by-session/s-${pid}`, `${account}\n`)
+  if (live) w.running.add(String(pid))
 }
