@@ -32,7 +32,7 @@ describe('a turn the account stopped moves, whatever the readings show', () => {
     expect(w.files.get(BY_SESSION)).toBe('2\n')
     expect(w.files.get(SWITCH)).toBe(request({ stop: { error: 'rate_limit' } }))
     expect(w.killed).toEqual([SIGINT])
-    expect(JSON.parse(w.files.get(blockFile(ROOT, '1')) ?? '{}')).toEqual({ error: 'rate_limit', at: 0 })
+    expect(JSON.parse(w.files.get(blockFile(ROOT, '1', 'fable')) ?? '{}')).toEqual({ error: 'rate_limit', at: 0 })
     expect(w.logs).toContain('cc-accounts: 1 failed the last turn (rate_limit); moving this conversation to 2.')
   })
 
@@ -43,6 +43,18 @@ describe('a turn the account stopped moves, whatever the readings show', () => {
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.files.get(SWITCH)).toBe(request({ stop: { error: 'authentication_failed' } }))
+    expect(w.files.has(blockFile(ROOT, '1', 'account'))).toBe(true)
+  })
+
+  test('a usage limit the readings show is left to them, with no record of its own', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 100)
+    w.transcript.tail = apiError('rate_limit')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request({ stop: { window: 'five_hour' } }))
+    expect([...w.files.keys()].filter(path => path.includes('/blocked/'))).toEqual([])
   })
 
   test("an error that is not the account's (overloaded) moves nothing below the leave line", async ($, on) => {
@@ -53,7 +65,7 @@ describe('a turn the account stopped moves, whatever the readings show', () => {
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.killed).toEqual([])
-    expect(w.files.has(blockFile(ROOT, '1'))).toBe(false)
+    expect([...w.files.keys()].filter(path => path.includes('/blocked/'))).toEqual([])
   })
 
   test('a transcript that cannot be read leaves the readings to decide, and says so', async ($, on) => {
@@ -92,7 +104,7 @@ describe('where a stopped session goes', () => {
   test('an account that failed a call within the hour is skipped, so sessions do not bounce between two', async ($, on) => {
     const w = world(on, SUPERVISED)
     signInThree(w)
-    w.files.set(blockFile(ROOT, '2'), `${JSON.stringify({ error: 'rate_limit', at: 0 })}\n`)
+    w.files.set(blockFile(ROOT, '2', 'fable'), `${JSON.stringify({ error: 'rate_limit', at: 0 })}\n`)
     await w.clock.advance(HOUR - 1)
     await $.session.start(START)
     w.transcript.tail = apiError('rate_limit')
@@ -103,7 +115,7 @@ describe('where a stopped session goes', () => {
 
   test('with every other account failing too, the session stays and says why', async ($, on) => {
     const w = world(on, SUPERVISED)
-    w.files.set(blockFile(ROOT, '2'), `${JSON.stringify({ error: 'rate_limit', at: 0 })}\n`)
+    w.files.set(blockFile(ROOT, '2', 'fable'), `${JSON.stringify({ error: 'rate_limit', at: 0 })}\n`)
     await $.session.start(START)
     w.transcript.tail = apiError('rate_limit')
     await endTurn($, w, await startTurn($))
@@ -114,13 +126,60 @@ describe('where a stopped session goes', () => {
 
   test('a failure record that is not one is reported and the account counts as working', async ($, on) => {
     const w = world(on, SUPERVISED)
-    w.files.set(blockFile(ROOT, '2'), '{"error":')
+    w.files.set(blockFile(ROOT, '2', 'account'), '{"error":')
     await $.session.start(START)
     limits(w, 100)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.files.get(BY_SESSION)).toBe('2\n')
-    expect(w.logs.some(line => line.startsWith(`cc-accounts: ${blockFile(ROOT, '2')} is not a failure record`))).toBe(true)
+    expect(w.logs.some(line => line.startsWith(`cc-accounts: ${blockFile(ROOT, '2', 'account')} is not a failure record`))).toBe(true)
+  })
+})
+
+describe('a per-model limit holds back only sessions on that model', () => {
+  const failedFor = (scope: string) => `${JSON.stringify({ error: scope === 'account' ? 'account_on_hold' : 'rate_limit', at: 0 })}\n`
+
+  test('a session on another family still moves to an account whose Opus use ran out', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(blockFile(ROOT, '2', 'opus'), failedFor('opus'))
+    await $.session.start(START)
+    limits(w, 100)
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.get(BY_SESSION)).toBe('2\n')
+  })
+
+  test('a failure of the whole account holds back every family', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(blockFile(ROOT, '2', 'account'), failedFor('account'))
+    await $.session.start(START)
+    limits(w, 100)
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([])
+  })
+
+  test('the family comes from the model setting, and when that names none, from the model that last answered', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.settings.model = 'default'
+    await $.session.start(START)
+    const answered = await startTurn($)
+    const usage = { model: 'claude-opus-4-6', input_tokens: 1, output_tokens: 1 } as never
+    await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: answered, reason: 'answer', usage })
+    w.transcript.tail = apiError('rate_limit')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.has(blockFile(ROOT, '1', 'opus'))).toBe(true)
+  })
+
+  test('a limit hit by a model whose family is unknown is charged to the whole account', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.settings.model = 'opusplan'
+    await $.session.start(START)
+    w.transcript.tail = apiError('rate_limit')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.has(blockFile(ROOT, '1', 'account'))).toBe(true)
   })
 })
 

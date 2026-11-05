@@ -45,9 +45,10 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # the default account.
 RECORD_DAYS=180
 # The plugin's Stop hook leaves each session's background work in
-# background/<id>, read only at the end of the turn that wrote it, so a day-old
-# one is never read again.
-BACKGROUND_DAYS=1
+# background/<id>, read only at the end of the turn that wrote it, and the
+# plugin records an account's failures in blocked/<account>/<scope>.json,
+# which count for an hour: a day-old one of either is never read again.
+SHORT_RECORD_DAYS=1
 # Settings the editor saves by running the binary once with one of these
 # subcommands (VS Code's Claude in Chrome and memory dialogs). They live in
 # each account's .claude.json, and the editor runs the helper itself, with
@@ -186,10 +187,13 @@ sync_account() {
     || echo "cca: trust and MCP servers were not synced to $account" >&2
 }
 
-prune_background() {
-  if [[ -d "$ROOT/background" ]]; then
-    find "$ROOT/background" -type f -mtime +"$BACKGROUND_DAYS" -delete
-  fi
+prune_short_records() {
+  local dir
+  for dir in "$ROOT/background" "$ROOT/blocked"; do
+    [[ -d "$dir" ]] || continue
+    find "$dir" -type f -mtime +"$SHORT_RECORD_DAYS" -delete
+    find "$dir" -mindepth 1 -type d -empty -delete
+  done
 }
 
 # Run in the terminal, relaunching on the account a /account switch asks for.
@@ -208,7 +212,7 @@ launch() {
   if [[ -d "$ROOT/by-session" ]]; then
     find "$ROOT/by-session" -type f -mtime +"$RECORD_DAYS" -delete
   fi
-  prune_background
+  prune_short_records
   while :; do
     rm -f "$switch"
     apply "$account"
@@ -441,7 +445,7 @@ case "${1:-}" in
     # starts none and needs nothing synced or loaded.
     if [[ -z "${1:-}" || "$1" == -* ]]; then
       sync_account "$bin" "$name"
-      prune_background
+      prune_short_records
       if [[ -f "$MCP_FILE" ]]; then set -- "--mcp-config=$MCP_FILE" "$@"; fi
     fi
     # A child of cca-stream keeps the switch file it was given; any other

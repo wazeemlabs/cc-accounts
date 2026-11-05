@@ -9,9 +9,51 @@
 // model's weekly cap) and a login the account lost.
 //
 // An account that failed for a reason of its own is recorded in
-// blocked/<account>.json, so that no session moves there for a while.
+// blocked/<account>/<scope>.json, so that no session moves there for a
+// while. A lost login, a hold or a billing failure is the whole account's
+// (scope `account`). A usage limit the readings do not show is a per-model
+// one (a model's weekly cap, its included use spent: the API says
+// `model_requires_usage_credits`), so it is recorded for the model family
+// that hit it, and sessions on other families still move there.
 import type { EngineInterface } from 'claude-code'
 import { describeError, writeAtomic, type Context } from './context'
+
+// The scope of a failure that is the whole account's.
+export const ACCOUNT_SCOPE = 'account'
+
+// Model aliases that name no one family: `best` follows the plan, and
+// `opusplan` runs Opus in plan mode and Sonnet otherwise. An unset model
+// reads as `default`.
+const MIXED_ALIASES: ReadonlySet<string> = new Set(['default', 'best', 'opusplan'])
+
+// The family a model name belongs to, which a per-model limit covers:
+// `claude-opus-4-6`, `opus` and `opus[1m]` are `opus`; undefined for a name
+// that names no one family.
+export function familyOf(model: string): string | undefined {
+  const name = model.trim().toLowerCase().replace(/\[[^\]]*\]$/, '')
+  const id = /^claude-(?:[0-9]+-)*([a-z]+)(?:-|$)/.exec(name)
+  if (id !== null) return id[1]
+  return /^[a-z]+$/.test(name) && !MIXED_ALIASES.has(name) ? name : undefined
+}
+
+// Where a failure is recorded: a usage limit for the family that hit it, when
+// it is known; anything else for the whole account.
+export function scopeOf(error: string, family: string | undefined): string {
+  return error === 'rate_limit' && family !== undefined ? family : ACCOUNT_SCOPE
+}
+
+// The family of the model this session runs: its model setting when that
+// names one, else that of the model that last answered in this process.
+export async function sessionFamily($: EngineInterface, answered: string | undefined): Promise<string | undefined> {
+  let setting: unknown
+  try {
+    setting = (await $.config.list()).find(row => row.key === 'model')?.value
+  } catch (error) {
+    $.ui.log(`cc-accounts: could not read this session's model setting (${describeError(error)}).`)
+  }
+  const named = typeof setting === 'string' ? familyOf(setting) : undefined
+  return named ?? (answered === undefined ? undefined : familyOf(answered))
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -59,18 +101,23 @@ export async function turnFailure($: EngineInterface, ctx: Context): Promise<str
   return failureIn(stdout)
 }
 
-export function blockFile(root: string, account: string): string {
-  return `${root}/blocked/${account}.json`
+export function blockFile(root: string, account: string, scope: string): string {
+  return `${root}/blocked/${account}/${scope}.json`
 }
 
-// Records that `account` failed with `error` at `at`.
-export async function block($: EngineInterface, root: string, account: string, error: string, at: number): Promise<void> {
-  await writeAtomic($, blockFile(root, account), `${JSON.stringify({ error, at })}\n`)
+// Records that `account` failed with `error` at `at`, for `scope`.
+export async function block(
+  $: EngineInterface,
+  root: string,
+  account: string,
+  scope: string,
+  error: string,
+  at: number,
+): Promise<void> {
+  await writeAtomic($, blockFile(root, account, scope), `${JSON.stringify({ error, at })}\n`)
 }
 
-// When `account` last failed for a reason of its own, or undefined.
-export async function blockedAt($: EngineInterface, root: string, account: string): Promise<number | undefined> {
-  const file = blockFile(root, account)
+async function failedAt($: EngineInterface, file: string, account: string): Promise<number | undefined> {
   if (!(await $.fs.exists(file))) return undefined
   let value: unknown
   try {
@@ -80,4 +127,19 @@ export async function blockedAt($: EngineInterface, root: string, account: strin
     return undefined
   }
   return isObject(value) && typeof value.at === 'number' ? value.at : undefined
+}
+
+// When `account` last failed in a way that stops a session on `family`
+// (undefined: not known): a failure of the whole account's, or one of that
+// family's. Undefined when it has not.
+export async function blockedAt(
+  $: EngineInterface,
+  root: string,
+  account: string,
+  family: string | undefined,
+): Promise<number | undefined> {
+  const scopes = family === undefined ? [ACCOUNT_SCOPE] : [ACCOUNT_SCOPE, family]
+  const times = await Promise.all(scopes.map(scope => failedAt($, blockFile(root, account, scope), account)))
+  const known = times.filter((at): at is number => at !== undefined)
+  return known.length === 0 ? undefined : Math.max(...known)
 }

@@ -87,6 +87,11 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   // The last lines of the conversation's transcript.
   const transcript: { tail: string | null } = { tail: '' }
+  // The session's model setting, as the /config menu shows it.
+  const settings = { model: 'claude-fable-5-1' }
+  on('config.list', async () => ({
+    value: [{ key: 'model', label: 'Model', kind: 'select', value: settings.model, provider: { kind: 'core' } }] as never,
+  }))
   // How long the agent list takes to answer, in clock milliseconds: a wait
   // that lets another timer run meanwhile.
   const slow = { agentsMs: 0 }
@@ -153,7 +158,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     statuses.push(e.text)
     return { value: undefined }
   })
-  return { files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript }
+  return { files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript, settings }
 }
 
 // The API-error row Claude Code appends to the transcript when `error` ends a turn.

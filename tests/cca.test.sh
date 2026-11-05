@@ -86,6 +86,17 @@ check "a switch that carries a follow-up reopens the conversation with it as the
   "dir=$HOME/.claude-two account=2 args=--model opus --resume $ID Carry on from where you stopped." "$(sed -n 2p "$LOG")"
 
 setup
+mkdir -p "$CCA_ROOT/background" "$CCA_ROOT/blocked/2" "$CCA_ROOT/blocked/old"
+echo '{"tasks":[]}' > "$CCA_ROOT/background/old"; echo '{"tasks":[]}' > "$CCA_ROOT/background/new"
+echo '{"error":"rate_limit","at":0}' > "$CCA_ROOT/blocked/old/fable.json"
+echo '{"error":"rate_limit","at":0}' > "$CCA_ROOT/blocked/2/fable.json"
+touch -t 202001010000 "$CCA_ROOT/background/old" "$CCA_ROOT/blocked/old/fable.json"
+"$CCA" run 2>/dev/null
+check "a session start drops day-old background and failure records, and the folders they leave empty" \
+  "background/new blocked/2/fable.json 0" \
+  "$(cd "$CCA_ROOT" && find background blocked -type f | sort | paste -sd' ' -) $(cd "$CCA_ROOT" && find blocked -mindepth 1 -type d -empty | wc -l | tr -d ' ')"
+
+setup
 "$CCA" "$CCA_CLAUDE" --input-format stream-json < /dev/null
 check "a VS Code session runs under cca-stream, which hands Claude Code a switch file" \
   "switch=set child=unset" "$(cat "$LOG.switchfile")"

@@ -50,6 +50,7 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
     state.turns = Math.max(0, state.turns - 1)
+    if (e.usage?.model !== undefined) state.answered = e.usage.model
     // A turn that ends while the process is being ended was cut short by the switch.
     if (state.ending) state.cutTurn = true
     await readRecord($, state)

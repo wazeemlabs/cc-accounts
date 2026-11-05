@@ -2,6 +2,12 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.4.5 (2026-11-06)
+
+- A per-model limit now holds back only sessions on that model family. Before, an account that hit its Fable cap was skipped for an hour by every session, including those on Opus or Sonnet, for which it still had room. The failure is recorded under the family of the session's model, `blocked/<account>/<family>.json`. A lost login, a hold or a billing failure, or a limit whose family cannot be told, still holds back every session (`blocked/<account>/account.json`).
+- A usage limit the readings show (a 5-hour or weekly window at its limit) leaves no failure record. The readings already show it to every session, with its reset time, and an hour-long record could outlast a reset minutes away.
+- cca removes day-old failure records along with day-old background records.
+
 ## 0.4.4 (2026-11-06)
 
 - A session stopped by a limit the usage readings do not show now moves. That covers a per-model weekly cap (on 2026-10-26 one conversation hit its Fable limit 23 times in a row and stayed) and a login the account lost. The balancer reads the error class Claude Code writes to the transcript (`rate_limit`, `authentication_failed`, `billing_error` and the like). That class means the same as the StopFailure hook's word, but StopFailure only runs after the turn has completed.

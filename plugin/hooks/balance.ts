@@ -11,7 +11,7 @@ import type { EngineInterface } from 'claude-code'
 import type { Account } from './accounts'
 import { context, emailOf, exitOf, writeAtomic, type Context } from './context'
 import { liveCrons } from './crons'
-import { block, blockedAt, turnFailure } from './failures'
+import { block, blockedAt, scopeOf, sessionFamily, turnFailure } from './failures'
 import { requestSwitch, type SwitchState } from './switching'
 import {
   ACCOUNT_FAILURES,
@@ -95,14 +95,16 @@ async function signedIn($: EngineInterface, ctx: Context): Promise<Account[]> {
   return found.filter(row => row.email !== undefined).map(row => row.account)
 }
 
-export async function candidates($: EngineInterface, ctx: Context): Promise<Candidate[]> {
+// Every signed-in account, with what a session on the model `family` needs
+// to know of it.
+export async function candidates($: EngineInterface, ctx: Context, family: string | undefined): Promise<Candidate[]> {
   const sessions = await liveSessions($, ctx)
   return Promise.all(
     (await signedIn($, ctx)).map(async account => ({
       name: account.name,
       reading: await readReading($, ctx.root, account.name),
       sessions: sessions.get(account.name) ?? 0,
-      blockedAt: await blockedAt($, ctx.root, account.name),
+      blockedAt: await blockedAt($, ctx.root, account.name, family),
     })),
   )
 }
@@ -121,23 +123,13 @@ export async function noteMeasure($: EngineInterface, state: SwitchState): Promi
   }
 }
 
-// Why a stopped turn's account cannot go on: its window at the limit by the
-// readings, else the API error that ended the turn when it is the account's.
-// The account is recorded as failing for the latter, so no session moves
-// onto it for a while.
-async function stopOf(
-  $: EngineInterface,
-  ctx: Context,
-  from: string,
-  reading: Reading | undefined,
-  now: number,
-): Promise<Stop | undefined> {
-  const failure = await turnFailure($, ctx)
+// Why a stopped turn's account cannot go on: an API error of the account's
+// that the readings do not explain (a usage limit with no window at it, or
+// any other account failure), else a window at its limit.
+export function stopOf(failure: string | undefined, window: string | undefined): Stop | undefined {
   const refused = failure !== undefined && ACCOUNT_FAILURES.has(failure)
-  if (refused) await block($, ctx.root, from, failure, now)
-  const window = windowAtLimit(reading, now)
-  if (window !== undefined) return { window }
-  return refused ? { error: failure } : undefined
+  if (refused && (failure !== 'rate_limit' || window === undefined)) return { error: failure }
+  return window === undefined ? undefined : { window }
 }
 
 // At a main-loop turn's end: move off an account that is nearly spent, or
@@ -156,8 +148,13 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const now = await $.clock.now()
   const reading = await ownReading($, from)
   const full = fullWindow(reading, now)
-  const stop = stopped ? await stopOf($, ctx, from, reading, now) : undefined
+  const stop = stopped ? stopOf(await turnFailure($, ctx), windowAtLimit(reading, now)) : undefined
   if (stop === undefined && full === undefined) return
+  const family = await sessionFamily($, state.answered)
+  // A failure the readings do not explain is recorded, so that no session
+  // that would meet it moves here for a while. One they explain needs no
+  // record: they show it to every session, and when it resets.
+  if (stop !== undefined && 'error' in stop) await block($, ctx.root, from, scopeOf(stop.error, family), stop.error, now)
   const exit = await exitOf($, await $.session.id())
   if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
   if (stop === undefined && full !== undefined) {
@@ -170,7 +167,7 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
       return
     }
   }
-  const target = chooseTarget(from, await candidates($, ctx), now, stop === undefined ? POLICY.take : POLICY.leave)
+  const target = chooseTarget(from, await candidates($, ctx, family), now, stop === undefined ? POLICY.take : POLICY.leave)
   // `full` is set whenever `stop` is not.
   const why = stop !== undefined && 'error' in stop
     ? `${from} failed the last turn (${stop.error})`

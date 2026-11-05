@@ -40,10 +40,21 @@ export type SwitchState = {
   // Whether a main-loop turn ended while the process was being ended: one a
   // message started after the switch was decided, which the switch cut short.
   cutTurn: boolean
+  // The model that last answered a main-loop turn in this process.
+  answered: string | undefined
 }
 
 export function newState(): SwitchState {
-  return { root: undefined, interactive: false, turns: 0, tasks: new Map(), pending: undefined, ending: false, cutTurn: false }
+  return {
+    root: undefined,
+    interactive: false,
+    turns: 0,
+    tasks: new Map(),
+    pending: undefined,
+    ending: false,
+    cutTurn: false,
+    answered: undefined,
+  }
 }
 
 // Where the plugin's Stop hook (record-tasks.py) leaves a session's
