@@ -62,18 +62,19 @@ export function emailIn(configText: string): string | undefined {
   }
 }
 
+// `use`: the account's last usage reading (`5h 42%, week 10%`), '' for none.
 export function formatList(
-  rows: readonly { account: Account; email: string | undefined }[],
+  rows: readonly { account: Account; email: string | undefined; use: string }[],
   current: string | undefined,
   defaultName: string | undefined,
 ): string {
-  const lines = rows.map(({ account, email }) => {
+  const lines = rows.map(({ account, email, use }) => {
     const marks = [
       account.name === current ? 'this session' : '',
       account.name === defaultName ? 'new sessions' : '',
     ].filter(mark => mark !== '')
     const note = marks.length === 0 ? '' : `  ← ${marks.join(', ')}`
-    return `${account.name.padEnd(8)} ${(email ?? '(not signed in)').padEnd(28)}${note}`
+    return `${account.name.padEnd(8)} ${(email ?? '(not signed in)').padEnd(28)} ${(use || '-').padEnd(20)}${note}`
   })
   return [...lines, '', USAGE].join('\n')
 }

@@ -1,15 +1,8 @@
-import type { EngineInterface, Register } from 'claude-code'
-import {
-  configFileOf,
-  currentAccount,
-  emailIn,
-  formatList,
-  parseAsk,
-  parseTable,
-  USAGE,
-  type Account,
-} from './accounts'
+import type { Register } from 'claude-code'
+import { formatList, parseAsk, USAGE } from './accounts'
 import { taskStarted, turnMark } from './background'
+import { balance, noteMeasure, readReading } from './balance'
+import { context, defaultName, describeError, emailOf, exitOf, record } from './context'
 import {
   afterOf,
   carryOut,
@@ -18,57 +11,9 @@ import {
   newState,
   readRecord,
   recordFile,
-  waitingFor,
-  type Exit,
+  requestSwitch,
 } from './switching'
-
-type Context = {
-  home: string
-  root: string
-  accounts: Account[]
-  current: Account | undefined
-}
-
-async function context($: EngineInterface): Promise<Context | undefined> {
-  const home = await $.env.get('HOME')
-  if (home === undefined) return undefined
-  // cca names its state dir; a session started without cca has the default.
-  const root = (await $.env.get('CCA_ROOT')) || `${home}/.claude-shared/accounts`
-  const table = `${root}/accounts.tsv`
-  if (!(await $.fs.exists(table))) return undefined
-  const accounts = parseTable(await $.fs.read(table))
-  const current = currentAccount(
-    accounts,
-    await $.env.get('CLAUDE_ACCOUNT'),
-    await $.env.get('CLAUDE_CONFIG_DIR'),
-    home,
-  )
-  return { home, root, accounts, current }
-}
-
-async function emailOf($: EngineInterface, account: Account, home: string): Promise<string | undefined> {
-  const file = configFileOf(account, home)
-  return (await $.fs.exists(file)) ? emailIn(await $.fs.read(file)) : undefined
-}
-
-async function defaultName($: EngineInterface, ctx: Context): Promise<string | undefined> {
-  const file = `${ctx.root}/default`
-  if (!(await $.fs.exists(file))) return ctx.accounts[0]?.name
-  return (await $.fs.read(file)).trim() || ctx.accounts[0]?.name
-}
-
-// This process's id and its parent's, as decimal strings. $.process.run starts
-// sh directly, so sh's parent is this process.
-async function processIds($: EngineInterface): Promise<{ self: string; parent: string } | undefined> {
-  const { exitCode, stdout } = await $.process.run(['/bin/sh', '-c', 'echo $PPID; ps -o ppid= -p $PPID'])
-  const [self, parent] = stdout.split('\n').map(line => line.trim())
-  return exitCode === 0 && self && parent ? { self, parent } : undefined
-}
-
-// cca resumes a conversation on the account it last ran on.
-async function record($: EngineInterface, ctx: Context, sessionId: string, name: string): Promise<void> {
-  await $.fs.write(`${ctx.root}/by-session/${sessionId}`, `${name}\n`)
-}
+import { describeUse } from './usage'
 
 export const register: Register = on => {
   const state = newState()
@@ -82,6 +27,7 @@ export const register: Register = on => {
     })
     const ctx = await context($)
     state.root = ctx?.root
+    state.interactive = e.isInteractive
     if (ctx?.current !== undefined) {
       $.ui.status(`account ${ctx.current.name}`)
       await record($, ctx, await $.session.id(), ctx.current.name)
@@ -104,8 +50,24 @@ export const register: Register = on => {
     if (e.agentId !== undefined) return result
     state.turns = Math.max(0, state.turns - 1)
     await readRecord($, state)
+    try {
+      await balance($, state, e.reason === 'error')
+    } catch (error) {
+      // Reported, and the session stays where it is: the next turn's end checks again.
+      $.ui.log(`cc-accounts: could not check this account's usage (${describeError(error)}).`)
+    }
     if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
     return result
+  })
+
+  // The account's rate-limit windows moved: every session can now see them.
+  on('session.measure', async ($, e, next) => {
+    const result = await next(e)
+    if (e.changed.includes('rateLimits')) await noteMeasure($, state)
+    return result
+  }).catch(async ($, e, next) => {
+    $.ui.log(`cc-accounts: could not save this account's usage (${describeError(next.error)}).`)
+    return next(e)
   })
 
   // Background work started since the last Stop hook, for a turn that ends
@@ -118,7 +80,7 @@ export const register: Register = on => {
     }
     return answer
   }).catch(async ($, e, next) => {
-    $.ui.log(`cc-accounts: could not note what a ${e.tool} call started (${String(next.error)}).`)
+    $.ui.log(`cc-accounts: could not note what a ${e.tool} call started (${describeError(next.error)}).`)
     return next(e)
   })
 
@@ -129,8 +91,13 @@ export const register: Register = on => {
     if (ask.kind === 'usage') return { text: USAGE }
 
     if (ask.kind === 'list') {
+      const now = await $.clock.now()
       const rows = await Promise.all(
-        ctx.accounts.map(async account => ({ account, email: await emailOf($, account, ctx.home) })),
+        ctx.accounts.map(async account => ({
+          account,
+          email: await emailOf($, account, ctx.home),
+          use: describeUse(await readReading($, ctx.root, account.name), now),
+        })),
       )
       return { text: formatList(rows, ctx.current?.name, await defaultName($, ctx)) }
     }
@@ -156,47 +123,32 @@ export const register: Register = on => {
       $.ui.status(`account ${target.name}`)
       return { text: `Cancelled the switch to ${dropped}: this session stays on ${target.name}.` }
     }
-    await record($, ctx, sessionId, target.name)
     const signIn = (await emailOf($, target, ctx.home)) === undefined
       ? ` ${target.name} is not signed in yet: sign in with /login when it opens.`
       : ''
 
-    // How cca started this process, and whether it is this process (a claude
-    // started inside a session inherits the variables of the session's own).
-    const mode = await $.env.get('CCA_MODE')
-    const ccaPid = await $.env.get('CCA_PID')
-    const ids = mode === undefined ? undefined : await processIds($)
-    const switchFile = await $.env.get('CLAUDE_ACCOUNT_SWITCH_FILE')
-    let exit: Exit | undefined
-    if (mode === 'terminal' && switchFile && ids?.parent === ccaPid) exit = { kind: 'terminal', switchFile, sessionId }
-    if (mode === 'stream' && ids !== undefined && ids.self === ccaPid) exit = { kind: 'stream', pid: ids.self }
-
+    const asked = await requestSwitch($, state, ctx, await exitOf($, sessionId), { target: target.name, force: ask.force })
     // Started without cca: the process cannot change its own login, so the
     // choice waits for the conversation's next open.
-    if (exit === undefined) {
+    if (asked.kind === 'recorded') {
       return {
         text:
           `This conversation opens on ${target.name} from now on.${signIn}\n` +
           `Terminal: exit, then run \`claude --resume ${sessionId}\`. VS Code: close this tab and reopen the conversation.`,
       }
     }
-
-    // A newer ask replaces a queued one. Idle, or forced, the switch happens
-    // as soon as this command has finished.
-    state.pending = { target: target.name, force: ask.force, exit }
-    const wait = await waitingFor($, state)
-    const count = wait.tasks.length + (wait.turn ? 1 : 0)
-    if (ask.force || count === 0) {
-      await $.clock.after(0, () => carryOut($, state))
-      const stopping = count === 0 ? '' : `, stopping ${describeWait(wait)}`
-      return { text: `${leadOf(exit, target.name)}${stopping}: ${afterOf(exit, 'it')}${signIn}` }
+    if (asked.kind === 'started') {
+      const { stopping } = asked
+      const stopped = stopping.turn || stopping.tasks.length > 0 ? `, stopping ${describeWait(stopping)}` : ''
+      return { text: `${leadOf(asked.exit, target.name)}${stopped}: ${afterOf(asked.exit, 'it')}${signIn}` }
     }
+    const count = asked.wait.tasks.length + (asked.wait.turn ? 1 : 0)
     $.ui.status(`account ${current ?? '(unknown)'}, switching to ${target.name}`)
     const stay = current === undefined ? '' : ` To stay on ${current}, type /account ${current}.`
     return {
       text:
-        `Switch to ${target.name} queued: waiting for ${describeWait(wait)} to end. ` +
-        `Then ${afterOf(exit, target.name)}${signIn}\n` +
+        `Switch to ${target.name} queued: waiting for ${describeWait(asked.wait)} to end. ` +
+        `Then ${afterOf(asked.exit, target.name)}${signIn}\n` +
         `To switch now and stop ${count === 1 ? 'it' : 'them'}, type /account ${target.name} now.${stay}`,
     }
   })

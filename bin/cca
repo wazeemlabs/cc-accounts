@@ -18,7 +18,9 @@
 # Inside a session, /account <name> moves the conversation to <name> once its
 # turn and background work have finished (/account <name> now does not wait):
 # in a terminal it closes and reopens on <name> with the same flags; in VS Code
-# the next message you send continues it on <name>.
+# it reopens on <name> in the same tab. A session whose account is nearly
+# spent moves to the account with the most room by itself (CCA_BALANCE=off
+# stops it).
 set -euo pipefail
 
 ROOT="${CCA_ROOT:-$HOME/.claude-shared/accounts}"
@@ -62,7 +64,7 @@ done
 HERE="$(cd "$(dirname "$self")/.." && pwd -P)"
 LIBEXEC="$HERE/libexec"
 PLUGIN="$HERE/plugin"
-export CCA_ROOT="$ROOT"
+export CCA_ROOT="$ROOT" CCA_SHARED="$SHARED"
 
 die() { echo "cca: $*" >&2; exit 2; }
 
@@ -205,8 +207,11 @@ launch() {
     if [[ -f "$MCP_FILE" ]]; then load=("--mcp-config=$MCP_FILE"); fi
     "$bin" ${load[@]+"${load[@]}"} ${args[@]+"${args[@]}"} || status=$?
     [[ -s "$switch" ]] || return "$status"
-    local next_account id
+    # Line one names the account and conversation; the rest, when there is
+    # any, is the message the reopened conversation starts with.
+    local next_account id follow_up
     read -r next_account id < "$switch"
+    follow_up="$(tail -n +2 "$switch")"
     [[ -n "$(dir_of "$next_account")" && "$id" =~ $UUID_RE ]] \
       || die "switch file held '$next_account $id', not '<account> <conversation id>'"
     echo "cca: resuming $id on account $next_account" >&2
@@ -216,6 +221,7 @@ launch() {
     while IFS= read -r -d '' arg; do args+=("$arg"); done \
       < <("$LIBEXEC/cca-keep-args" "$bin" ${first[@]+"${first[@]}"})
     args+=(--resume "$id")
+    if [[ -n "$follow_up" ]]; then args+=("$follow_up"); fi
   done
 }
 
@@ -401,14 +407,20 @@ case "${1:-}" in
     ;;
   run) shift; launch "$(choose "$@")" "$@" ;;
   /*)
-    # VS Code's claudeProcessWrapper: the extension's own binary first. The
-    # extension owns the process: /account records the choice and ends it
-    # (exec keeps this pid, so CCA_PID is Claude Code's own), and the panel's
-    # next message starts a new one, which this resolves to the recorded account.
+    # VS Code's claudeProcessWrapper: the extension's own binary first. A
+    # session start runs under libexec/cca-stream, which starts Claude Code
+    # through this branch again (CCA_STREAM_CHILD) and, when /account or the
+    # balancer ends it for a switch, starts it again on the new account with
+    # the panel still attached. The child runs here with exec, keeping its
+    # pid, so CCA_PID is Claude Code's own.
     [[ -x "$1" ]] || die "not an executable: $1"
     bin="$1"; shift
     if [[ -n "$(names)" && "$PREFERENCE_EDITS" == *" ${1:-} "* && -z "$(resume_id "$@")" && -z "${CLAUDE_ACCOUNT:-}" ]]; then
       edit_everywhere "$bin" "$@"
+    fi
+    if [[ -z "${CCA_STREAM_CHILD:-}" && -n "$(names)" && ( -z "${1:-}" || "$1" == -* ) ]]; then
+      mkdir -p "$ROOT/switch"
+      exec python3 -I "$LIBEXEC/cca-stream" --switch "$ROOT/switch/$$" --cca "$HERE/bin/cca" --bin "$bin" -- "$@"
     fi
     name="$(choose "$@")"
     apply "$name"
@@ -419,7 +431,10 @@ case "${1:-}" in
       prune_background
       if [[ -f "$MCP_FILE" ]]; then set -- "--mcp-config=$MCP_FILE" "$@"; fi
     fi
-    unset CLAUDE_ACCOUNT_SWITCH_FILE
+    # A child of cca-stream keeps the switch file it was given; any other
+    # run has no supervisor to read one.
+    [[ -n "${CCA_STREAM_CHILD:-}" ]] || unset CLAUDE_ACCOUNT_SWITCH_FILE
+    unset CCA_STREAM_CHILD
     export CCA_MODE=stream CCA_PID=$$
     exec "$bin" "$@"
     ;;

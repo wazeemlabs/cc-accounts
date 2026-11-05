@@ -3,7 +3,7 @@
 [![CI](https://github.com/wazeemlabs/cc-accounts/actions/workflows/ci.yml/badge.svg)](https://github.com/wazeemlabs/cc-accounts/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Use several Claude Code accounts on one computer, and move a conversation from one account to another without losing it.
+Use several Claude Code accounts on one computer, move a conversation from one account to another without losing it, and keep every session off accounts that are about to hit their usage limit.
 
 ```
 > /account personal
@@ -43,7 +43,7 @@ Done. Keep using `claude` as before.
 | Start Claude Code on a given account | `cca personal` |
 | Choose the account new sessions start on | `cca use personal` |
 
-In a terminal, `/account` closes the session and reopens the same conversation on the other account, with the options you started it with. In VS Code, the switch happens at the next message you send, in the same tab.
+In a terminal, `/account` closes the session and reopens the same conversation on the other account, with the options you started it with. In VS Code, the conversation reopens on the other account in the same tab.
 
 A switch does not cut work short. If Claude is in the middle of a turn, or a subagent, a Monitor or a background command is still running, `/account` replies at once that the switch is queued and names what it is waiting for. The switch happens when the turn has ended and that work has finished; a finished task wakes the session, so the switch follows on its own. Until then the session stays on its account, and messages you send run there.
 
@@ -52,6 +52,17 @@ A switch does not cut work short. If Claude is in the middle of a turn, or a sub
 - Scheduled wakeups (`/loop` and the like) are not waited for.
 
 `claude --resume` opens a conversation on the account it last ran on.
+
+## Staying under the usage limits
+
+You do not need to do anything for this. Every session saves its account's five-hour and weekly usage where the other sessions can read it. When a turn ends with the session's account at 90% of its five-hour window or 95% of its week, the session moves to the signed-in account with the most room. Live sessions already on an account count against it, so sessions that leave one account together spread out. The move waits for the session's background work, as `/account` does.
+
+If the limit stops a turn before that happens, the session moves at once and the conversation reopens with a message telling it to carry on, so the work goes on with nobody typing. That message names any background work the move stopped.
+
+- The status line shows the account and its usage, for example `account work · 5h 42%, week 10%`, and `/account` lists every account's last reading.
+- An account no session has used yet counts as unused until one reports.
+- When no other account has room, the session stays and says so in its log.
+- `CCA_BALANCE=off` turns the moves off. Readings are still saved.
 
 ## What it does
 
@@ -120,12 +131,12 @@ Your accounts and conversations stay where they are.
 | `cca init <name>` | Set up, naming the account you are signed in to now. The installer runs this. |
 | `cca uninstall` | Undo setup's changes to your shell, settings and editors. |
 | `cca version`, `cca help` | |
-| `/account` | In Claude Code: list the accounts. |
+| `/account` | In Claude Code: list the accounts with their last usage readings. |
 | `/account <name>` | In Claude Code: move this conversation to `<name>` once its turn and background work have finished. |
 | `/account <name> now` | In Claude Code: move it at once, stopping that work. |
 | `/account default <name>` | In Claude Code: start new sessions on `<name>`. |
 
-Environment variables: `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
+Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
 
 ## Use only your own accounts
 

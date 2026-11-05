@@ -16,6 +16,8 @@ export const SELF = '500'
 export const PARENT = '400'
 export const TERMINAL = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'terminal', CCA_PID: PARENT, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH }
 export const STREAM = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'stream', CCA_PID: SELF }
+// VS Code under cca-stream, which reopens the conversation from the switch file.
+export const SUPERVISED = { ...STREAM, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH }
 export const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 
 export const run = (args: string) => ({
@@ -43,20 +45,32 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const agents: AgentInfo[] = []
   // What each tool answers, by tool name.
   const results = new Map<string, unknown>()
+  // Pids of other sessions' processes that still run.
+  const running = new Set<string>()
+  // The rate-limit windows the session's last response reported.
+  const limits: { kind: string; percentUsed: number; resetsAt?: string }[] = []
   mock.env(on, { HOME, ...env })
   const clock = mock.clock(on)
-  on('fs.exists', async (_$, e) => ({ value: files.has(e.path) }))
+  // A directory exists while it holds a file.
+  on('fs.exists', async (_$, e) => ({ value: files.has(e.path) || [...files.keys()].some(path => path.startsWith(`${e.path}/`)) }))
   on('fs.read', async (_$, e) => {
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
+  })
+  on('fs.list', async (_$, e) => {
+    const dir = `${e.path ?? ''}/`
+    const names = [...files.keys()].filter(path => path.startsWith(dir) && !path.slice(dir.length).includes('/'))
+    return { value: names.map(path => ({ name: path.slice(dir.length), kind: 'file', size: 0, mtimeMs: 0, isLink: false })) as never }
   })
   on('fs.write', async (_$, e) => {
     files.set(e.path, e.text)
     return { value: undefined }
   })
   on('session.id', async () => ({ value: SESSION }))
+  on('session.usage', async () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [...limits] } as never }))
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  on('session.measure', async (_$, e) => ({ changed: e.changed }))
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
   on('command.run', { command: 'exit' }, async (_$, e) => {
     ran.push(e.command)
@@ -68,6 +82,12 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   on('tool.call', async (_$, e) => ({ result: results.get(e.tool) as never, text: '' }))
   let signals = 0
   on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'ps') {
+      // ps -o pid= -p a,b,c: the ones in `running`.
+      const asked = (e.argv[4] ?? '').split(',')
+      const stdout = asked.filter(pid => running.has(pid)).map(pid => `${pid}\n`).join('')
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === '/bin/sh') {
       return { value: { exitCode: 0, stdout: `${SELF}\n ${PARENT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -88,7 +108,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     statuses.push(e.text)
     return { value: undefined }
   })
-  return { files, ran, statuses, logs, clock, killed, agents, results }
+  return { files, ran, statuses, logs, clock, killed, agents, results, limits, running }
 }
 
 let turns = 0

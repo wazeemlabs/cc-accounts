@@ -76,8 +76,13 @@ export function taskStarted(tool: string, input: Record<string, unknown>, result
   return task
 }
 
+// `shell "npm test"`, or `monitor m1` for one with no description.
+export function nameTask(task: Task): string {
+  return task.description ? `${task.type} "${task.description}"` : `${task.type} ${task.id}`
+}
+
 // `2 background tasks (subagent "scout", shell "npm test")`
 export function describeTasks(tasks: readonly Task[]): string {
-  const names = tasks.map(task => (task.description ? `${task.type} "${task.description}"` : `${task.type} ${task.id}`))
+  const names = tasks.map(nameTask)
   return `${tasks.length} background task${tasks.length === 1 ? '' : 's'} (${names.join(', ')})`
 }

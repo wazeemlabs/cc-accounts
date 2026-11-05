@@ -81,6 +81,34 @@ check "a VS Code run tells the plugin it is this process" \
   "mode=stream parent=no self=yes root=$CCA_ROOT" "$(cat "$LOG.pid")"
 
 setup
+FAKE_SWITCH=$'2 '"$ID"$'\nCarry on from where you stopped.' "$CCA" run --model opus 2>/dev/null
+check "a switch that carries a follow-up reopens the conversation with it as the first prompt" \
+  "dir=$HOME/.claude-two account=2 args=--model opus --resume $ID Carry on from where you stopped." "$(sed -n 2p "$LOG")"
+
+setup
+"$CCA" "$CCA_CLAUDE" --output-format stream-json < /dev/null
+check "a VS Code session runs under cca-stream, which hands Claude Code a switch file" \
+  "switch=set child=unset" "$(cat "$LOG.switchfile")"
+
+setup
+echo 2 > "$CCA_ROOT/by-session/$ID"
+# The panel keeps stdin open for the session's life: a FIFO this shell holds
+# open for reading and writing never reaches end of file.
+mkfifo "$WORK/panel"; exec 3<>"$WORK/panel"
+FAKE_SWITCH="2 $ID" "$CCA" "$CCA_CLAUDE" --output-format stream-json <&3 2>"$WORK/err"; status=$?
+exec 3>&-; rm -f "$WORK/panel"
+check "a switch in a VS Code session reopens the conversation on the new account behind the same wrapper" \
+  "dir=unset account=1 args=--output-format stream-json|dir=$HOME/.claude-two account=2 args=--output-format stream-json --resume $ID" \
+  "$(paste -sd'|' "$LOG")"
+check "and the wrapper exits with the reopened run's status" "0" "$status"
+check "and says what it did" "cca: resuming $ID on account 2" "$(cat "$WORK/err")"
+check "and leaves no switch file behind" "0" "$(find "$CCA_ROOT/switch" -type f | wc -l | tr -d ' ')"
+
+setup
+FAKE_STATUS=6 "$CCA" "$CCA_CLAUDE" --output-format stream-json < /dev/null; status=$?
+check "a VS Code session that ends with no switch request exits with Claude Code's status" "6" "$status"
+
+setup
 FAKE_SWITCH="nope $ID" "$CCA" run 2>/dev/null; status=$?
 check "a malformed switch request stops with an error, not a relaunch" "2 1" "$status $(wc -l < "$LOG" | tr -d ' ')"
 
@@ -187,7 +215,7 @@ touch -t 202001010000 "$CCA_ROOT/background/aaaaaaaa-1111-4222-8333-944455556666
 check "a VS Code session start drops them too" "" "$(ls "$CCA_ROOT/background")"
 
 check "help prints the usage block" "cca: run Claude Code on several accounts and move a conversation between them." "$("$CCA" help | head -1)"
-check "help ends at the end of the comment block" "the next message you send continues it on <name>." "$("$CCA" help | tail -1)"
+check "help ends at the end of the comment block" "stops it)." "$("$CCA" help | tail -1)"
 check "version prints the release" "cca $(cat "$(dirname "$CCA")/../VERSION")" "$("$CCA" version)"
 
 setup

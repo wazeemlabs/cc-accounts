@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""cca-stream: keeps a VS Code session's process alive across an account switch.
+
+The Claude Code extension starts `cca <its claude> <args>` and talks to it in
+stream-json over stdin and stdout. Ending that process for a switch left the
+conversation idle until the person sent another message, because only the
+panel starts a new one. So cca runs this instead: it starts Claude Code as a
+child (through cca again, which picks the account and syncs it) and passes
+the panel's lines through. When the plugin asks for a switch it writes the
+switch file and ends the child; this then starts a new child on the
+conversation (`--resume <id>`, on the account cca recorded for it), replays
+the panel's session setup to it, and, when the switch file carries one, sends
+the follow-up message that tells the conversation to carry on. The panel
+never sees the process end.
+
+The setup replayed is the `initialize` control request and the latest request
+of every kind that sets session state (`set_*`, `ui_attach` until a
+`ui_detach`). The new child's replies to those replays are dropped: the panel
+already had its answers.
+
+Usage: cca-stream --switch FILE --cca CCA --bin CLAUDE -- [claude args]
+"""
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+
+UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+REPLAY_PREFIX = 'cca-replay-'
+OUTPUT_GRACE_SECONDS = 10
+# Options that pick or start a conversation: a relaunch resumes the one the
+# switch file names instead. Each takes a value except the flags.
+CONVERSATION_OPTIONS = {'--resume': True, '-r': True, '--session-id': True, '--continue': False, '-c': False,
+                        '--fork-session': False}
+
+
+def log(text):
+    print(f'cca: {text}', file=sys.stderr, flush=True)
+
+
+def relaunch_args(args, conversation):
+    """The first run's args without the options that choose a conversation,
+    then `--resume <conversation>`."""
+    kept = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        name = arg.split('=', 1)[0]
+        if name in CONVERSATION_OPTIONS:
+            skip = CONVERSATION_OPTIONS[name] and '=' not in arg
+            continue
+        kept.append(arg)
+    return [*kept, '--resume', conversation]
+
+
+def read_switch(path):
+    """(account, conversation id, follow-up text) the plugin asked for, or
+    None when there is no request. Raises ValueError on a malformed one."""
+    try:
+        with open(path, encoding='utf-8') as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return None
+    if text.strip() == '':
+        return None
+    first, _, rest = text.partition('\n')
+    parts = first.split()
+    if len(parts) != 2 or not UUID_RE.match(parts[1]):
+        raise ValueError(f'switch file held {first!r}, not "<account> <conversation id>"')
+    return parts[0], parts[1], rest.strip()
+
+
+def user_message(text, conversation):
+    message = {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
+               'parent_tool_use_id': None, 'session_id': conversation}
+    return (json.dumps(message) + '\n').encode()
+
+
+class Setup:
+    """The panel's session setup, as it sent it, to replay to a new child."""
+
+    def __init__(self):
+        self.requests = {}
+        self.replays = 0
+
+    def note(self, line):
+        if b'"control_request"' not in line:
+            return
+        try:
+            value = json.loads(line)
+        except ValueError:
+            # Not JSON: Claude Code will say so; nothing to remember.
+            return
+        request = value.get('request') if isinstance(value, dict) else None
+        subtype = request.get('subtype') if isinstance(request, dict) else None
+        if value.get('type') != 'control_request' or not isinstance(subtype, str):
+            return
+        if subtype == 'ui_detach':
+            self.requests.pop('ui_attach', None)
+        elif subtype in ('initialize', 'ui_attach') or subtype.startswith('set_'):
+            self.requests[subtype] = request
+
+    def replay(self):
+        """The recorded requests as lines with fresh ids, initialize first."""
+        order = sorted(self.requests, key=lambda subtype: subtype != 'initialize')
+        lines = []
+        for subtype in order:
+            self.replays += 1
+            line = {'type': 'control_request', 'request_id': f'{REPLAY_PREFIX}{self.replays}',
+                    'request': self.requests[subtype]}
+            lines.append((json.dumps(line) + '\n').encode())
+        return lines
+
+
+def read_lines(fd):
+    """The lines read from `fd`, the last one even without a newline. Read
+    with os.read, not a buffered file: a thread blocked in a buffered read
+    holds its lock, and the interpreter aborts at exit when it finds it held."""
+    pending = b''
+    while True:
+        chunk = os.read(fd, 65536)
+        if chunk == b'':
+            break
+        pending += chunk
+        *lines, pending = pending.split(b'\n')
+        for line in lines:
+            yield line + b'\n'
+    if pending:
+        yield pending
+
+
+def is_replay_answer(line):
+    if REPLAY_PREFIX.encode() not in line:
+        return False
+    try:
+        value = json.loads(line)
+    except ValueError:
+        return False
+    response = value.get('response') if isinstance(value, dict) else None
+    request_id = response.get('request_id') if isinstance(response, dict) else None
+    return value.get('type') == 'control_response' and str(request_id).startswith(REPLAY_PREFIX)
+
+
+class Supervisor:
+    def __init__(self, options, args):
+        self.options = options
+        self.args = args
+        self.setup = Setup()
+        self.lock = threading.Lock()
+        self.child = None
+        # Lines the panel sent while no child could take them.
+        self.held = []
+        self.stdin_closed = False
+        self.stopping = False
+        self.out = sys.stdout.buffer
+
+    def env(self):
+        return {**os.environ, 'CCA_STREAM_CHILD': '1', 'CLAUDE_ACCOUNT_SWITCH_FILE': self.options.switch}
+
+    def start(self, args):
+        return subprocess.Popen([self.options.cca, self.options.bin, *args], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, env=self.env())
+
+    def send(self, child, line):
+        """Writes one line to the child; False when it has gone."""
+        try:
+            child.stdin.write(line)
+            child.stdin.flush()
+            return True
+        except (BrokenPipeError, OSError):
+            return False
+
+    def pump_stdin(self):
+        for line in read_lines(sys.stdin.fileno()):
+            with self.lock:
+                self.setup.note(line)
+                # Once the plugin has written a switch request the child is
+                # about to end, and a line written to it now would be lost.
+                if self.child is None or os.path.exists(self.options.switch) or not self.send(self.child, line):
+                    self.held.append(line)
+        with self.lock:
+            self.stdin_closed = True
+            if self.child is not None:
+                try:
+                    self.child.stdin.close()
+                except OSError:
+                    # Already gone: its exit is what the main loop waits for.
+                    pass
+
+    def pump_stdout(self, child):
+        for line in iter(child.stdout.readline, b''):
+            if is_replay_answer(line):
+                continue
+            self.out.write(line)
+            self.out.flush()
+
+    def forward(self, signum, _frame):
+        if signum != signal.SIGINT:
+            self.stopping = True
+        child = self.child
+        if child is not None and child.poll() is None:
+            child.send_signal(signum)
+
+    def attach(self, child, before):
+        """Makes `child` current: `before` first, then what the panel sent
+        meanwhile."""
+        with self.lock:
+            for line in [*before, *self.held]:
+                self.send(child, line)
+            self.held = []
+            self.child = child
+            if self.stdin_closed:
+                child.stdin.close()
+
+    def run(self):
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(signum, self.forward)
+        self.remove_switch()
+        child = self.start(self.args)
+        self.attach(child, [])
+        threading.Thread(target=self.pump_stdin, daemon=True).start()
+        while True:
+            reader = threading.Thread(target=self.pump_stdout, args=(child,), daemon=True)
+            reader.start()
+            status = child.wait()
+            # A process the child left behind may hold its stdout open; what
+            # it prints after the child's exit is not worth hanging for.
+            reader.join(timeout=OUTPUT_GRACE_SECONDS)
+            with self.lock:
+                self.child = None
+            try:
+                request = None if self.stopping or self.stdin_closed else read_switch(self.options.switch)
+            except ValueError as error:
+                log(str(error))
+                request = None
+            self.remove_switch()
+            if request is None:
+                return 128 - status if status < 0 else status
+            account, conversation, follow_up = request
+            log(f'resuming {conversation} on account {account}')
+            child = self.start(relaunch_args(self.args, conversation))
+            before = self.setup.replay()
+            if follow_up:
+                before.append(user_message(follow_up, conversation))
+            self.attach(child, before)
+            # Asked to stop while there was no child to pass it to.
+            if self.stopping:
+                child.terminate()
+
+    def remove_switch(self):
+        try:
+            os.remove(self.options.switch)
+        except FileNotFoundError:
+            pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Keep a VS Code session alive across an account switch.')
+    parser.add_argument('--switch', required=True, help='the switch file the plugin writes')
+    parser.add_argument('--cca', required=True, help='cca, which starts each child on its account')
+    parser.add_argument('--bin', required=True, help="the extension's claude binary")
+    parser.add_argument('args', nargs=argparse.REMAINDER)
+    options = parser.parse_args()
+    args = options.args[1:] if options.args[:1] == ['--'] else options.args
+    status = Supervisor(options, args).run()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # The stdin thread is still blocked reading: leave without the
+    # interpreter's shutdown, which would wait on or trip over it.
+    os._exit(status)
+
+
+if __name__ == '__main__':
+    main()

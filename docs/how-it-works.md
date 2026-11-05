@@ -42,9 +42,15 @@ When Claude Code exits, cca reads the switch file. If it holds a request, cca st
 
 ## Moving a conversation in VS Code
 
-The Claude Code extension starts Claude Code itself, so cca cannot wait on it. Setup sets `claudeCode.claudeProcessWrapper` to cca. The setting is machine-scoped: a desktop window reads it from the editor's user settings, and a remote window (WSL, SSH) from the editor server's machine settings on the remote machine. Setup writes it in both places for every VS Code family editor set up on the machine it runs on. The extension then runs `cca <its own claude binary> <args>`. cca picks the account as above and replaces itself with Claude Code (`exec`), keeping its pid, with `CCA_MODE=stream` and `CCA_PID` set to that pid.
+The Claude Code extension starts Claude Code itself. Setup sets `claudeCode.claudeProcessWrapper` to cca. The setting is machine-scoped: a desktop window reads it from the editor's user settings, and a remote window (WSL, SSH) from the editor server's machine settings on the remote machine. Setup writes it in both places for every VS Code family editor set up on the machine it runs on. The extension then runs `cca <its own claude binary> <args>` and talks to that process in stream-json over its stdin and stdout.
 
-`/account <name>` checks that `CCA_PID` is its own process, records `<name>` for the conversation, and, when the switch is due, ends its own process from a zero-delay timer. In this mode SIGINT ends an idle Claude Code with exit status 0, which the extension treats as a normal end. A session in the middle of a turn reads its first SIGINT as "stop the turn" and keeps running. The switch waits for the turn to end, so this happens only to a forced switch or to a turn that a queued message starts between the check and the signal; for those the hook waits up to three seconds for the exit, sends SIGINT again, and sends SIGTERM last (143, which the panel reports as a failure, though the conversation still reopens). A process that survives all three is reported in the session log with the advice to close the tab and reopen the conversation. The panel then starts a new process at your next message, resuming the same conversation. The new process starts through the wrapper, which reads the record and picks `<name>`.
+For a session start (the arguments begin with an option), cca replaces itself with `libexec/cca-stream`, which keeps the pid the extension knows. cca-stream starts `cca <binary> <args>` again as its child, with `CCA_STREAM_CHILD=1` and `CLAUDE_ACCOUNT_SWITCH_FILE` set to `~/.claude-shared/accounts/switch/<its pid>`. That run of cca picks the account as above, syncs it, and replaces itself with Claude Code (`exec`), with `CCA_MODE=stream` and `CCA_PID` set to its own pid. cca-stream passes the panel's lines to the child and the child's lines to the panel.
+
+`/account <name>` checks that `CCA_PID` is its own process, records `<name>` for the conversation and, when the switch is due, writes `<name> <conversation id>` to the switch file and ends its own process from a zero-delay timer. In this mode SIGINT ends an idle Claude Code with exit status 0. A session in the middle of a turn reads its first SIGINT as "stop the turn" and keeps running. The switch waits for the turn to end, so this happens only to a forced switch or to a turn that a queued message starts between the check and the signal; for those the hook waits up to three seconds for the exit, sends SIGINT again, and sends SIGTERM last. A process that survives all three is reported in the session log with the advice to close the tab and reopen the conversation.
+
+When the child exits, cca-stream reads the switch file. With a request in it, and the panel's stdin still open, it starts a new child with the first run's arguments less the ones that choose a conversation (`--resume`, `-r`, `--session-id`, `--continue`, `-c`, `--fork-session`) and with `--resume <id>`; cca opens it on the account recorded for the conversation. Before anything else the new child gets the panel's session setup again: the `initialize` control request and the latest request of each kind that sets session state (`set_*`, and `ui_attach` until a `ui_detach`), each with a fresh `cca-replay-<n>` id. cca-stream drops the child's answers to those, because the panel already had its own. Then, when the switch file has lines after the first, it sends them as a user message (the follow-up), and then whatever the panel sent while no child could take it. Once a switch file exists, the panel's new lines are held for the next child rather than written to one about to end. Without a request, or after SIGTERM or SIGHUP, cca-stream exits with the child's status. It forwards SIGINT, SIGTERM and SIGHUP to the child.
+
+A process the extension started before cca-stream existed has no switch file. `/account` then ends it as before, and the panel starts a new process at the next message, which cca opens on the recorded account.
 
 ## Waiting for the session's work
 
@@ -57,6 +63,14 @@ What the plugin knows, and from where:
 - A turn that ends without Stop (interrupted, or an API error such as a usage limit) leaves the file as `turn.start` marked it, `{"turn": "<turn id>"}`. The module then keeps what it knew, plus the work started since: it reads the tool calls it sees (a Bash result's `backgroundTaskId`, a Monitor's `taskId`, an Agent call's `async_launched`, a Workflow's `taskId`), and checks subagents against `$.agent.list()` at each decision.
 
 Every finished background task wakes the session with a notification, as a turn of its own or inside the running one, so a turn's end follows each change, and at that end the module carries out a queued switch once nothing is left. A task stopped in a way that sends no notification keeps the switch queued until the next turn ends; `/account <name> now` switches anyway.
+
+## Staying under the usage limits
+
+Each response Claude Code receives on a subscription carries the account's rate-limit windows, which the plugin API passes to a `session.measure` hook whenever a window moves a whole point (`rateLimits`: each window's kind, `percentUsed` and `resetsAt`). The plugin writes them to `~/.claude-shared/accounts/usage/<account>.json`, so every session can read the readings of the accounts it is not on. A window whose `resetsAt` has passed reads as 0; one without a reset time stops counting a whole window (five hours, seven days) after the reading.
+
+At the end of each main-loop turn, `balance.ts` reads the session's own windows (`$.session.usage()`). When the five-hour window is at 90% or more, or the weekly one at 95%, it lists the candidates: every signed-in account but this one, with its reading and the number of live sessions on it. Those come from Claude Code's session list in `~/.claude-shared/sessions` (one `ps` call for which pids still run) and each session's `by-session` record. A candidate needs both windows below 70% and 90%; the one with the lowest five-hour percentage plus 10 points per live session wins, so sessions leaving one account at once spread out. These numbers are `POLICY` in `usage.ts`. The move is a `/account` switch, through the same code: recorded at once, carried out when the turn and background work are done.
+
+A turn that ended on an API error with a window at 99% or more was stopped by the limit. That move does not wait (the work would only fail on this account), and its switch file carries a follow-up: the conversation is told which account ran out and which it now runs on, to carry on, and which background tasks the move stopped. A terminal relaunch passes it as the first prompt; cca-stream sends it as a user message. An account no session has reported on counts as empty; if it is not, the session that moved there reads the truth at its first response and moves again at the next turn's end if it must. When no account has room, the session stays and logs why. `CCA_BALANCE=off` stops the moves; the readings are still written.
 
 ## Folder trust and MCP servers
 
@@ -84,7 +98,7 @@ User MCP servers live in `~/.claude-shared/mcp.json`, in the `{"mcpServers": {..
 
 ## The plugin
 
-`plugin/` is a Claude Code plugin, loaded in every session through `CLAUDE_CODE_PLUGIN_DIRS` in the env block of `~/.claude/settings.json` (which every account shares). It registers `/account`, shows the account in the status line, records each conversation's account when a session starts, and follows the session's turns and background work so that a switch can wait for them. It reads cca's state directory from `CCA_ROOT`, which cca sets, or `~/.claude-shared/accounts`.
+`plugin/` is a Claude Code plugin, loaded in every session through `CLAUDE_CODE_PLUGIN_DIRS` in the env block of `~/.claude/settings.json` (which every account shares). It registers `/account`, shows the account and its usage in the status line, records each conversation's account when a session starts, follows the session's turns and background work so that a switch can wait for them, saves its account's usage, and moves the conversation off an account that is nearly spent. It reads cca's state directory from `CCA_ROOT` and the shared directory from `CCA_SHARED`, which cca sets, or `~/.claude-shared/accounts` and `~/.claude-shared`.
 
 ## Files cca writes
 
@@ -95,7 +109,8 @@ User MCP servers live in `~/.claude-shared/mcp.json`, in the `{"mcpServers": {..
 | `~/.claude-shared/accounts/default` | The account new sessions start on. |
 | `~/.claude-shared/accounts/share.conf` | What other accounts link from `~/.claude`. |
 | `~/.claude-shared/accounts/by-session/<id>` | The account each conversation last ran on. |
-| `~/.claude-shared/accounts/switch/<pid>` | A pending terminal switch, removed when cca exits. |
+| `~/.claude-shared/accounts/switch/<pid>` | A pending switch for the terminal cca or the cca-stream with that pid: `<account> <conversation id>`, then the follow-up, if any. Removed when it is read and when cca exits. |
+| `~/.claude-shared/accounts/usage/<account>.json` | The account's last rate-limit reading, from whichever of its sessions measured last. |
 | `~/.claude-shared/accounts/background/<id>` | The background work a conversation ran when its last turn ended, from the plugin's Stop hook. cca removes ones older than a day. |
 | `~/.claude-shared/accounts/cache/` | Claude Code's default project entry, per binary. |
 | `~/.claude-shared/mcp.json` | The user MCP servers every session loads. |
@@ -132,6 +147,10 @@ VS Code's Claude in Chrome and memory dialogs save their settings by running the
 | A finished background task waking the session with a notification turn | A queued switch happening without a new message | Manual check, as above |
 | Slash commands reaching a stream-json session between turns | `/account` mid-turn | Manual check |
 | The plugin API | `/account` | `plugin/tests` with `claude plugin test` |
+| `session.measure` firing when a rate-limit window moves, and `$.session.usage().rateLimits` with `five_hour` and `seven_day` | Usage readings and the balancer | `plugin/tests` (the plugin's side); manual check: `usage/<account>.json` appears after a session's first response |
+| A turn the usage limit stops ending `turn.complete` with `reason: 'error'` and the window at 100% | The follow-up after a limit-stopped turn | Manual check, when an account runs out |
+| The extension's stream-json protocol: setup in `initialize` and `set_*` control requests, answered by `control_response` with the same `request_id` | cca-stream replaying the setup to a new child | `tests/test_cca_stream.py` (cca-stream's side); manual check: a VS Code switch keeps the tab working |
+| `claude --resume <id> "<prompt>"` starting a terminal session with that prompt | The follow-up in a terminal | Manual check |
 
 ## Windows
 

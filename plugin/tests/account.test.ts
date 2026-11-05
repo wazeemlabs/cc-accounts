@@ -46,14 +46,18 @@ describe('/account', () => {
     expect(w.statuses).toEqual(['account 2'])
   })
 
-  test('lists every account with its email, marking this session and the default', async ($, on) => {
+  test('lists every account with its email and last usage reading, marking this session and the default', async ($, on) => {
     const w = world(on, { CLAUDE_ACCOUNT: '2' })
     w.files.set(`${ROOT}/default`, '1\n')
+    w.files.set(
+      `${ROOT}/usage/2.json`,
+      JSON.stringify({ account: '2', at: 0, windows: { five_hour: { percentUsed: 42.4, resetsAt: '2100-01-01T00:00:00Z' }, seven_day: { percentUsed: 7 } } }),
+    )
     await $.session.start(START)
     const { text } = await $.command.run(run(''))
-    expect(text).toContain('1        one@example.com               ← new sessions')
-    expect(text).toContain('2        two@example.com               ← this session')
-    expect(text).toContain('3        (not signed in)')
+    expect(text).toContain('1        one@example.com              -                     ← new sessions')
+    expect(text).toContain('2        two@example.com              5h 42%, week 7%       ← this session')
+    expect(text).toContain('3        (not signed in)              -')
   })
 
   test('switching in a cca terminal leaves the request and exits', async ($, on) => {

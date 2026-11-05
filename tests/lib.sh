@@ -45,6 +45,7 @@ stdin=""; case "$1" in edit-*) stdin="$(cat)" ;; esac
 echo "dir=${CLAUDE_CONFIG_DIR-unset} account=${CLAUDE_ACCOUNT-} args=$*${stdin:+ stdin=$stdin}" >> "$LOG"
 echo "mode=${CCA_MODE-} parent=$([[ "${CCA_PID-}" == "$PPID" ]] && echo yes || echo no) self=$([[ "${CCA_PID-}" == "$$" ]] && echo yes || echo no) root=${CCA_ROOT-}" >> "$LOG.pid"
 echo "${CLAUDE_CODE_REMOTE_MEMORY_DIR-unset}" >> "$LOG.memory"
+echo "switch=${CLAUDE_ACCOUNT_SWITCH_FILE:+set} child=${CCA_STREAM_CHILD-unset}" >> "$LOG.switchfile"
 if [[ -n "${FAKE_SWITCH:-}" && ! -e "$LOG.switched" ]]; then
   touch "$LOG.switched"; echo "$FAKE_SWITCH" > "$CLAUDE_ACCOUNT_SWITCH_FILE"; exit 0
 fi
@@ -55,5 +56,6 @@ FAKE
   # XDG_CONFIG_HOME would send config writes outside the throwaway HOME; the
   # rest are what a session started by cca passes to the tests it runs.
   unset CLAUDE_ACCOUNT CLAUDE_CONFIG_DIR FAKE_SWITCH FAKE_STATUS XDG_CONFIG_HOME \
-    CLAUDE_CODE_REMOTE_MEMORY_DIR CCA_TRUST_SYNC CCA_MCP_SYNC CCA_MODE CCA_PID CLAUDE_ACCOUNT_SWITCH_FILE
+    CLAUDE_CODE_REMOTE_MEMORY_DIR CCA_TRUST_SYNC CCA_MCP_SYNC CCA_MODE CCA_PID CLAUDE_ACCOUNT_SWITCH_FILE \
+    CCA_STREAM_CHILD CCA_BALANCE
 }

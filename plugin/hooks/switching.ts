@@ -4,15 +4,21 @@
 // switch waits for the turn to end and the work to finish unless forced.
 import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, parseRecord, type Task } from './background'
+import { record, type Context } from './context'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
 // waits on the process, reads the switch file and resumes the conversation
-// on the target account. VS Code: the extension starts a new process at the
-// next message, which cca opens on the account recorded for the conversation.
-export type Exit = { kind: 'terminal'; switchFile: string; sessionId: string } | { kind: 'stream'; pid: string }
+// on the target account. VS Code: cca-stream waits on it the same way, with
+// the panel still attached, when it gave the process a switch file; without
+// one (a process started before cca-stream existed), the extension starts a
+// new process at the next message, which cca opens on the recorded account.
+export type Exit =
+  | { kind: 'terminal'; switchFile: string; sessionId: string }
+  | { kind: 'stream'; pid: string; switchFile: string | undefined; sessionId: string }
 
-// The switch /account asked for and has not carried out yet.
-export type Pending = { target: string; force: boolean; exit: Exit }
+// The switch asked for and not carried out yet, and the message the reopened
+// conversation starts with, if any.
+export type Pending = { target: string; force: boolean; exit: Exit; followUp: string | undefined }
 
 // What a switch waits for: the turn in flight and the background work.
 export type Wait = { turn: boolean; tasks: Task[] }
@@ -21,6 +27,8 @@ export type Wait = { turn: boolean; tasks: Task[] }
 // /account only ever ends its own process.
 export type SwitchState = {
   root: string | undefined
+  // Whether a person is at the prompt (session.start): false for `-p` and the SDK.
+  interactive: boolean
   turns: number
   tasks: Map<string, Task>
   pending: Pending | undefined
@@ -28,7 +36,7 @@ export type SwitchState = {
 }
 
 export function newState(): SwitchState {
-  return { root: undefined, turns: 0, tasks: new Map(), pending: undefined, ending: false }
+  return { root: undefined, interactive: false, turns: 0, tasks: new Map(), pending: undefined, ending: false }
 }
 
 // Where the plugin's Stop hook (record-tasks.py) leaves a session's
@@ -37,15 +45,21 @@ export function recordFile(root: string, sessionId: string): string {
   return `${root}/background/${sessionId}`
 }
 
+// Whether something waits on this process to reopen the conversation.
+function reopens(exit: Exit): boolean {
+  return exit.switchFile !== undefined
+}
+
 // `Switched to work`, and what then happens, of `it` or of a name.
 export function leadOf(exit: Exit, target: string): string {
-  return exit.kind === 'terminal' ? `Switching to ${target}` : `Switched to ${target}`
+  return reopens(exit) ? `Switching to ${target}` : `Switched to ${target}`
 }
 
 export function afterOf(exit: Exit, noun: string): string {
+  if (!reopens(exit)) return `your next message continues this conversation on ${noun}.`
   return exit.kind === 'terminal'
     ? `this session closes and reopens on ${noun}.`
-    : `your next message continues this conversation on ${noun}.`
+    : `this conversation reopens on ${noun} in this tab.`
 }
 
 // `this turn and 1 background task (shell "npm test")`
@@ -119,9 +133,14 @@ async function endProcess($: EngineInterface, pid: string): Promise<string | und
   return `still running after ${END_STEPS.map(step => `SIG${step.signal.slice(1)}`).join(', ')}`
 }
 
-async function runExit($: EngineInterface, exit: Exit, target: string): Promise<void> {
+// Line one: the account and the conversation; the rest: the follow-up.
+export function switchRequest(target: string, sessionId: string, followUp: string | undefined): string {
+  return `${target} ${sessionId}\n${followUp === undefined ? '' : `${followUp}\n`}`
+}
+
+async function runExit($: EngineInterface, exit: Exit, target: string, followUp: string | undefined): Promise<void> {
+  if (exit.switchFile !== undefined) await $.fs.write(exit.switchFile, switchRequest(target, exit.sessionId, followUp))
   if (exit.kind === 'terminal') {
-    await $.fs.write(exit.switchFile, `${target} ${exit.sessionId}\n`)
     try {
       await $.command.run({ command: 'exit', args: '' })
     } catch (error) {
@@ -146,14 +165,44 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
   }
   // Checked again: another timer may have carried it out during the wait.
   if (state.pending === undefined || state.ending) return
-  const { exit, target } = state.pending
+  const { exit, target, followUp } = state.pending
   state.pending = undefined
   state.ending = true
   try {
-    await runExit($, exit, target)
+    await runExit($, exit, target, followUp)
   } catch (error) {
     $.ui.log(`cc-accounts: the switch to ${target} failed (${String(error)}); type /account ${target} again.`)
   } finally {
     state.ending = false
   }
+}
+
+// What requestSwitch did: started the switch (it runs once the caller's
+// command or hook has returned), queued it behind `wait`, or, for a process
+// cca did not start, only recorded the account for the conversation's next open.
+export type SwitchAsked =
+  | { kind: 'started'; exit: Exit; stopping: Wait }
+  | { kind: 'queued'; exit: Exit; wait: Wait }
+  | { kind: 'recorded' }
+
+// Moves this conversation to `target`: /account's switch and the balancer's.
+// The conversation is recorded on `target` at once, so it opens there however
+// this process ends; the process ends once its turn and background work have
+// finished, or at once when forced. A newer request replaces a queued one.
+export async function requestSwitch(
+  $: EngineInterface,
+  state: SwitchState,
+  ctx: Context,
+  exit: Exit | undefined,
+  ask: { target: string; force: boolean; followUp?: string },
+): Promise<SwitchAsked> {
+  await record($, ctx, await $.session.id(), ask.target)
+  if (exit === undefined) return { kind: 'recorded' }
+  state.pending = { target: ask.target, force: ask.force, exit, followUp: ask.followUp }
+  const wait = await waitingFor($, state)
+  if (ask.force || (!wait.turn && wait.tasks.length === 0)) {
+    await $.clock.after(0, () => carryOut($, state))
+    return { kind: 'started', exit, stopping: wait }
+  }
+  return { kind: 'queued', exit, wait }
 }
