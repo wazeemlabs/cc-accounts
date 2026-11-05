@@ -8,7 +8,8 @@
 // the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
 import type { Account } from './accounts'
-import { context, emailOf, exitOf, type Context } from './context'
+import { context, emailOf, exitOf, writeAtomic, type Context } from './context'
+import { liveCrons } from './crons'
 import { requestSwitch, type SwitchState } from './switching'
 import {
   chooseTarget,
@@ -40,8 +41,9 @@ export async function ownReading($: EngineInterface, account: string): Promise<R
   return rateLimits.length === 0 ? undefined : readingOf(account, await $.clock.now(), rateLimits)
 }
 
+// Every session on the account rewrites this file while others read it.
 export async function writeReading($: EngineInterface, root: string, reading: Reading): Promise<void> {
-  await $.fs.write(usageFile(root, reading.account), formatReading(reading))
+  await writeAtomic($, usageFile(root, reading.account), formatReading(reading))
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -132,8 +134,9 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
   const limit = stopped ? windowAtLimit(reading, now) : undefined
   // A session the extension started before cca-stream cannot be told to set
-  // its wakeups again, so it keeps them until the limit leaves no choice.
-  if (limit === undefined && exit.switchFile === undefined && state.crons.length > 0) return
+  // its wakeups again, so it keeps them, or wakeups it cannot rule out, until
+  // the limit leaves no choice.
+  if (limit === undefined && exit.switchFile === undefined && (await liveCrons($))?.length !== 0) return
   const target = chooseTarget(from, await candidates($, ctx), now)
   if (target === undefined) {
     $.ui.log(`cc-accounts: ${from} is at ${describeUse(reading, now)}, and no other account has room to move to.`)

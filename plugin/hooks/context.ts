@@ -44,9 +44,20 @@ export async function defaultName($: EngineInterface, ctx: Context): Promise<str
   return (await $.fs.read(file)).trim() || ctx.accounts[0]?.name
 }
 
+// Writes a file other sessions and cca read while it may be rewritten: a
+// temporary file beside it, named for this session so that writers never
+// share one, then renamed over it, so a reader sees the old text or the new
+// and never half of it.
+export async function writeAtomic($: EngineInterface, path: string, text: string): Promise<void> {
+  const temp = `${path}.${await $.session.id()}.tmp`
+  await $.fs.write(temp, text)
+  const { exitCode, stderr } = await $.process.run(['mv', '-f', temp, path])
+  if (exitCode !== 0) throw new Error(`could not save ${path}: ${stderr.trim()}`)
+}
+
 // cca resumes a conversation on the account it last ran on.
 export async function record($: EngineInterface, ctx: Context, sessionId: string, name: string): Promise<void> {
-  await $.fs.write(`${ctx.root}/by-session/${sessionId}`, `${name}\n`)
+  await writeAtomic($, `${ctx.root}/by-session/${sessionId}`, `${name}\n`)
 }
 
 // This process's id and its parent's, as decimal strings. $.process.run starts
@@ -68,7 +79,9 @@ export async function exitOf($: EngineInterface, sessionId: string): Promise<Exi
   const switchFile = (await $.env.get('CLAUDE_ACCOUNT_SWITCH_FILE')) || undefined
   if (mode === 'terminal' && switchFile && ids?.parent === ccaPid) return { kind: 'terminal', switchFile, sessionId }
   if (mode === 'stream' && ids !== undefined && ids.self === ccaPid) {
-    return { kind: 'stream', pid: ids.self, switchFile, sessionId }
+    // cca-stream names itself to its child, to be told when a switch is withdrawn.
+    const supervisor = switchFile ? (await $.env.get('CCA_STREAM_PID')) || undefined : undefined
+    return { kind: 'stream', pid: ids.self, switchFile, supervisor, sessionId }
   }
   return undefined
 }

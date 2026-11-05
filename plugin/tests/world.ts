@@ -1,9 +1,11 @@
 // The world beneath the plugin in its tests: an in-memory disk, the session's
-// id, the processes it signals, its agents, the tool calls it sees, and the
-// turns of the main loop with what their Stop hook (record-tasks.py) leaves.
+// id, the processes it signals, its agents, the tool calls it sees and makes
+// (CronList), and the turns of the main loop with what their Stop hook
+// (record-tasks.py) leaves.
 import { mock, type Engine } from 'claude-code/testing'
 import type { AgentInfo, On } from 'claude-code'
-import type { Cron, Task } from '../hooks/background'
+import type { Task } from '../hooks/background'
+import type { Cron } from '../hooks/crons'
 
 export const HOME = '/Users/me'
 export const ROOT = `${HOME}/.claude-shared/accounts`
@@ -16,8 +18,9 @@ export const SELF = '500'
 export const PARENT = '400'
 export const TERMINAL = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'terminal', CCA_PID: PARENT, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH }
 export const STREAM = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'stream', CCA_PID: SELF }
-// VS Code under cca-stream, which reopens the conversation from the switch file.
-export const SUPERVISED = { ...STREAM, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH }
+// VS Code under cca-stream (pid 123), which reopens the conversation from the switch file.
+export const SUPERVISOR = '123'
+export const SUPERVISED = { ...STREAM, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH, CCA_STREAM_PID: SUPERVISOR }
 export const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 
 export const run = (args: string) => ({
@@ -43,8 +46,12 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const logs: string[] = []
   const killed: string[][] = []
   const agents: AgentInfo[] = []
-  // What each tool answers, by tool name.
-  const results = new Map<string, unknown>()
+  // What each tool answers, by tool name, and the tools that refuse.
+  const results = new Map<string, unknown>([['CronList', { jobs: [] }]])
+  const denied = new Map<string, string>()
+  // Every path written with fs.write, and the cca-stream pids told a switch was withdrawn.
+  const writes: string[] = []
+  const released: string[] = []
   // Pids of other sessions' processes that still run.
   const running = new Set<string>()
   // The rate-limit windows the session's last response reported.
@@ -64,6 +71,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     return { value: names.map(path => ({ name: path.slice(dir.length), kind: 'file', size: 0, mtimeMs: 0, isLink: false })) as never }
   })
   on('fs.write', async (_$, e) => {
+    writes.push(e.path)
     files.set(e.path, e.text)
     return { value: undefined }
   })
@@ -76,12 +84,39 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     ran.push(e.command)
     return {}
   })
-  on('agent.list', async () => ({ value: agents }))
+  // How long the agent list takes to answer, in clock milliseconds: a wait
+  // that lets another timer run meanwhile.
+  const slow = { agentsMs: 0 }
+  on('agent.list', async () => {
+    if (slow.agentsMs > 0) await clock.sleep(slow.agentsMs)
+    return { value: agents }
+  })
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
-  on('tool.call', async (_$, e) => ({ result: results.get(e.tool) as never, text: '' }))
+  on('tool.call', async (_$, e) => {
+    const deny = denied.get(e.tool)
+    return deny === undefined ? { result: results.get(e.tool) as never, text: '' } : { deny }
+  })
   let signals = 0
+  const done = (exitCode: number, stderr = '') =>
+    ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'mv') {
+      // mv -f <from> <to>
+      const text = files.get(e.argv[2] ?? '')
+      if (text === undefined) return done(1, 'No such file or directory')
+      files.set(e.argv[3] ?? '', text)
+      files.delete(e.argv[2] ?? '')
+      return done(0)
+    }
+    if (e.argv[0] === 'rm') {
+      files.delete(e.argv[2] ?? '')
+      return done(0)
+    }
+    if (e.argv[0] === 'kill' && e.argv[1] === '-USR1') {
+      released.push(e.argv[2] ?? '')
+      return done(0)
+    }
     if (e.argv[0] === 'ps') {
       // ps -o pid= -p a,b,c: the ones in `running`.
       const asked = (e.argv[4] ?? '').split(',')
@@ -108,7 +143,21 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     statuses.push(e.text)
     return { value: undefined }
   })
-  return { files, ran, statuses, logs, clock, killed, agents, results, limits, running }
+  return { files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow }
+}
+
+// The session holds these wakeups, as CronList lists them.
+export function schedule(w: ReturnType<typeof world>, crons: readonly Cron[]): void {
+  w.results.set('CronList', {
+    jobs: crons.map((cron, index) => ({
+      id: `c${index}`,
+      cron: cron.schedule,
+      humanSchedule: cron.schedule,
+      prompt: cron.prompt,
+      ...(cron.recurring && { recurring: true }),
+      durable: false,
+    })),
+  })
 }
 
 let turns = 0
@@ -128,19 +177,20 @@ export async function endTurn(
   w: ReturnType<typeof world>,
   turnId: string,
   stop?: readonly Task[],
-  crons: readonly Cron[] = [],
 ): Promise<void> {
-  if (stop !== undefined) w.files.set(RECORD, `${JSON.stringify({ tasks: stop, crons })}\n`)
+  if (stop !== undefined) w.files.set(RECORD, `${JSON.stringify({ tasks: stop })}\n`)
   const reason = stop === undefined ? 'error' : 'answer'
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId, reason })
 }
 
-// A whole turn whose Stop hook listed `stop` and the wakeups `crons`.
+// A whole turn whose Stop hook listed `stop`, after which the session holds
+// the wakeups `crons`.
 export async function turn(
   $: Engine,
   w: ReturnType<typeof world>,
   stop: readonly Task[],
   crons: readonly Cron[] = [],
 ): Promise<void> {
-  await endTurn($, w, await startTurn($), stop, crons)
+  schedule(w, crons)
+  await endTurn($, w, await startTurn($), stop)
 }

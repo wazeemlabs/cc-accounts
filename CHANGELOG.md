@@ -2,6 +2,18 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.4.3 (2026-11-06)
+
+- A message sent as a switch begins is no longer lost. If the old process never took it, cca-stream sends it to the new one. If the switch cut short the turn it started, the reopened conversation is told to carry on.
+- Scheduled wakeups are handed over with their prompts whole, including one set in the turn the usage limit stopped. They are read from CronList when the switch happens. The Stop hook's list clips prompts at 1000 characters and is not sent for a turn the limit stops.
+- A VS Code switch now keeps every option the panel passed except those that pick the conversation, and that list is the one a terminal relaunch uses. Before, `--resume-session-at`, `--resume-drops-turn` and `--from-pr` survived a switch and could reopen the conversation at an old message.
+- A move the usage limit forces ends the process once. Two timers could both carry it out and signal the process twice.
+- A switch that cannot end its process is withdrawn, so the panel no longer hangs with its input held.
+- Usage readings, conversation records and the default account are written to a temporary file and renamed into place, so a reader never takes a half-written reading for an empty account.
+- `/account` in a VS Code tab opened before 0.4.0 names the wakeups the switch will end. The 0.4.1 entry said those wakeups were handed over; for such a tab they never were.
+- Only a stream-json session runs under cca-stream. `cca <claude binary> ...` typed in a terminal runs Claude Code itself again.
+- The shell tests unset `CCA_SHARED`, which a session started by cca 0.4.0 or later passes to the tests it runs.
+
 ## 0.4.2 (2026-11-06)
 
 - The balancer prefers an account whose usage a session has reported over one nobody has measured. An unmeasured account was scored as empty, so a move could land on one that was itself nearly spent and bounce again; it is now a last resort.

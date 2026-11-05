@@ -107,6 +107,18 @@ valid_name() {
   [[ "$RESERVED" != *" $1 "* ]] || die "'$1' is a cca command"
 }
 
+# Whether the args read stream-json on stdin: a VS Code panel's session,
+# which cca-stream can keep alive across a switch. A terminal running
+# `cca <claude> ...` reads a person's keys and runs Claude Code itself.
+reads_stream_json() {
+  local previous="" a
+  for a in "$@"; do
+    [[ "$a" == --input-format=stream-json || ( "$previous" == --input-format && "$a" == stream-json ) ]] && return 0
+    previous="$a"
+  done
+  return 1
+}
+
 # The conversation id a --resume / -r argument names, if any.
 resume_id() {
   local next="" a
@@ -408,7 +420,8 @@ case "${1:-}" in
   run) shift; launch "$(choose "$@")" "$@" ;;
   /*)
     # VS Code's claudeProcessWrapper: the extension's own binary first. A
-    # session start runs under libexec/cca-stream, which starts Claude Code
+    # session the panel talks to in stream-json runs under
+    # libexec/cca-stream, which starts Claude Code
     # through this branch again (CCA_STREAM_CHILD) and, when /account or the
     # balancer ends it for a switch, starts it again on the new account with
     # the panel still attached. The child runs here with exec, keeping its
@@ -418,7 +431,7 @@ case "${1:-}" in
     if [[ -n "$(names)" && "$PREFERENCE_EDITS" == *" ${1:-} "* && -z "$(resume_id "$@")" && -z "${CLAUDE_ACCOUNT:-}" ]]; then
       edit_everywhere "$bin" "$@"
     fi
-    if [[ -z "${CCA_STREAM_CHILD:-}" && -n "$(names)" && ( -z "${1:-}" || "$1" == -* ) ]]; then
+    if [[ -z "${CCA_STREAM_CHILD:-}" && -n "$(names)" && "${1:-}" == -* ]] && reads_stream_json "$@"; then
       mkdir -p "$ROOT/switch"
       exec python3 -I "$LIBEXEC/cca-stream" --switch "$ROOT/switch/$$" --cca "$HERE/bin/cca" --bin "$bin" -- "$@"
     fi

@@ -131,7 +131,7 @@ describe('what the session is told', () => {
   })
 
   test('the follow-up after a limit names both accounts, the window, and any work the move stopped', () => {
-    const move = { from: 'a', to: 'b', stopped: [] as string[], crons: [] }
+    const move = { from: 'a', to: 'b', interrupted: false, stopped: [] as string[], crons: [] }
     expect(followUpText({ ...move, limit: 'five_hour' })).toBe(
       '[cc-accounts] The a account reached its 5-hour usage limit and stopped your last turn. ' +
         'This conversation now runs on the b account. Carry on from where you stopped.',
@@ -146,19 +146,31 @@ describe('what the session is told', () => {
   test('the follow-up hands over the wakeups the move dropped, with or without a limit', () => {
     const loop = { schedule: '*/5 * * * *', recurring: true, prompt: 'check "CI"' }
     const once = { schedule: '30 14 6 11 *', recurring: false, prompt: 'look again' }
-    expect(followUpText({ from: 'a', to: 'b', limit: undefined, stopped: [], crons: [loop, once] })).toBe(
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, limit: undefined, stopped: [], crons: [loop, once] })).toBe(
       '[cc-accounts] This conversation moved to the b account. The move dropped your scheduled wakeups. ' +
         'Schedule them again: recurring at "*/5 * * * *" with the prompt "check \\"CI\\""; ' +
         'once at "30 14 6 11 *" with the prompt "look again". Nothing else is needed.',
     )
-    expect(followUpText({ from: 'a', to: 'b', limit: 'five_hour', stopped: [], crons: [once] })).toBe(
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, limit: 'five_hour', stopped: [], crons: [once] })).toBe(
       '[cc-accounts] The a account reached its 5-hour usage limit and stopped your last turn. ' +
         'This conversation now runs on the b account. Carry on from where you stopped. ' +
         'The move dropped your scheduled wakeups. Schedule them again: once at "30 14 6 11 *" with the prompt "look again".',
     )
   })
 
+  test('a move that cut a turn short tells the conversation to carry on, wakeups or not', () => {
+    const once = { schedule: '30 14 6 11 *', recurring: false, prompt: 'look again' }
+    const move = { from: 'a', to: 'b', interrupted: true, limit: undefined, stopped: [] }
+    expect(followUpText({ ...move, crons: [] })).toBe(
+      '[cc-accounts] Moving this conversation to the b account interrupted your turn. Carry on from where you stopped.',
+    )
+    expect(followUpText({ ...move, crons: [once] })).toBe(
+      '[cc-accounts] Moving this conversation to the b account interrupted your turn. Carry on from where you stopped. ' +
+        'The move dropped your scheduled wakeups. Schedule them again: once at "30 14 6 11 *" with the prompt "look again".',
+    )
+  })
+
   test('a move with no limit and no wakeups needs no follow-up', () => {
-    expect(followUpText({ from: 'a', to: 'b', limit: undefined, stopped: ['shell "x"'], crons: [] })).toBe(undefined)
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, limit: undefined, stopped: ['shell "x"'], crons: [] })).toBe(undefined)
   })
 })

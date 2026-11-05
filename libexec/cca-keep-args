@@ -10,13 +10,18 @@ import re
 import subprocess
 import sys
 
-# Options that pick the conversation (the relaunch adds --resume itself) or
-# start something a second run must not repeat (a worktree, a cloud session,
-# a download, a one-shot print).
-DROP = {
-    '--resume', '--continue', '--session-id', '--fork-session', '--from-pr',
-    '--resume-session-at', '--resume-drops-turn', '--print', '--worktree',
-    '--tmux', '--background', '--bg', '--cloud', '--teleport', '--desktop',
+# Options that pick the conversation, or the point in it to open at: every
+# relaunch, in a terminal or under cca-stream, resumes the conversation the
+# switch names instead. Short spellings are listed too, for a caller that
+# has no --help table to map them.
+CONVERSATION = {
+    '--resume', '-r', '--continue', '-c', '--session-id', '--fork-session', '--from-pr',
+    '--resume-session-at', '--resume-drops-turn',
+}
+# What a terminal relaunch also drops: what starts something a second run
+# must not repeat (a worktree, a cloud session, a download, a one-shot print).
+DROP = CONVERSATION | {
+    '--print', '--worktree', '--tmux', '--background', '--bg', '--cloud', '--teleport', '--desktop',
     '--environment', '--file', '--help', '--version',
 }
 
@@ -49,8 +54,11 @@ def arities(help_text):
     return table
 
 
-def keep(args, table):
-    """Returns (kept, dropped) for a relaunch."""
+def keep(args, table, drop=DROP, keep_unknown=False):
+    """Returns (kept, dropped) for a relaunch. An option `table` does not
+    know is dropped, its value with it, unless `keep_unknown`: cca-stream
+    keeps the hidden options the VS Code panel passes, and with no prompt on
+    a stream-json command line, a token after an unknown option is its value."""
     kept, dropped = [], []
     i = 0
     while i < len(args):
@@ -70,7 +78,7 @@ def keep(args, table):
             if not has_inline_value and i < len(args) and not args[i].startswith('-'):
                 group.append(args[i])
                 i += 1
-            dropped.extend(group)
+            (kept if keep_unknown and name not in drop else dropped).extend(group)
             continue
         long_name, arity = known
         if not has_inline_value:
@@ -84,7 +92,7 @@ def keep(args, table):
                 while i < len(args) and not args[i].startswith('-'):
                     group.append(args[i])
                     i += 1
-        (dropped if long_name in DROP else kept).extend(group)
+        (dropped if long_name in drop or name in drop else kept).extend(group)
     return kept, dropped
 
 

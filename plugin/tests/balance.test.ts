@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { Cron } from '../hooks/background'
-import { followUpText, formatReading, parseReading, readingOf } from '../hooks/usage'
+import type { Cron } from '../hooks/crons'
+import { followUpText, formatReading, parseReading, readingOf, type Move } from '../hooks/usage'
 import {
   BY_SESSION,
   HOME,
@@ -15,6 +15,7 @@ import {
   TERMINAL,
   endTurn,
   run,
+  schedule,
   startTurn,
   turn,
   world,
@@ -24,6 +25,12 @@ const SIGINT = ['kill', '-INT', SELF]
 const LATER = '2100-01-01T00:00:00Z'
 const SESSIONS = `${HOME}/.claude-shared/sessions`
 const LOOP: Cron = { schedule: '*/5 * * * *', recurring: true, prompt: 'check CI' }
+
+// The switch request for a move from 1 to 2.
+function request(move: Partial<Move> = {}): string {
+  const text = followUpText({ from: '1', to: '2', limit: undefined, interrupted: false, stopped: [], crons: [], ...move })
+  return `2 ${SESSION}\n${text === undefined ? '' : `${text}\n`}`
+}
 
 type World = ReturnType<typeof world>
 
@@ -60,6 +67,17 @@ describe('every session saves its account usage', () => {
     const reading = parseReading(w.files.get(`${ROOT}/usage/1.json`) ?? '')
     expect(reading?.windows.five_hour).toEqual({ percentUsed: 42.4, resetsAt: LATER })
     expect(w.statuses.at(-1)).toBe('account 1 · 5h 42%, week 7%')
+  })
+
+  test('a reading is renamed into place whole, so no session ever reads half of one', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 42)
+    await $.session.measure({ context: { window: 200000 }, rateLimits: [...w.limits], changed: ['rateLimits'] } as never)
+    expect(w.writes).toContain(`${ROOT}/usage/1.json.${SESSION}.tmp`)
+    expect(w.writes).not.toContain(`${ROOT}/usage/1.json`)
+    expect([...w.files.keys()].filter(path => path.endsWith('.tmp'))).toEqual([])
+    expect(parseReading(w.files.get(`${ROOT}/usage/1.json`) ?? '')?.account).toBe('1')
   })
 
   test('a measurement of the context alone writes nothing', async ($, on) => {
@@ -113,7 +131,7 @@ describe('a session leaves an account that is nearly spent', () => {
     limits(w, 100)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: 'five_hour', stopped: ['shell "npm test"'], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: 'five_hour', stopped: ['shell "npm test"'], crons: [] })}\n`)
     expect(w.killed).toEqual([SIGINT])
   })
 
@@ -186,6 +204,84 @@ describe('a session leaves an account that is nearly spent', () => {
   })
 })
 
+describe('a move is carried out once, and the reopened conversation is told what happened', () => {
+  test('a move the limit forces ends the process once, though the end of its turn asks for it again', async ($, on) => {
+    // requestSwitch schedules one carry-out and turn.complete another; a slow
+    // agent list keeps the first waiting while the second starts.
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    const turnId = await startTurn($)
+    limits(w, 100)
+    w.slow.agentsMs = 1
+    const ended = endTurn($, w, turnId)
+    await w.clock.advance(1)
+    await ended
+    await w.clock.advance(5000)
+    expect(w.killed).toEqual([SIGINT])
+    expect(w.writes.filter(path => path === SWITCH)).toEqual([SWITCH])
+  })
+
+  test('a wakeup set in the turn the limit stopped is handed over, its prompt whole', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    const turnId = await startTurn($)
+    const long: Cron = { schedule: '0 * * * *', recurring: true, prompt: 'review the open pull requests. '.repeat(50) }
+    schedule(w, [long])
+    limits(w, 100)
+    await endTurn($, w, turnId)
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request({ limit: 'five_hour', crons: [long] }))
+  })
+
+  test('a turn a queued message starts as the move ends the process is cut, and the conversation is told to carry on', async ($, on) => {
+    const w = world(on, SUPERVISED, 2)
+    await $.session.start(START)
+    limits(w, 91)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([SIGINT])
+    const cut = await startTurn($)
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: cut, reason: 'aborted' })
+    await w.clock.advance(3000)
+    expect(w.killed).toEqual([SIGINT, SIGINT])
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n[cc-accounts] Moving this conversation to the 2 account interrupted your turn. Carry on from where you stopped.\n`)
+  })
+
+  test('a turn still running when the first SIGINT is answered counts as cut too', async ($, on) => {
+    const w = world(on, SUPERVISED, 2)
+    await $.session.start(START)
+    limits(w, 91)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    await startTurn($)
+    await w.clock.advance(3000)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n[cc-accounts] Moving this conversation to the 2 account interrupted your turn. Carry on from where you stopped.\n`)
+  })
+
+  test('a switch the person forced to stop the work does not ask to carry it on', async ($, on) => {
+    const w = world(on, SUPERVISED, 2)
+    await $.session.start(START)
+    const turnId = await startTurn($)
+    await $.command.run(run('2 now'))
+    await w.clock.advance(0)
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId, reason: 'aborted' })
+    await w.clock.advance(3000)
+    expect(w.killed).toEqual([SIGINT, SIGINT])
+    expect(w.files.get(SWITCH)).toBe(request())
+  })
+
+  test('wakeups CronList cannot list are reported, and the move goes ahead without them', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    w.denied.set('CronList', 'not allowed here')
+    limits(w, 91)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request())
+    expect(w.logs).toContain("cc-accounts: could not list this session's scheduled wakeups (not allowed here).")
+  })
+})
+
 describe('how the move reopens the conversation', () => {
   test('in a terminal the message rides in the switch file and the session exits', async ($, on) => {
     const w = world(on, TERMINAL)
@@ -193,7 +289,7 @@ describe('how the move reopens the conversation', () => {
     limits(w, 99.5)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: 'five_hour', stopped: [], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: 'five_hour', stopped: [], crons: [] })}\n`)
     expect(w.ran).toEqual(['exit'])
   })
 
@@ -235,7 +331,7 @@ describe('how the move reopens the conversation', () => {
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.logs).toContain("cc-accounts: 1's weekly window is at 5h 92%, week 100%; moving this conversation to 2.")
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: 'seven_day', stopped: [], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: 'seven_day', stopped: [], crons: [] })}\n`)
   })
 
   test('a move hands the reopened conversation the wakeups it dropped', async ($, on) => {
@@ -245,7 +341,7 @@ describe('how the move reopens the conversation', () => {
     await turn($, w, [], [LOOP])
     await w.clock.advance(0)
     expect(w.files.get(SWITCH)).toBe(
-      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: undefined, stopped: [], crons: [LOOP] })}\n`,
+      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: undefined, stopped: [], crons: [LOOP] })}\n`,
     )
   })
 
@@ -262,6 +358,28 @@ describe('how the move reopens the conversation', () => {
     expect(w.killed).toEqual([SIGINT])
   })
 
+  test('a VS Code session started before cca-stream whose wakeups cannot be listed stays until the limit', async ($, on) => {
+    const w = world(on, STREAM)
+    await $.session.start(START)
+    w.denied.set('CronList', 'no')
+    limits(w, 91)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([])
+  })
+
+  test('/account in a tab opened before cca-stream names the wakeups the switch ends', async ($, on) => {
+    const w = world(on, STREAM)
+    await $.session.start(START)
+    await turn($, w, [], [LOOP])
+    const { text } = await $.command.run(run('2'))
+    expect(text).toBe(
+      'Switched to 2: your next message continues this conversation on it.\n' +
+        'This tab was opened before cc-accounts could reopen it in place, so the switch ends its scheduled wakeups. ' +
+        'Ask for them again once it has moved: recurring at "*/5 * * * *" with the prompt "check CI".',
+    )
+  })
+
   test('/account also hands over the wakeups it drops', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
@@ -269,7 +387,7 @@ describe('how the move reopens the conversation', () => {
     await $.command.run(run('2'))
     await w.clock.advance(0)
     expect(w.files.get(SWITCH)).toBe(
-      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: undefined, stopped: [], crons: [LOOP] })}\n`,
+      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, limit: undefined, stopped: [], crons: [LOOP] })}\n`,
     )
   })
 })

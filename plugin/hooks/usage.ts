@@ -1,4 +1,4 @@
-import type { Cron } from './background'
+import { describeCron, type Cron } from './crons'
 
 // How full each account's rate-limit windows are, and which account a
 // session should move to when its own is nearly spent. Pure: balance.ts does
@@ -132,22 +132,21 @@ export function describeUse(reading: Reading | undefined, now: number): string {
   return `5h ${Math.round(percentNow(reading, 'five_hour', now))}%${week}`
 }
 
-// A wakeup as the conversation can set it again.
-function describeCron(cron: Cron): string {
-  return `${cron.recurring ? 'recurring' : 'once'} at "${cron.schedule}" with the prompt ${JSON.stringify(cron.prompt)}`
-}
-
 // What the conversation is told when it reopens on `to`, or undefined when
 // it needs to be told nothing: `limit`, the window whose limit stopped its
-// last turn; `stopped`, the background work the move ended; `crons`, the
-// scheduled wakeups the move dropped.
-export function followUpText(move: {
+// last turn; `interrupted`, whether ending the process cut short a turn a
+// message started after the switch was decided; `stopped`, the background
+// work the move ended; `crons`, the scheduled wakeups the move dropped.
+export type Move = {
   from: string | undefined
   to: string
   limit: string | undefined
+  interrupted: boolean
   stopped: readonly string[]
   crons: readonly Cron[]
-}): string | undefined {
+}
+
+export function followUpText(move: Move): string | undefined {
   const parts: string[] = []
   if (move.limit !== undefined) {
     parts.push(
@@ -157,12 +156,15 @@ export function followUpText(move: {
     if (move.stopped.length > 0) {
       parts.push(`The move stopped this background work, so start again whatever of it is still needed: ${move.stopped.join(', ')}.`)
     }
+  } else if (move.interrupted) {
+    parts.push(`Moving this conversation to the ${move.to} account interrupted your turn. Carry on from where you stopped.`)
   }
   if (move.crons.length > 0) {
-    if (move.limit === undefined) parts.push(`This conversation moved to the ${move.to} account.`)
+    const carryOn = parts.length > 0
+    if (!carryOn) parts.push(`This conversation moved to the ${move.to} account.`)
     parts.push(
       `The move dropped your scheduled wakeups. Schedule them again: ${move.crons.map(describeCron).join('; ')}.` +
-        (move.limit === undefined ? ' Nothing else is needed.' : ''),
+        (carryOn ? '' : ' Nothing else is needed.'),
     )
   }
   return parts.length === 0 ? undefined : `[cc-accounts] ${parts.join(' ')}`

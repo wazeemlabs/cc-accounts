@@ -1,7 +1,9 @@
 """Tests for libexec/cca-stream, which keeps a VS Code session's process alive
 across an account switch. Run: python3 -m unittest discover -s tests"""
+import argparse
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -12,6 +14,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import types
 import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -25,15 +28,19 @@ stream = importlib.util.module_from_spec(_spec)
 _loader.exec_module(stream)
 
 # Stands in for `cca <claude>`: logs how it was started and every line it
-# reads, answers control requests, echoes user messages, and on `switch:<text>`
-# writes <text> to the switch file and exits, as the plugin's switch does.
+# reads, answers control requests, answers user messages, and on
+# `switch:<text>` writes <text> to the switch file and exits, as the plugin's
+# switch does. Run with --replay-user-messages it first echoes each user
+# message it takes, as Claude Code does, except `ignore:` ones, which it reads
+# and never takes, like a message still in the pipe when a process ends.
 FAKE = textwrap.dedent('''\
     import json, os, sys
     log = open(os.environ['FAKE_LOG'], 'a')
     def note(value):
         log.write(json.dumps(value) + '\\n'); log.flush()
     note({'start': sys.argv[2:], 'bin': sys.argv[1], 'child': os.environ.get('CCA_STREAM_CHILD'),
-          'switch': os.environ.get('CLAUDE_ACCOUNT_SWITCH_FILE')})
+          'switch': os.environ.get('CLAUDE_ACCOUNT_SWITCH_FILE'), 'supervisor': os.environ.get('CCA_STREAM_PID')})
+    echoes = '--replay-user-messages' in sys.argv
     for line in sys.stdin:
         message = json.loads(line)
         note({'got': message})
@@ -42,6 +49,10 @@ FAKE = textwrap.dedent('''\
                   'request_id': message['request_id'], 'response': {}}}), flush=True)
             continue
         text = message['message']['content'][0]['text'] if message['type'] == 'user' else ''
+        if text.startswith('ignore:'):
+            continue
+        if echoes and message['type'] == 'user':
+            print(json.dumps({'type': 'user', 'uuid': message.get('uuid'), 'isReplay': True}), flush=True)
         if text.startswith('switch:'):
             with open(os.environ['CLAUDE_ACCOUNT_SWITCH_FILE'], 'w') as handle:
                 handle.write(text[len('switch:'):])
@@ -54,9 +65,18 @@ FAKE = textwrap.dedent('''\
 ''')
 
 
-def user(text):
-    return {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
-            'parent_tool_use_id': None, 'session_id': ID}
+def user(text, uuid=None):
+    message = {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
+               'parent_tool_use_id': None, 'session_id': ID}
+    return message if uuid is None else {**message, 'uuid': uuid}
+
+
+def without_uuid(message):
+    return {key: value for key, value in message.items() if key != 'uuid'}
+
+
+def line(value):
+    return (json.dumps(value) + '\n').encode()
 
 
 def control(request_id, subtype, **fields):
@@ -123,6 +143,18 @@ class Supervised:
 
 
 class RelaunchArgs(unittest.TestCase):
+    def test_drops_every_option_that_picks_a_point_in_the_conversation(self):
+        self.assertEqual(stream.relaunch_args(['--verbose', '--resume', 'x', '--resume-session-at', 'm1',
+                                               '--resume-drops-turn', '--from-pr', '12', '--debug'], ID),
+                         ['--verbose', '--debug', '--resume', ID])
+        self.assertTrue({'--resume-session-at', '--resume-drops-turn', '--from-pr'} <= stream.keep_args.CONVERSATION)
+
+    def test_keeps_the_hidden_options_the_panel_passes_and_drops_a_prompt(self):
+        panel = ['--output-format', 'stream-json', '--max-thinking-tokens=31999', '--permission-prompt-tool=stdio',
+                 '--debug-to-stderr', '--enable-auth-status', '--replay-user-messages']
+        self.assertEqual(stream.relaunch_args([*panel, f'--resume={ID}'], ID), [*panel, '--resume', ID])
+        self.assertEqual(stream.relaunch_args(['--verbose', '--', 'a prompt'], ID), ['--verbose', '--resume', ID])
+
     def test_resumes_the_named_conversation_and_drops_whatever_chose_one_before(self):
         other = 'aaaaaaaa-1111-4222-8333-944455556666'
         self.assertEqual(stream.relaunch_args(['--verbose', f'--resume={other}', '--debug'], ID),
@@ -132,6 +164,91 @@ class RelaunchArgs(unittest.TestCase):
                          ['--x', '--resume', ID])
         self.assertEqual(stream.relaunch_args([f'--session-id={other}'], ID), ['--resume', ID])
         self.assertEqual(stream.relaunch_args([], ID), ['--resume', ID])
+
+
+class Unread(unittest.TestCase):
+    def test_forgets_a_message_once_claude_code_echoes_it_and_hands_back_the_rest_in_order(self):
+        unread = stream.Unread(True)
+        for name in ('a', 'b', 'c'):
+            unread.sending(line(user(name, f'u-{name}')))
+        unread.echoed(line({'type': 'user', 'uuid': 'u-b', 'isReplay': True}))
+        self.assertEqual(unread.take(), [line(user('a', 'u-a')), line(user('c', 'u-c'))])
+        self.assertEqual(unread.take(), [])
+
+    def test_only_an_echo_counts_and_only_user_messages_with_a_uuid_are_kept(self):
+        unread = stream.Unread(True)
+        unread.sending(line(user('a', 'u-a')))
+        unread.sending(line(user('no uuid')))
+        unread.sending(line(control('p1', 'interrupt')))
+        unread.sending(b'not json "user"\n')
+        unread.echoed(line({'type': 'user', 'uuid': 'u-a'}))
+        unread.echoed(line({'type': 'assistant', 'uuid': 'u-a', 'isReplay': True}))
+        self.assertEqual(unread.take(), [line(user('a', 'u-a'))])
+
+    def test_a_message_that_never_reached_the_child_is_forgotten_and_an_early_echo_still_counts(self):
+        unread = stream.Unread(True)
+        unread.forget(unread.sending(line(user('a', 'u-a'))))
+        unread.sending(line(user('b', 'u-b')))
+        unread.echoed(line({'type': 'user', 'uuid': 'u-b', 'isReplay': True}))
+        self.assertEqual(unread.take(), [])
+
+    def test_keeps_nothing_when_the_child_does_not_echo(self):
+        unread = stream.Unread(False)
+        unread.sending(line(user('a', 'u-a')))
+        self.assertEqual(unread.take(), [])
+
+    def test_the_follow_up_carries_a_uuid_of_its_own(self):
+        first, second = (json.loads(stream.user_message('Carry on.', ID)) for _ in range(2))
+        self.assertEqual(without_uuid(first), user('Carry on.'))
+        self.assertNotEqual(first['uuid'], second['uuid'])
+
+
+class InProcess(unittest.TestCase):
+    """The supervisor's parts, driven one step at a time."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.switch = pathlib.Path(self.tmp.name) / 'switch'
+        options = argparse.Namespace(switch=str(self.switch), cca='/x/cca', bin='/x/claude')
+        self.supervisor = stream.Supervisor(options, [])
+        self.addCleanup(os.close, self.supervisor.release_read)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def release(self):
+        """SIGUSR1 once, then pump_releases until the pipe is drained."""
+        self.supervisor.release(signal.SIGUSR1, None)
+        os.close(self.supervisor.release_write)
+        self.supervisor.pump_releases()
+
+    def test_a_withdrawn_switch_releases_what_was_held_to_the_child_still_running(self):
+        child = types.SimpleNamespace(stdin=io.BytesIO())
+        self.supervisor.child = child
+        self.supervisor.held = [line(user('held'))]
+        self.release()
+        self.assertEqual(child.stdin.getvalue(), line(user('held')))
+        self.assertEqual(self.supervisor.held, [])
+
+    def test_a_release_while_the_switch_file_stands_keeps_holding(self):
+        self.switch.write_text(f'work {ID}\n')
+        child = types.SimpleNamespace(stdin=io.BytesIO())
+        self.supervisor.child = child
+        self.supervisor.held = [line(user('held'))]
+        self.release()
+        self.assertEqual(child.stdin.getvalue(), b'')
+        self.assertEqual(self.supervisor.held, [line(user('held'))])
+
+    def test_only_the_current_childs_output_reaches_the_panel(self):
+        os.close(self.supervisor.release_write)
+        supervisor = self.supervisor
+        supervisor.out = io.BytesIO()
+        old, new = (types.SimpleNamespace(stdout=io.BytesIO(b'{"type":"assistant"}\n')) for _ in range(2))
+        supervisor.output_child = new
+        supervisor.pump_stdout(old)
+        self.assertEqual(supervisor.out.getvalue(), b'')
+        supervisor.pump_stdout(new)
+        self.assertEqual(supervisor.out.getvalue(), b'{"type":"assistant"}\n')
 
 
 class ReadSwitch(unittest.TestCase):
@@ -177,6 +294,7 @@ class Supervisor(unittest.TestCase):
         start = s.starts()[0]
         self.assertEqual((start['bin'], start['start'], start['child']), ('/x/claude', ['--verbose'], '1'))
         self.assertEqual(start['switch'], str(s.switch))
+        self.assertEqual(start['supervisor'], str(s.process.pid))
 
     def test_the_panel_closing_stdin_ends_the_session(self):
         s = Supervised(self, [])
@@ -212,7 +330,7 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(got[1]['request'], {'subtype': 'set_permission_mode', 'mode': 'auto'})
         self.assertTrue(got[0]['request_id'].startswith('cca-replay-'))
         self.assertNotEqual(got[0]['request_id'], got[1]['request_id'])
-        self.assertEqual(got[2], user('Carry on.'))
+        self.assertEqual(without_uuid(got[2]), user('Carry on.'))
         self.assertFalse(s.switch.exists())
         self.assertIn(f'cca: resuming {ID} on account work', s.process.stderr.read().decode())
 
@@ -245,6 +363,24 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(s.process.wait(timeout=WAIT), 0)
         self.assertEqual(len(s.starts()), 1)
         self.assertIn('not "<account> <conversation id>"', s.process.stderr.read().decode())
+
+    def test_a_message_the_old_child_never_took_is_sent_to_the_new_one_after_the_follow_up(self):
+        s = Supervised(self, ['--replay-user-messages'])
+        s.send(user('hello', 'u-1'))
+        self.assertEqual(s.next(), {'type': 'user', 'uuid': 'u-1', 'isReplay': True})
+        s.next()
+        s.send(user('ignore:lost', 'u-2'))
+        s.send(user(f'switch:work {ID}\nCarry on.\n', 'u-3'))
+        self.assertEqual(s.next()['uuid'], 'u-3')
+        s.next()
+        # The new child takes the follow-up, then the message the old one never did.
+        follow_up = s.next()
+        self.assertEqual(follow_up['isReplay'], True)
+        self.assertEqual(s.next(), {'type': 'assistant', 'text': 'Carry on.'})
+        s.close()
+        got = s.received(1)
+        self.assertEqual([without_uuid(m) for m in got], [user('Carry on.'), user('ignore:lost')])
+        self.assertEqual(got[1]['uuid'], 'u-2')
 
     def test_a_termination_signal_reaches_the_child_and_no_switch_follows(self):
         s = Supervised(self, [])

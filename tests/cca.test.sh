@@ -86,26 +86,35 @@ check "a switch that carries a follow-up reopens the conversation with it as the
   "dir=$HOME/.claude-two account=2 args=--model opus --resume $ID Carry on from where you stopped." "$(sed -n 2p "$LOG")"
 
 setup
-"$CCA" "$CCA_CLAUDE" --output-format stream-json < /dev/null
+"$CCA" "$CCA_CLAUDE" --input-format stream-json < /dev/null
 check "a VS Code session runs under cca-stream, which hands Claude Code a switch file" \
   "switch=set child=unset" "$(cat "$LOG.switchfile")"
+
+setup
+"$CCA" "$CCA_CLAUDE" --input-format=stream-json < /dev/null
+check "and so does one that spells the input format with =" "switch=set child=unset" "$(cat "$LOG.switchfile")"
+
+setup
+"$CCA" "$CCA_CLAUDE" --output-format stream-json --resume "$ID" < /dev/null
+check "a run of the wrapper that reads no stream-json, as a terminal's does, runs Claude Code itself" \
+  "switch= child=unset" "$(cat "$LOG.switchfile")"
 
 setup
 echo 2 > "$CCA_ROOT/by-session/$ID"
 # The panel keeps stdin open for the session's life: a FIFO this shell holds
 # open for reading and writing never reaches end of file.
 mkfifo "$WORK/panel"; exec 3<>"$WORK/panel"
-FAKE_SWITCH="2 $ID" "$CCA" "$CCA_CLAUDE" --output-format stream-json <&3 2>"$WORK/err"; status=$?
+FAKE_SWITCH="2 $ID" "$CCA" "$CCA_CLAUDE" --input-format stream-json <&3 2>"$WORK/err"; status=$?
 exec 3>&-; rm -f "$WORK/panel"
 check "a switch in a VS Code session reopens the conversation on the new account behind the same wrapper" \
-  "dir=unset account=1 args=--output-format stream-json|dir=$HOME/.claude-two account=2 args=--output-format stream-json --resume $ID" \
+  "dir=unset account=1 args=--input-format stream-json|dir=$HOME/.claude-two account=2 args=--input-format stream-json --resume $ID" \
   "$(paste -sd'|' "$LOG")"
 check "and the wrapper exits with the reopened run's status" "0" "$status"
 check "and says what it did" "cca: resuming $ID on account 2" "$(cat "$WORK/err")"
 check "and leaves no switch file behind" "0" "$(find "$CCA_ROOT/switch" -type f | wc -l | tr -d ' ')"
 
 setup
-FAKE_STATUS=6 "$CCA" "$CCA_CLAUDE" --output-format stream-json < /dev/null; status=$?
+FAKE_STATUS=6 "$CCA" "$CCA_CLAUDE" --input-format stream-json < /dev/null; status=$?
 check "a VS Code session that ends with no switch request exits with Claude Code's status" "6" "$status"
 
 setup

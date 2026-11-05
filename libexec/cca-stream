@@ -18,9 +18,19 @@ of every kind that sets session state (`set_*`, `ui_attach` until a
 `ui_detach`). The new child's replies to those replays are dropped: the panel
 already had its answers.
 
+No message the panel sends is lost to a switch. Once the switch file exists,
+lines are held for the new child. A user message the old child was sent but
+never took into a turn is sent to the new one again: with
+--replay-user-messages, Claude Code echoes every user message it takes, by
+its uuid. When the plugin could not end the child after all, it removes the
+switch file and sends SIGUSR1, and the held lines go to the child that is
+still running.
+
 Usage: cca-stream --switch FILE --cca CCA --bin CLAUDE -- [claude args]
 """
 import argparse
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
@@ -28,14 +38,24 @@ import signal
 import subprocess
 import sys
 import threading
+import uuid
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 REPLAY_PREFIX = 'cca-replay-'
 OUTPUT_GRACE_SECONDS = 10
-# Options that pick or start a conversation: a relaunch resumes the one the
-# switch file names instead. Each takes a value except the flags.
-CONVERSATION_OPTIONS = {'--resume': True, '-r': True, '--session-id': True, '--continue': False, '-c': False,
-                        '--fork-session': False}
+REPLAY_FLAG = '--replay-user-messages'
+
+
+def _load_keep_args():
+    """libexec/cca-keep-args, which defines what a relaunch carries over."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cca-keep-args')
+    loader = importlib.machinery.SourceFileLoader('cca_keep_args', path)
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader('cca_keep_args', loader))
+    loader.exec_module(module)
+    return module
+
+
+keep_args = _load_keep_args()
 
 
 def log(text):
@@ -43,19 +63,11 @@ def log(text):
 
 
 def relaunch_args(args, conversation):
-    """The first run's args without the options that choose a conversation,
-    then `--resume <conversation>`."""
-    kept = []
-    skip = False
-    for arg in args:
-        if skip:
-            skip = False
-            continue
-        name = arg.split('=', 1)[0]
-        if name in CONVERSATION_OPTIONS:
-            skip = CONVERSATION_OPTIONS[name] and '=' not in arg
-            continue
-        kept.append(arg)
+    """The first run's args without the options that choose a conversation
+    (cca-keep-args' CONVERSATION, which a terminal relaunch drops too), then
+    `--resume <conversation>`. Every other option the panel passed is kept,
+    the hidden ones included."""
+    kept, _dropped = keep_args.keep(args, {}, drop=keep_args.CONVERSATION, keep_unknown=True)
     return [*kept, '--resume', conversation]
 
 
@@ -77,9 +89,64 @@ def read_switch(path):
 
 
 def user_message(text, conversation):
-    message = {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
+    message = {'type': 'user', 'uuid': str(uuid.uuid4()),
+               'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
                'parent_tool_use_id': None, 'session_id': conversation}
     return (json.dumps(message) + '\n').encode()
+
+
+def user_uuid(line, echo):
+    """The uuid of a user message line: one the panel sent, or with `echo`,
+    Claude Code's echo of one it took (isReplay). None for anything else."""
+    if b'"user"' not in line or (echo and b'"isReplay"' not in line):
+        return None
+    try:
+        value = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get('type') != 'user' or (echo and value.get('isReplay') is not True):
+        return None
+    found = value.get('uuid')
+    return found if isinstance(found, str) and found else None
+
+
+class Unread:
+    """The user messages sent to the current child that it has not echoed,
+    so has not taken into the conversation. Kept only when the child echoes
+    (--replay-user-messages); without echoes nothing can be told apart."""
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.lock = threading.Lock()
+        self.lines = {}
+
+    def sending(self, line):
+        """Notes `line` before it is written, so that an echo, which can come
+        back before the write returns, finds it. Returns its uuid, or None
+        when it is not kept."""
+        found = user_uuid(line, echo=False) if self.enabled else None
+        if found is not None:
+            with self.lock:
+                self.lines[found] = line
+        return found
+
+    def forget(self, found):
+        """A line noted with `sending` that never reached the child."""
+        if found is not None:
+            with self.lock:
+                self.lines.pop(found, None)
+
+    def echoed(self, line):
+        found = user_uuid(line, echo=True) if self.enabled else None
+        if found is not None:
+            with self.lock:
+                self.lines.pop(found, None)
+
+    def take(self):
+        """The unread lines, in the order sent, forgotten here."""
+        with self.lock:
+            lines, self.lines = list(self.lines.values()), {}
+        return lines
 
 
 class Setup:
@@ -159,9 +226,17 @@ class Supervisor:
         self.stdin_closed = False
         self.stopping = False
         self.out = sys.stdout.buffer
+        self.out_lock = threading.Lock()
+        # The child whose output reaches the panel; a reader of an older one
+        # (a process it left holding its stdout) is dropped.
+        self.output_child = None
+        self.unread = Unread(REPLAY_FLAG in args)
+        # SIGUSR1 writes here; pump_releases reads it.
+        self.release_read, self.release_write = os.pipe()
 
     def env(self):
-        return {**os.environ, 'CCA_STREAM_CHILD': '1', 'CLAUDE_ACCOUNT_SWITCH_FILE': self.options.switch}
+        return {**os.environ, 'CCA_STREAM_CHILD': '1', 'CLAUDE_ACCOUNT_SWITCH_FILE': self.options.switch,
+                'CCA_STREAM_PID': str(os.getpid())}
 
     def start(self, args):
         return subprocess.Popen([self.options.cca, self.options.bin, *args], stdin=subprocess.PIPE,
@@ -176,14 +251,34 @@ class Supervisor:
         except (BrokenPipeError, OSError):
             return False
 
+    def deliver(self, child, line):
+        """Sends a panel line to `child`, or holds it when it has gone."""
+        noted = self.unread.sending(line)
+        if not self.send(child, line):
+            self.unread.forget(noted)
+            self.held.append(line)
+
+    def holding(self):
+        """Whether panel lines wait for a new child. Called with the lock.
+        Once the plugin has written a switch request the child is about to
+        end, and a line written to it now would be lost."""
+        return self.child is None or os.path.exists(self.options.switch)
+
+    def flush_held(self):
+        """Sends the held lines to the running child. Called with the lock."""
+        held, self.held = self.held, []
+        for line in held:
+            self.deliver(self.child, line)
+
     def pump_stdin(self):
         for line in read_lines(sys.stdin.fileno()):
             with self.lock:
                 self.setup.note(line)
-                # Once the plugin has written a switch request the child is
-                # about to end, and a line written to it now would be lost.
-                if self.child is None or os.path.exists(self.options.switch) or not self.send(self.child, line):
+                if self.holding():
                     self.held.append(line)
+                    continue
+                self.flush_held()
+                self.deliver(self.child, line)
         with self.lock:
             self.stdin_closed = True
             if self.child is not None:
@@ -197,8 +292,23 @@ class Supervisor:
         for line in iter(child.stdout.readline, b''):
             if is_replay_answer(line):
                 continue
-            self.out.write(line)
-            self.out.flush()
+            with self.out_lock:
+                if child is not self.output_child:
+                    continue
+                self.unread.echoed(line)
+                self.out.write(line)
+                self.out.flush()
+
+    def pump_releases(self):
+        """The plugin withdrew a switch it could not carry out (SIGUSR1):
+        what was held goes to the child still running."""
+        while os.read(self.release_read, 1):
+            with self.lock:
+                if not self.holding():
+                    self.flush_held()
+
+    def release(self, _signum, _frame):
+        os.write(self.release_write, b'.')
 
     def forward(self, signum, _frame):
         if signum != signal.SIGINT:
@@ -211,9 +321,9 @@ class Supervisor:
         """Makes `child` current: `before` first, then what the panel sent
         meanwhile."""
         with self.lock:
-            for line in [*before, *self.held]:
-                self.send(child, line)
-            self.held = []
+            held, self.held = self.held, []
+            for line in [*before, *held]:
+                self.deliver(child, line)
             self.child = child
             if self.stdin_closed:
                 child.stdin.close()
@@ -221,17 +331,24 @@ class Supervisor:
     def run(self):
         for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             signal.signal(signum, self.forward)
+        signal.signal(signal.SIGUSR1, self.release)
         self.remove_switch()
         child = self.start(self.args)
         self.attach(child, [])
         threading.Thread(target=self.pump_stdin, daemon=True).start()
+        threading.Thread(target=self.pump_releases, daemon=True).start()
         while True:
+            with self.out_lock:
+                self.output_child = child
             reader = threading.Thread(target=self.pump_stdout, args=(child,), daemon=True)
             reader.start()
             status = child.wait()
             # A process the child left behind may hold its stdout open; what
-            # it prints after the child's exit is not worth hanging for.
+            # it prints after the child's exit is not worth hanging for, and
+            # once the next child starts it is dropped.
             reader.join(timeout=OUTPUT_GRACE_SECONDS)
+            if reader.is_alive():
+                log(f'output still open {OUTPUT_GRACE_SECONDS}s after the process ended; dropping the rest')
             with self.lock:
                 self.child = None
             try:
@@ -245,9 +362,12 @@ class Supervisor:
             account, conversation, follow_up = request
             log(f'resuming {conversation} on account {account}')
             child = self.start(relaunch_args(self.args, conversation))
+            # The setup, the plugin's follow-up, then the messages the old
+            # child never took, ahead of what the panel sent meanwhile.
             before = self.setup.replay()
             if follow_up:
                 before.append(user_message(follow_up, conversation))
+            before.extend(self.unread.take())
             self.attach(child, before)
             # Asked to stop while there was no child to pass it to.
             if self.stopping:

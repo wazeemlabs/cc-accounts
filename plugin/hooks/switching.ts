@@ -3,9 +3,10 @@
 // in flight and all background work (subagents, shells, monitors), so a
 // switch waits for the turn to end and the work to finish unless forced.
 import type { EngineInterface } from 'claude-code'
-import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Cron, type Task } from './background'
-import { followUpText } from './usage'
-import { record, type Context } from './context'
+import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
+import { liveCrons } from './crons'
+import { followUpText, type Move } from './usage'
+import { describeError, record, type Context } from './context'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
 // waits on the process, reads the switch file and resumes the conversation
@@ -13,9 +14,11 @@ import { record, type Context } from './context'
 // the panel still attached, when it gave the process a switch file; without
 // one (a process started before cca-stream existed), the extension starts a
 // new process at the next message, which cca opens on the recorded account.
+// `supervisor`: cca-stream's pid, told when a switch it holds input for is
+// withdrawn.
 export type Exit =
   | { kind: 'terminal'; switchFile: string; sessionId: string }
-  | { kind: 'stream'; pid: string; switchFile: string | undefined; sessionId: string }
+  | { kind: 'stream'; pid: string; switchFile: string | undefined; supervisor: string | undefined; sessionId: string }
 
 // The switch asked for and not carried out yet: from which account, and, for
 // a move the usage limit forced, which window ran out.
@@ -32,14 +35,15 @@ export type SwitchState = {
   interactive: boolean
   turns: number
   tasks: Map<string, Task>
-  // The scheduled wakeups the last turn's Stop hook listed.
-  crons: Cron[]
   pending: Pending | undefined
   ending: boolean
+  // Whether a main-loop turn ended while the process was being ended: one a
+  // message started after the switch was decided, which the switch cut short.
+  cutTurn: boolean
 }
 
 export function newState(): SwitchState {
-  return { root: undefined, interactive: false, turns: 0, tasks: new Map(), crons: [], pending: undefined, ending: false }
+  return { root: undefined, interactive: false, turns: 0, tasks: new Map(), pending: undefined, ending: false, cutTurn: false }
 }
 
 // Where the plugin's Stop hook (record-tasks.py) leaves a session's
@@ -97,7 +101,6 @@ export async function readRecord($: EngineInterface, state: SwitchState): Promis
     return
   }
   if (found.kind !== 'tasks') return
-  state.crons = found.crons
   state.tasks.clear()
   for (const task of found.tasks) state.tasks.set(task.id, task)
 }
@@ -116,8 +119,9 @@ async function alive($: EngineInterface, pid: string): Promise<boolean> {
 // conversation). So each signal is followed by a wait for the exit, the
 // second SIGINT ends the now idle session, and SIGTERM is the last resort
 // (exit 143, which the panel shows as a failure, though the conversation
-// still reopens at the next message). The waits stay well inside a
-// dispatch's budget.
+// still reopens at the next message). `between` runs before each signal
+// after the first, while the process still runs. The waits stay well inside
+// a dispatch's budget.
 const END_STEPS: readonly { signal: string; waitMs: number }[] = [
   { signal: '-INT', waitMs: 3000 },
   { signal: '-INT', waitMs: 2000 },
@@ -125,8 +129,9 @@ const END_STEPS: readonly { signal: string; waitMs: number }[] = [
 ]
 const END_POLL_MS = 500
 
-async function endProcess($: EngineInterface, pid: string): Promise<string | undefined> {
-  for (const step of END_STEPS) {
+async function endProcess($: EngineInterface, pid: string, between: () => Promise<void>): Promise<string | undefined> {
+  for (const [index, step] of END_STEPS.entries()) {
+    if (index > 0) await between()
     const { exitCode, stderr } = await $.process.run(['kill', step.signal, pid])
     if (exitCode !== 0) return `kill ${step.signal} failed: ${stderr.trim()}`
     for (let waited = 0; waited < step.waitMs; waited += END_POLL_MS) {
@@ -142,20 +147,50 @@ export function switchRequest(target: string, sessionId: string, followUp: strin
   return `${target} ${sessionId}\n${followUp === undefined ? '' : `${followUp}\n`}`
 }
 
-async function runExit($: EngineInterface, exit: Exit, target: string, followUp: string | undefined): Promise<void> {
-  if (exit.switchFile !== undefined) await $.fs.write(exit.switchFile, switchRequest(target, exit.sessionId, followUp))
+// A switch that could not end the process is withdrawn: nothing should
+// reopen the conversation when this process ends some other way, and
+// cca-stream, which holds the panel's input while the switch file exists,
+// is told to pass it to this process again.
+async function withdraw($: EngineInterface, exit: Exit): Promise<void> {
+  if (exit.kind !== 'stream' || exit.switchFile === undefined) return
+  const removed = await $.process.run(['rm', '-f', exit.switchFile])
+  if (removed.exitCode !== 0) throw new Error(`could not remove ${exit.switchFile}: ${removed.stderr.trim()}`)
+  if (exit.supervisor === undefined) return
+  const told = await $.process.run(['kill', '-USR1', exit.supervisor])
+  if (told.exitCode !== 0) throw new Error(`could not tell cca-stream ${exit.supervisor}: ${told.stderr.trim()}`)
+}
+
+// Ends this process for `pending`; `move` is what the reopened conversation
+// is told. A turn a message started after the switch was decided (one the
+// panel queued as the last turn ended) is cut short by the first SIGINT, so
+// before the next signal the request is rewritten to tell the conversation
+// to carry on, unless the person forced the switch to stop the work.
+async function runExit($: EngineInterface, state: SwitchState, pending: Pending, move: Move): Promise<void> {
+  const { exit, target } = pending
+  const ask = async (followUp: string | undefined) => {
+    if (exit.switchFile !== undefined) await $.fs.write(exit.switchFile, switchRequest(target, exit.sessionId, followUp))
+  }
+  await ask(followUpText(move))
   if (exit.kind === 'terminal') {
     try {
       await $.command.run({ command: 'exit', args: '' })
     } catch (error) {
-      $.ui.log(`cc-accounts: /exit failed (${String(error)}); exit and cca will switch.`)
+      $.ui.log(`cc-accounts: /exit failed (${describeError(error)}); exit and cca will switch.`)
     }
     return
   }
-  const failure = await endProcess($, exit.pid)
-  if (failure !== undefined) {
-    $.ui.log(`cc-accounts: could not end this session (${failure}); close this tab and reopen the conversation.`)
-  }
+  let toldCut = false
+  const failure = await endProcess($, exit.pid, async () => {
+    if (toldCut || pending.force || !(state.cutTurn || state.turns > 0)) return
+    toldCut = true
+    await ask(followUpText({ ...move, interrupted: true }))
+  })
+  if (failure === undefined) return
+  $.ui.log(
+    `cc-accounts: could not end this session (${failure}), so it runs on as it is; ` +
+      `close this tab and reopen the conversation to move it to ${target}.`,
+  )
+  await withdraw($, exit)
 }
 
 // Ends this process for the pending switch once nothing it would stop is
@@ -167,20 +202,24 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
     const wait = await waitingFor($, state)
     if (wait.turn || wait.tasks.length > 0) return
   }
-  // Checked again: another timer may have carried it out during the wait.
-  if (state.pending === undefined || state.ending) return
-  const { exit, target, from, limit } = state.pending
-  // What the reopened conversation is told, as things stand now: the work a
-  // forced move stops, which a limit-forced one asks it to start again, and
-  // the wakeups every move drops.
-  const stopped = limit === undefined ? [] : (await waitingFor($, state)).tasks.map(nameTask)
-  const followUp = followUpText({ from, to: target, limit, stopped, crons: state.crons })
+  // Claimed before anything else is awaited: another timer that got this far
+  // meanwhile (a forced move schedules one, and so does its turn's end)
+  // stops here.
+  const pending = state.pending
+  if (pending === undefined || state.ending) return
   state.pending = undefined
   state.ending = true
+  state.cutTurn = false
+  const { exit, target, from, limit } = pending
   try {
-    await runExit($, exit, target, followUp)
+    // What the reopened conversation is told, as things stand now: the work a
+    // forced move stops, which a limit-forced one asks it to start again, and
+    // the wakeups every move drops. Only a switch file carries a follow-up.
+    const stopped = limit === undefined ? [] : (await waitingFor($, state)).tasks.map(nameTask)
+    const crons = exit.switchFile === undefined ? [] : ((await liveCrons($)) ?? [])
+    await runExit($, state, pending, { from, to: target, limit, interrupted: false, stopped, crons })
   } catch (error) {
-    $.ui.log(`cc-accounts: the switch to ${target} failed (${String(error)}); type /account ${target} again.`)
+    $.ui.log(`cc-accounts: the switch to ${target} failed (${describeError(error)}); type /account ${target} again.`)
   } finally {
     state.ending = false
   }

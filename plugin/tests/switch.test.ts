@@ -25,13 +25,10 @@ describe('background work', () => {
     expect(parseRecord('{"tasks":[{"id":"b1","type":"shell","status":"running","description":"npm test"}]}')).toEqual({
       kind: 'tasks',
       tasks: [SHELL],
-      crons: [],
     })
-    expect(parseRecord('{"tasks":[]}')).toEqual({ kind: 'tasks', tasks: [], crons: [] })
-    expect(parseRecord('{"tasks":[],"crons":[{"id":"c1","schedule":"* * * * *","recurring":true,"prompt":"p"}]}'))
-      .toEqual({ kind: 'tasks', tasks: [], crons: [{ schedule: '* * * * *', recurring: true, prompt: 'p' }] })
-    expect(parseRecord('{"tasks":[],"crons":"c1"}')).toBe(undefined)
-    expect(parseRecord('{"tasks":[],"crons":[{"id":"c1"}]}')).toBe(undefined)
+    expect(parseRecord('{"tasks":[]}')).toEqual({ kind: 'tasks', tasks: [] })
+    // 0.4.1 also saved wakeups; CronList is read for them now.
+    expect(parseRecord('{"tasks":[],"crons":[{"id":"c1","schedule":"* * * * *"}]}')).toEqual({ kind: 'tasks', tasks: [] })
     expect(parseRecord(turnMark('t1'))).toEqual({ kind: 'turn', turnId: 't1' })
     expect(parseRecord('{"tasks":[{"type":"shell"}]}')).toBe(undefined)
     expect(parseRecord('{"tasks":"b1"}')).toBe(undefined)

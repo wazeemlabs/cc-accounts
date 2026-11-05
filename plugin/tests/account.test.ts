@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { currentAccount, parseAsk, parseTable } from '../hooks/accounts'
-import { HOME, ROOT, SELF, SESSION, START, STREAM, SWITCH, TERMINAL, run, world } from './world'
+import { HOME, ROOT, SELF, SESSION, START, STREAM, SUPERVISED, SUPERVISOR, SWITCH, TERMINAL, run, world } from './world'
 
 describe('parsing', () => {
   test('reads the account table, skipping blank and malformed lines', () => {
@@ -115,8 +115,28 @@ describe('/account', () => {
     await w.clock.advance(10000)
     expect(w.killed).toEqual([['kill', '-INT', SELF], ['kill', '-INT', SELF], ['kill', '-TERM', SELF]])
     expect(w.logs).toEqual([
-      'cc-accounts: could not end this session (still running after SIGINT, SIGINT, SIGTERM); close this tab and reopen the conversation.',
+      'cc-accounts: could not end this session (still running after SIGINT, SIGINT, SIGTERM), so it runs on as it is; ' +
+        'close this tab and reopen the conversation to move it to 2.',
     ])
+  })
+
+  test('a switch that cannot end the process is withdrawn, and cca-stream passes the panel on to it again', async ($, on) => {
+    const w = world(on, SUPERVISED, Infinity)
+    await $.session.start(START)
+    await $.command.run(run('2'))
+    await w.clock.advance(10000)
+    expect(w.killed.length).toBe(3)
+    expect(w.files.has(SWITCH)).toBe(false)
+    expect(w.released).toEqual([SUPERVISOR])
+  })
+
+  test('/account default is written whole, never half for cca to read', async ($, on) => {
+    const w = world(on, STREAM)
+    await $.session.start(START)
+    await $.command.run(run('default 2'))
+    expect(w.files.get(`${ROOT}/default`)).toBe('2\n')
+    expect(w.writes).not.toContain(`${ROOT}/default`)
+    expect([...w.files.keys()].filter(path => path.endsWith('.tmp'))).toEqual([])
   })
 
   test('a claude started inside a cca terminal session does not switch its parent', async ($, on) => {
