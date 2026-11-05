@@ -11,7 +11,7 @@ import type { EngineInterface } from 'claude-code'
 import type { Account } from './accounts'
 import { context, emailOf, exitOf, writeAtomic, type Context } from './context'
 import { liveCrons } from './crons'
-import { block, blockedAt, scopeOf, sessionFamily, turnFailure } from './failures'
+import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { requestSwitch, type SwitchState } from './switching'
 import {
   ACCOUNT_FAILURES,
@@ -104,7 +104,7 @@ export async function candidates($: EngineInterface, ctx: Context, family: strin
       name: account.name,
       reading: await readReading($, ctx.root, account.name),
       sessions: sessions.get(account.name) ?? 0,
-      blockedAt: await blockedAt($, ctx.root, account.name, family),
+      blockedUntil: await blockedUntil($, ctx.root, account.name, family),
     })),
   )
 }

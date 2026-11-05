@@ -128,6 +128,7 @@ Your accounts and conversations stay where they are.
 | `cca <name> [claude options]` | Run Claude Code on `<name>`. |
 | `cca add <name> [folder]` | Add an account. Its folder defaults to `~/.claude-<name>`. Running it again for an account relinks what it shares. |
 | `cca use <name>` | Start new sessions on `<name>`. |
+| `cca remove <name>` | Stop using `<name>`, for a plan that ended: no session starts or moves there. Its folder and login stay, so `cca add <name> <folder>` brings it back. |
 | `cca init <name>` | Set up, naming the account you are signed in to now. The installer runs this. |
 | `cca uninstall` | Undo setup's changes to your shell, settings and editors. |
 | `cca version`, `cca help` | |

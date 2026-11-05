@@ -9,6 +9,8 @@
 #   cca add <name> [dir]       add an account (default dir ~/.claude-<name>) and sign in
 #   cca                        list the accounts; * marks where new sessions start
 #   cca use <name>             start new sessions on <name>
+#   cca remove <name>          stop using <name>: no session starts or moves
+#                              there; its folder and login are left as they are
 #   cca <name> [claude args]   run Claude Code on <name>
 #   cca run [claude args]      run it on the account the resumed conversation last
 #                              used, else the default (what `claude` runs after init)
@@ -38,7 +40,7 @@ SHARED_STATE=(projects todos file-history sessions)
 MCP_FILE="$SHARED/mcp.json"
 # Linked from ~/.claude into every other account unless share.conf says otherwise.
 DEFAULT_SHARE=(settings.json CLAUDE.md agents commands keybindings.json)
-RESERVED=" init add use run uninstall version help "
+RESERVED=" init add use remove run uninstall version help "
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # The plugin rewrites a conversation's record each time it starts, so a record
 # this old belongs to a conversation nobody has opened since; it then opens on
@@ -366,6 +368,24 @@ list() {
   echo "* new sessions start here. Move a running one with /account <name>."
 }
 
+# Takes <name> out of the table, so no session starts or moves there, and
+# drops what cca and the plugin kept of it. Its folder and login stay, so
+# `cca add <name> <dir>` brings it back. A conversation it last ran opens on
+# the default account next time. ~/.claude holds what every account links,
+# and the default must stay an account, so neither is removed.
+remove_account() {
+  local name="$1" dir
+  require_account "$name"
+  dir="$(dir_of "$name")"
+  [[ "$dir" != "$HOME_DIR" ]] || die "$name is $HOME_DIR, which every account links its settings from; it cannot be removed"
+  [[ "$(default_name)" != "$name" ]] || die "new sessions start on $name; run cca use <another account> first"
+  local tmp; tmp="$(mktemp "$TABLE.XXXXXX")"
+  awk -F'\t' -v n="$name" '$1 != n' "$TABLE" > "$tmp" && mv "$tmp" "$TABLE"
+  rm -f "$ROOT/usage/$name.json"
+  rm -rf "${ROOT:?}/blocked/$name"
+  echo "Removed $name. Its folder $dir is left as it is: cca add $name $dir brings it back."
+}
+
 # Run a preference edit (see PREFERENCE_EDITS) on every account, feeding each
 # the same stdin. Stops at the first account that fails, with its status.
 edit_everywhere() {
@@ -400,6 +420,10 @@ case "${1:-}" in
     require_account "$2"
     printf '%s\n' "$2" > "$ROOT/default"
     echo "New sessions start on $2."
+    ;;
+  remove)
+    [[ $# -eq 2 ]] || die "usage: cca remove <name>"
+    remove_account "$2"
     ;;
   add)
     [[ $# -ge 2 && $# -le 3 ]] || die "usage: cca add <name> [dir]"

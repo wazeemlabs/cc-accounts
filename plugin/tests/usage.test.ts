@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
+  blockMsOf,
   chooseTarget,
   describeUse,
   followUpText,
@@ -123,11 +124,18 @@ describe('which account a session moves to', () => {
     expect(chooseTarget('a', [candidate('b', reading('b', 10, 95))], NOW, POLICY.leave)).toBe(undefined)
   })
 
-  test('skips an account that failed a call for an hour, then takes it again', () => {
-    const failed = { ...candidate('b', reading('b', 5)), blockedAt: NOW - HOUR + 1 }
+  test('skips an account until its failure record runs out, then takes it again', () => {
+    const failed = { ...candidate('b', reading('b', 5)), blockedUntil: NOW + 1 }
     expect(chooseTarget('a', [failed, candidate('c', reading('c', 50))], NOW, POLICY.take)).toBe('c')
     expect(chooseTarget('a', [failed], NOW, POLICY.leave)).toBe(undefined)
-    expect(chooseTarget('a', [{ ...failed, blockedAt: NOW - HOUR }], NOW, POLICY.take)).toBe('b')
+    expect(chooseTarget('a', [{ ...failed, blockedUntil: NOW }], NOW, POLICY.take)).toBe('b')
+  })
+
+  test('a usage limit keeps sessions off for an hour; a refusal that does not clear on its own, for a day', () => {
+    expect(blockMsOf('rate_limit')).toBe(HOUR)
+    for (const error of ['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'billing_error']) {
+      expect(blockMsOf(error)).toBe(24 * HOUR)
+    }
   })
 
   test('nowhere to go when no other account is listed', () => {

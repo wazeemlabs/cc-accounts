@@ -17,6 +17,7 @@
 // that hit it, and sessions on other families still move there.
 import type { EngineInterface } from 'claude-code'
 import { describeError, writeAtomic, type Context } from './context'
+import { blockMsOf } from './usage'
 
 // The scope of a failure that is the whole account's.
 export const ACCOUNT_SCOPE = 'account'
@@ -117,7 +118,8 @@ export async function block(
   await writeAtomic($, blockFile(root, account, scope), `${JSON.stringify({ error, at })}\n`)
 }
 
-async function failedAt($: EngineInterface, file: string, account: string): Promise<number | undefined> {
+// Until when the record in `file` keeps sessions off its account.
+async function heldUntil($: EngineInterface, file: string, account: string): Promise<number | undefined> {
   if (!(await $.fs.exists(file))) return undefined
   let value: unknown
   try {
@@ -126,20 +128,21 @@ async function failedAt($: EngineInterface, file: string, account: string): Prom
     $.ui.log(`cc-accounts: ${file} is not a failure record (${describeError(error)}); ${account} counts as working.`)
     return undefined
   }
-  return isObject(value) && typeof value.at === 'number' ? value.at : undefined
+  if (!isObject(value) || typeof value.at !== 'number' || typeof value.error !== 'string') return undefined
+  return value.at + blockMsOf(value.error)
 }
 
-// When `account` last failed in a way that stops a session on `family`
-// (undefined: not known): a failure of the whole account's, or one of that
-// family's. Undefined when it has not.
-export async function blockedAt(
+// Until when a session on `family` (undefined: not known) keeps off
+// `account`, after a failure of the whole account's or one of that family's.
+// Undefined when it has not failed.
+export async function blockedUntil(
   $: EngineInterface,
   root: string,
   account: string,
   family: string | undefined,
 ): Promise<number | undefined> {
   const scopes = family === undefined ? [ACCOUNT_SCOPE] : [ACCOUNT_SCOPE, family]
-  const times = await Promise.all(scopes.map(scope => failedAt($, blockFile(root, account, scope), account)))
+  const times = await Promise.all(scopes.map(scope => heldUntil($, blockFile(root, account, scope), account)))
   const known = times.filter((at): at is number => at !== undefined)
   return known.length === 0 ? undefined : Math.max(...known)
 }

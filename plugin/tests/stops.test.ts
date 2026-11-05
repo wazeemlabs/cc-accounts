@@ -149,6 +149,17 @@ describe('a per-model limit holds back only sessions on that model', () => {
     expect(w.files.get(BY_SESSION)).toBe('2\n')
   })
 
+  test("an organization that turned Claude Code off keeps sessions off for a day, not an hour", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(blockFile(ROOT, '2', 'account'), `${JSON.stringify({ error: 'oauth_org_not_allowed', at: 0 })}\n`)
+    await w.clock.advance(2 * HOUR)
+    await $.session.start(START)
+    limits(w, 100)
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([])
+  })
+
   test('a failure of the whole account holds back every family', async ($, on) => {
     const w = world(on, SUPERVISED)
     w.files.set(blockFile(ROOT, '2', 'account'), failedFor('account'))

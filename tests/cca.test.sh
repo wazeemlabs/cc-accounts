@@ -86,6 +86,29 @@ check "a switch that carries a follow-up reopens the conversation with it as the
   "dir=$HOME/.claude-two account=2 args=--model opus --resume $ID Carry on from where you stopped." "$(sed -n 2p "$LOG")"
 
 setup
+mkdir -p "$HOME/.claude-three" "$CCA_ROOT/usage" "$CCA_ROOT/blocked/2"
+printf '3\t%s\n' "$HOME/.claude-three" >> "$CCA_ROOT/accounts.tsv"
+echo '{}' > "$CCA_ROOT/usage/2.json"; echo '{}' > "$CCA_ROOT/blocked/2/account.json"; echo '{}' > "$CCA_ROOT/usage/3.json"
+out="$("$CCA" remove 2)"
+check "remove takes the account out of the table and leaves the others in order" \
+  "1 3" "$(cut -f1 "$CCA_ROOT/accounts.tsv" | paste -sd' ' -)"
+check "and drops what was kept of it, and nothing of the others" \
+  "usage/3.json" "$(cd "$CCA_ROOT" && find usage blocked -type f | paste -sd' ' -)"
+check "and leaves its folder and login, saying how to bring it back" \
+  "Removed 2. Its folder $HOME/.claude-two is left as it is: cca add 2 $HOME/.claude-two brings it back. yes" \
+  "$out $([[ -f "$HOME/.claude-two/.claude.json" ]] && echo yes)"
+
+setup
+"$CCA" use 2 >/dev/null
+out="$("$CCA" remove 2 2>&1)"; status=$?
+check "remove refuses the account new sessions start on" \
+  "2 cca: new sessions start on 2; run cca use <another account> first" "$status $out"
+check "remove refuses ~/.claude, which the others link" \
+  "cca: 1 is $HOME/.claude, which every account links its settings from; it cannot be removed" "$("$CCA" remove 1 2>&1)"
+check "remove refuses a name that is no account, leaving the table as it was" \
+  "2 1 2" "$("$CCA" remove nobody >/dev/null 2>&1; echo $?) $(cut -f1 "$CCA_ROOT/accounts.tsv" | paste -sd' ' -)"
+
+setup
 mkdir -p "$CCA_ROOT/background" "$CCA_ROOT/blocked/2" "$CCA_ROOT/blocked/old"
 echo '{"tasks":[]}' > "$CCA_ROOT/background/old"; echo '{"tasks":[]}' > "$CCA_ROOT/background/new"
 echo '{"error":"rate_limit","at":0}' > "$CCA_ROOT/blocked/old/fable.json"

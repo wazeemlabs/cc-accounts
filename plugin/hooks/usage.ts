@@ -14,9 +14,9 @@ export type Window = { percentUsed: number; resetsAt?: string }
 export type Reading = { account: string; at: number; windows: Record<string, Window> }
 
 // One account a session could move to: its last reading, how many live
-// sessions already run on it, and when an API call on it last failed for a
-// reason of the account's (`blockedAt`), if it did.
-export type Candidate = { name: string; reading: Reading | undefined; sessions: number; blockedAt?: number }
+// sessions already run on it, and, after an API call on it failed for a
+// reason of the account's, until when sessions keep off it (`blockedUntil`).
+export type Candidate = { name: string; reading: Reading | undefined; sessions: number; blockedUntil?: number }
 
 const HOUR_MS = 3_600_000
 
@@ -28,7 +28,7 @@ const HOUR_MS = 3_600_000
 // whose turn was already stopped takes any account below `leave`: any room
 // beats none. A turn that ended on an API error with a window at `limit` or
 // more was stopped by the limit. An account whose API call failed for a
-// reason of its own is skipped for `blockMs`. A planned move is not made when
+// reason of its own is skipped for a while (`blockMsOf`). A planned move is not made when
 // the full window resets within `resetGraceMs`: a move costs the new account
 // the whole context uncached, and a limit hit before the reset still moves.
 export const POLICY = {
@@ -36,8 +36,17 @@ export const POLICY = {
   take: { five_hour: 70, seven_day: 90 } as Record<string, number>,
   perSession: 10,
   limit: 99,
-  blockMs: HOUR_MS,
+  limitBlockMs: HOUR_MS,
+  refusalBlockMs: 24 * HOUR_MS,
   resetGraceMs: 15 * 60_000,
+}
+
+// How long a failure keeps sessions off an account. A usage limit may clear
+// at any time, so the account is tried again after an hour. A refusal does
+// not clear on its own (a lost login, an organization that turned Claude
+// Code off, a hold, a billing failure), so it is tried again after a day.
+export function blockMsOf(error: string): number {
+  return error === 'rate_limit' ? POLICY.limitBlockMs : POLICY.refusalBlockMs
 }
 
 // API errors that are the account's, as Claude Code classifies them (the
@@ -155,7 +164,7 @@ export function chooseTarget(
   let best: { name: string; score: number } | undefined
   for (const candidate of candidates) {
     if (candidate.name === current) continue
-    if (candidate.blockedAt !== undefined && now - candidate.blockedAt < POLICY.blockMs) continue
+    if (candidate.blockedUntil !== undefined && now < candidate.blockedUntil) continue
     const roomy = Object.keys(bar).every(kind => percentNow(candidate.reading, kind, now) < bar[kind]!)
     if (!roomy) continue
     const used = candidate.reading === undefined ? UNMEASURED_PERCENT : percentNow(candidate.reading, 'five_hour', now)

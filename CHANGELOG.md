@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.4.6 (2026-11-06)
+
+- New `cca remove <name>`, for an account whose plan has ended. It takes the account out of the table, so no session starts or moves there, and drops its usage reading and failure records. Its folder and login stay, so `cca add <name> <folder>` brings it back. It refuses `~/.claude`, which every account links, and the account new sessions start on.
+- A refusal that does not clear on its own keeps sessions off the account for a day, not an hour. That covers a lost login, an organization that turned off Claude Code on its subscription, a hold and a billing failure. Before, every session that needed to move tried such an account again each hour. A usage limit is still tried again after an hour.
+
 ## 0.4.5 (2026-11-06)
 
 - A per-model limit now holds back only sessions on that model family. Before, an account that hit its Fable cap was skipped for an hour by every session, including those on Opus or Sonnet, for which it still had room. The failure is recorded under the family of the session's model, `blocked/<account>/<family>.json`. A lost login, a hold or a billing failure, or a limit whose family cannot be told, still holds back every session (`blocked/<account>/account.json`).
