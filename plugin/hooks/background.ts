@@ -15,9 +15,14 @@
 
 export type Task = { id: string; type: string; description: string }
 
-// The record file: the work in flight when the last turn ended, or the mark
-// that a turn started and no Stop has run since.
-export type TaskRecord = { kind: 'tasks'; tasks: Task[] } | { kind: 'turn'; turnId: string }
+// A scheduled wakeup (CronCreate, ScheduleWakeup, /loop). It lives in the
+// process, so a switch drops it, and the reopened conversation is asked to
+// set it again.
+export type Cron = { schedule: string; recurring: boolean; prompt: string }
+
+// The record file: the work in flight and the wakeups held when the last turn
+// ended, or the mark that a turn started and no Stop has run since.
+export type TaskRecord = { kind: 'tasks'; tasks: Task[]; crons: Cron[] } | { kind: 'turn'; turnId: string }
 
 // Agent states after which an agent no longer runs (AgentStatus).
 export const ENDED_AGENT = new Set(['completed', 'failed', 'killed'])
@@ -38,7 +43,17 @@ function taskOf(value: unknown): Task | undefined {
   return { id: value.id, type: value.type, description }
 }
 
+function cronOf(value: unknown): Cron | undefined {
+  if (!isObject(value) || typeof value.schedule !== 'string') return undefined
+  return {
+    schedule: value.schedule,
+    recurring: value.recurring === true,
+    prompt: typeof value.prompt === 'string' ? value.prompt : '',
+  }
+}
+
 // undefined: the file is not a record (a partial write, another version's).
+// A record from before wakeups were saved has none.
 export function parseRecord(text: string): TaskRecord | undefined {
   let value: unknown
   try {
@@ -51,7 +66,11 @@ export function parseRecord(text: string): TaskRecord | undefined {
   if (typeof value.turn === 'string') return { kind: 'turn', turnId: value.turn }
   if (!Array.isArray(value.tasks)) return undefined
   const tasks = value.tasks.map(taskOf)
-  return tasks.every(task => task !== undefined) ? { kind: 'tasks', tasks: tasks as Task[] } : undefined
+  if (!tasks.every(task => task !== undefined)) return undefined
+  if (value.crons !== undefined && !Array.isArray(value.crons)) return undefined
+  const crons = ((value.crons as unknown[] | undefined) ?? []).map(cronOf)
+  if (!crons.every(cron => cron !== undefined)) return undefined
+  return { kind: 'tasks', tasks: tasks as Task[], crons: crons as Cron[] }
 }
 
 // The background task a tool call started, read from its input and result.

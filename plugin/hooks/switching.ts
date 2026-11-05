@@ -3,7 +3,8 @@
 // in flight and all background work (subagents, shells, monitors), so a
 // switch waits for the turn to end and the work to finish unless forced.
 import type { EngineInterface } from 'claude-code'
-import { describeTasks, ENDED_AGENT, parseRecord, type Task } from './background'
+import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Cron, type Task } from './background'
+import { followUpText } from './usage'
 import { record, type Context } from './context'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
@@ -16,9 +17,9 @@ export type Exit =
   | { kind: 'terminal'; switchFile: string; sessionId: string }
   | { kind: 'stream'; pid: string; switchFile: string | undefined; sessionId: string }
 
-// The switch asked for and not carried out yet, and the message the reopened
-// conversation starts with, if any.
-export type Pending = { target: string; force: boolean; exit: Exit; followUp: string | undefined }
+// The switch asked for and not carried out yet: from which account, and, for
+// a move the usage limit forced, which window ran out.
+export type Pending = { target: string; force: boolean; exit: Exit; from: string | undefined; limit: string | undefined }
 
 // What a switch waits for: the turn in flight and the background work.
 export type Wait = { turn: boolean; tasks: Task[] }
@@ -31,12 +32,14 @@ export type SwitchState = {
   interactive: boolean
   turns: number
   tasks: Map<string, Task>
+  // The scheduled wakeups the last turn's Stop hook listed.
+  crons: Cron[]
   pending: Pending | undefined
   ending: boolean
 }
 
 export function newState(): SwitchState {
-  return { root: undefined, interactive: false, turns: 0, tasks: new Map(), pending: undefined, ending: false }
+  return { root: undefined, interactive: false, turns: 0, tasks: new Map(), crons: [], pending: undefined, ending: false }
 }
 
 // Where the plugin's Stop hook (record-tasks.py) leaves a session's
@@ -94,6 +97,7 @@ export async function readRecord($: EngineInterface, state: SwitchState): Promis
     return
   }
   if (found.kind !== 'tasks') return
+  state.crons = found.crons
   state.tasks.clear()
   for (const task of found.tasks) state.tasks.set(task.id, task)
 }
@@ -165,7 +169,12 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
   }
   // Checked again: another timer may have carried it out during the wait.
   if (state.pending === undefined || state.ending) return
-  const { exit, target, followUp } = state.pending
+  const { exit, target, from, limit } = state.pending
+  // What the reopened conversation is told, as things stand now: the work a
+  // forced move stops, which a limit-forced one asks it to start again, and
+  // the wakeups every move drops.
+  const stopped = limit === undefined ? [] : (await waitingFor($, state)).tasks.map(nameTask)
+  const followUp = followUpText({ from, to: target, limit, stopped, crons: state.crons })
   state.pending = undefined
   state.ending = true
   try {
@@ -194,11 +203,11 @@ export async function requestSwitch(
   state: SwitchState,
   ctx: Context,
   exit: Exit | undefined,
-  ask: { target: string; force: boolean; followUp?: string },
+  ask: { target: string; force: boolean; limit?: string },
 ): Promise<SwitchAsked> {
   await record($, ctx, await $.session.id(), ask.target)
   if (exit === undefined) return { kind: 'recorded' }
-  state.pending = { target: ask.target, force: ask.force, exit, followUp: ask.followUp }
+  state.pending = { target: ask.target, force: ask.force, exit, from: ctx.current?.name, limit: ask.limit }
   const wait = await waitingFor($, state)
   if (ask.force || (!wait.turn && wait.tasks.length === 0)) {
     await $.clock.after(0, () => carryOut($, state))

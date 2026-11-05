@@ -40,13 +40,27 @@ class RecordTasks(unittest.TestCase):
         done = self.hook(self.stop([SHELL]))
         self.assertEqual((done.returncode, done.stderr), (0, ''))
         self.assertEqual(json.loads(self.record.read_text()),
-                         {'tasks': [{'id': 'b1', 'type': 'shell', 'status': 'running', 'description': 'npm test'}]})
+                         {'tasks': [{'id': 'b1', 'type': 'shell', 'status': 'running', 'description': 'npm test'}],
+                          'crons': []})
+
+    def test_saves_the_scheduled_wakeups_a_switch_would_drop(self):
+        loop = {'id': 'c1', 'schedule': '*/5 * * * *', 'recurring': True, 'prompt': 'check CI', 'createdAt': 1}
+        done = self.hook({**self.stop([]), 'session_crons': [loop]})
+        self.assertEqual((done.returncode, done.stderr), (0, ''))
+        self.assertEqual(json.loads(self.record.read_text())['crons'],
+                         [{'id': 'c1', 'schedule': '*/5 * * * *', 'recurring': True, 'prompt': 'check CI'}])
+
+    def test_an_older_claude_code_without_wakeups_saves_none(self):
+        hook_input = self.stop([])
+        del hook_input['session_crons']
+        self.assertEqual(self.hook(hook_input).returncode, 0)
+        self.assertEqual(json.loads(self.record.read_text()), {'tasks': [], 'crons': []})
 
     def test_an_empty_list_replaces_the_mark_a_turn_left(self):
         self.record.parent.mkdir()
         self.record.write_text('{"turn":"t1"}\n')
         self.assertEqual(self.hook(self.stop([])).returncode, 0)
-        self.assertEqual(json.loads(self.record.read_text()), {'tasks': []})
+        self.assertEqual(json.loads(self.record.read_text()), {'tasks': [], 'crons': []})
         self.assertEqual(os.listdir(self.record.parent), [SESSION])
 
     def test_writes_nothing_where_cca_is_not_set_up(self):
@@ -65,7 +79,8 @@ class RecordTasks(unittest.TestCase):
 
     def test_refuses_input_that_is_not_a_stop_hooks(self):
         for bad in ('not json', '[]', {**self.stop([]), 'session_id': '../../etc'},
-                    self.stop('b1'), self.stop([{'type': 'shell'}])):
+                    self.stop('b1'), self.stop([{'type': 'shell'}]),
+                    {**self.stop([]), 'session_crons': 'c1'}, {**self.stop([]), 'session_crons': [{'id': 'c1'}]}):
             with self.subTest(bad=bad):
                 done = self.hook(bad)
                 self.assertEqual(done.returncode, 1)

@@ -49,7 +49,7 @@ A switch does not cut work short. If Claude is in the middle of a turn, or a sub
 
 - `/account personal now` switches at once and stops whatever is running.
 - `/account <this session's account>` cancels a queued switch.
-- Scheduled wakeups (`/loop` and the like) are not waited for.
+- Scheduled wakeups (`/loop`, ScheduleWakeup, CronCreate) are not waited for. They live in the process a switch ends, so the reopened conversation gets a message listing them and sets them again.
 
 `claude --resume` opens a conversation on the account it last ran on.
 

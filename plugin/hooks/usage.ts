@@ -1,3 +1,5 @@
+import type { Cron } from './background'
+
 // How full each account's rate-limit windows are, and which account a
 // session should move to when its own is nearly spent. Pure: balance.ts does
 // the reading and writing.
@@ -124,13 +126,38 @@ export function describeUse(reading: Reading | undefined, now: number): string {
   return `5h ${Math.round(percentNow(reading, 'five_hour', now))}%${week}`
 }
 
-// What a conversation the limit stopped is told when it reopens on `to`.
-export function followUpText(from: string, to: string, window: string, stopped: readonly string[]): string {
-  const tasks = stopped.length === 0
-    ? ''
-    : ` The move stopped this background work, so start again whatever of it is still needed: ${stopped.join(', ')}.`
-  return (
-    `[cc-accounts] The ${from} account reached its ${windowName(window)} usage limit and stopped your last turn. ` +
-    `This conversation now runs on the ${to} account. Carry on from where you stopped.${tasks}`
-  )
+// A wakeup as the conversation can set it again.
+function describeCron(cron: Cron): string {
+  return `${cron.recurring ? 'recurring' : 'once'} at "${cron.schedule}" with the prompt ${JSON.stringify(cron.prompt)}`
+}
+
+// What the conversation is told when it reopens on `to`, or undefined when
+// it needs to be told nothing: `limit`, the window whose limit stopped its
+// last turn; `stopped`, the background work the move ended; `crons`, the
+// scheduled wakeups the move dropped.
+export function followUpText(move: {
+  from: string | undefined
+  to: string
+  limit: string | undefined
+  stopped: readonly string[]
+  crons: readonly Cron[]
+}): string | undefined {
+  const parts: string[] = []
+  if (move.limit !== undefined) {
+    parts.push(
+      `The ${move.from} account reached its ${windowName(move.limit)} usage limit and stopped your last turn. ` +
+        `This conversation now runs on the ${move.to} account. Carry on from where you stopped.`,
+    )
+    if (move.stopped.length > 0) {
+      parts.push(`The move stopped this background work, so start again whatever of it is still needed: ${move.stopped.join(', ')}.`)
+    }
+  }
+  if (move.crons.length > 0) {
+    if (move.limit === undefined) parts.push(`This conversation moved to the ${move.to} account.`)
+    parts.push(
+      `The move dropped your scheduled wakeups. Schedule them again: ${move.crons.map(describeCron).join('; ')}.` +
+        (move.limit === undefined ? ' Nothing else is needed.' : ''),
+    )
+  }
+  return parts.length === 0 ? undefined : `[cc-accounts] ${parts.join(' ')}`
 }

@@ -9,12 +9,10 @@
 import type { EngineInterface } from 'claude-code'
 import type { Account } from './accounts'
 import { context, emailOf, exitOf, type Context } from './context'
-import { requestSwitch, waitingFor, type SwitchState } from './switching'
-import { nameTask } from './background'
+import { requestSwitch, type SwitchState } from './switching'
 import {
   chooseTarget,
   describeUse,
-  followUpText,
   formatReading,
   fullWindow,
   windowAtLimit,
@@ -132,15 +130,16 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   if (reading === undefined || full === undefined) return
   const exit = await exitOf($, await $.session.id())
   if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
+  const limit = stopped ? windowAtLimit(reading, now) : undefined
+  // A session the extension started before cca-stream cannot be told to set
+  // its wakeups again, so it keeps them until the limit leaves no choice.
+  if (limit === undefined && exit.switchFile === undefined && state.crons.length > 0) return
   const target = chooseTarget(from, await candidates($, ctx), now)
   if (target === undefined) {
     $.ui.log(`cc-accounts: ${from} is at ${describeUse(reading, now)}, and no other account has room to move to.`)
     return
   }
-  const limit = stopped ? windowAtLimit(reading, now) : undefined
-  const lost = limit === undefined ? [] : (await waitingFor($, state)).tasks
-  const followUp = limit === undefined ? undefined : followUpText(from, target, limit, lost.map(nameTask))
-  const asked = await requestSwitch($, state, ctx, exit, { target, force: limit !== undefined, followUp })
+  const asked = await requestSwitch($, state, ctx, exit, { target, force: limit !== undefined, limit })
   const waits = asked.kind === 'queued'
   if (waits) $.ui.status(`account ${from}, moving to ${target}`)
   $.ui.log(

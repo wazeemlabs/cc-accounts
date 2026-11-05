@@ -3,7 +3,7 @@
 // turns of the main loop with what their Stop hook (record-tasks.py) leaves.
 import { mock, type Engine } from 'claude-code/testing'
 import type { AgentInfo, On } from 'claude-code'
-import type { Task } from '../hooks/background'
+import type { Cron, Task } from '../hooks/background'
 
 export const HOME = '/Users/me'
 export const ROOT = `${HOME}/.claude-shared/accounts`
@@ -128,13 +128,19 @@ export async function endTurn(
   w: ReturnType<typeof world>,
   turnId: string,
   stop?: readonly Task[],
+  crons: readonly Cron[] = [],
 ): Promise<void> {
-  if (stop !== undefined) w.files.set(RECORD, `${JSON.stringify({ tasks: stop })}\n`)
+  if (stop !== undefined) w.files.set(RECORD, `${JSON.stringify({ tasks: stop, crons })}\n`)
   const reason = stop === undefined ? 'error' : 'answer'
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId, reason })
 }
 
-// A whole turn whose Stop hook listed `stop`.
-export async function turn($: Engine, w: ReturnType<typeof world>, stop: readonly Task[]): Promise<void> {
-  await endTurn($, w, await startTurn($), stop)
+// A whole turn whose Stop hook listed `stop` and the wakeups `crons`.
+export async function turn(
+  $: Engine,
+  w: ReturnType<typeof world>,
+  stop: readonly Task[],
+  crons: readonly Cron[] = [],
+): Promise<void> {
+  await endTurn($, w, await startTurn($), stop, crons)
 }

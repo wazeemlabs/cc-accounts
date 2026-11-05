@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { Cron } from '../hooks/background'
 import { followUpText, formatReading, parseReading, readingOf } from '../hooks/usage'
 import {
   BY_SESSION,
@@ -22,6 +23,7 @@ import {
 const SIGINT = ['kill', '-INT', SELF]
 const LATER = '2100-01-01T00:00:00Z'
 const SESSIONS = `${HOME}/.claude-shared/sessions`
+const LOOP: Cron = { schedule: '*/5 * * * *', recurring: true, prompt: 'check CI' }
 
 type World = ReturnType<typeof world>
 
@@ -111,7 +113,7 @@ describe('a session leaves an account that is nearly spent', () => {
     limits(w, 100)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText('1', '2', 'five_hour', ['shell "npm test"'])}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: 'five_hour', stopped: ['shell "npm test"'], crons: [] })}\n`)
     expect(w.killed).toEqual([SIGINT])
   })
 
@@ -191,7 +193,7 @@ describe('how the move reopens the conversation', () => {
     limits(w, 99.5)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText('1', '2', 'five_hour', [])}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: 'five_hour', stopped: [], crons: [] })}\n`)
     expect(w.ran).toEqual(['exit'])
   })
 
@@ -233,6 +235,41 @@ describe('how the move reopens the conversation', () => {
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.logs).toContain("cc-accounts: 1's weekly window is at 5h 92%, week 100%; moving this conversation to 2.")
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText('1', '2', 'seven_day', [])}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: 'seven_day', stopped: [], crons: [] })}\n`)
+  })
+
+  test('a move hands the reopened conversation the wakeups it dropped', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 91)
+    await turn($, w, [], [LOOP])
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(
+      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: undefined, stopped: [], crons: [LOOP] })}\n`,
+    )
+  })
+
+  test('a VS Code session started before cca-stream keeps its wakeups until the limit forces a move', async ($, on) => {
+    const w = world(on, STREAM)
+    await $.session.start(START)
+    limits(w, 91)
+    await turn($, w, [], [LOOP])
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([])
+    limits(w, 100)
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([SIGINT])
+  })
+
+  test('/account also hands over the wakeups it drops', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    await turn($, w, [], [LOOP])
+    await $.command.run(run('2'))
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(
+      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', limit: undefined, stopped: [], crons: [LOOP] })}\n`,
+    )
   })
 })

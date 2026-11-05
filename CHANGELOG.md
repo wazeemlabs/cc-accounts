@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.4.1 (2026-11-06)
+
+- A switch no longer loses the session's scheduled wakeups (`/loop`, ScheduleWakeup, CronCreate) without a word. The Stop hook now records them, and the reopened conversation gets a message listing each one to schedule again. This covers `/account` as well as the moves 0.4.0 added. A VS Code session started before 0.4.0 cannot get that message, so it keeps its wakeups and moves only when the limit stops a turn.
+
 ## 0.4.0 (2026-11-05)
 
 - Sessions move off an account before its usage limit stops them. Every session saves its account's five-hour and weekly usage to `~/.claude-shared/accounts/usage/<account>.json`, so each one knows the accounts it is not on. At the end of a turn, a session whose account is at 90% of its five-hour window or 95% of its week moves to the signed-in account with the most room, counting the live sessions already on each so that sessions leaving together spread out. It waits for its background work as `/account` does. A turn the limit itself stopped moves at once and reopens with a message telling the conversation to carry on, naming any background work the move stopped, so the work continues with nobody typing. `CCA_BALANCE=off` turns the moves off.
