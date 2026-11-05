@@ -101,9 +101,16 @@ describe('which account a session moves to', () => {
     expect(chooseTarget('a', [candidate('b', reading('b', 69.9, 89.9))], NOW)).toBe('b')
   })
 
-  test('an account with no reading, or whose window has reset, counts as empty', () => {
-    expect(chooseTarget('a', [candidate('b', undefined)], NOW)).toBe('b')
+  test('an account whose window has reset counts as empty', () => {
     expect(chooseTarget('a', [candidate('b', reading('b', 95, 0, EARLIER))], NOW)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 95, 0, EARLIER))], NOW)).toBe('c')
+  })
+
+  test('an account nobody has measured is a last resort behind any measured account with room', () => {
+    expect(chooseTarget('a', [candidate('b', undefined)], NOW)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 68))], NOW)).toBe('c')
+    expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 70))], NOW)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', undefined, 0), candidate('c', reading('c', 60), 1)], NOW)).toBe('b')
   })
 
   test('nowhere to go when no other account is listed', () => {

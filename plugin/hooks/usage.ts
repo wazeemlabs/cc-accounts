@@ -106,6 +106,11 @@ export function windowAtLimit(reading: Reading | undefined, now: number): string
   return Object.keys(POLICY.leave).find(kind => percentNow(reading, kind, now) >= POLICY.limit)
 }
 
+// What an account nobody has measured yet is assumed to be using: just under
+// the take line, so a measured account with room wins and the unmeasured one
+// is only a last resort. A reading whose window has reset is known empty.
+const UNMEASURED_PERCENT = POLICY.take.five_hour! - 1
+
 // The account to move to, or undefined when none has room.
 export function chooseTarget(current: string, candidates: readonly Candidate[], now: number): string | undefined {
   let best: { name: string; score: number } | undefined
@@ -113,7 +118,8 @@ export function chooseTarget(current: string, candidates: readonly Candidate[], 
     if (candidate.name === current) continue
     const roomy = Object.keys(POLICY.take).every(kind => percentNow(candidate.reading, kind, now) < POLICY.take[kind]!)
     if (!roomy) continue
-    const score = percentNow(candidate.reading, 'five_hour', now) + POLICY.perSession * candidate.sessions
+    const used = candidate.reading === undefined ? UNMEASURED_PERCENT : percentNow(candidate.reading, 'five_hour', now)
+    const score = used + POLICY.perSession * candidate.sessions
     if (best === undefined || score < best.score) best = { name: candidate.name, score }
   }
   return best?.name
