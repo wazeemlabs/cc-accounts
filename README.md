@@ -59,10 +59,28 @@ You do not need to do anything for this. Every session saves its account's five-
 
 If the limit stops a turn before that happens, the session moves at once and the conversation reopens with a message telling it to carry on, so the work goes on with nobody typing. That message names any background work the move stopped.
 
-- The status line shows the account and its usage, for example `account work · 5h 42%, week 10%`, and `/account` lists every account's last reading.
+- The status line shows the account and its usage, for example `account work · 5h 42%, week 10%`, and `/account` lists every account's last reading with the total free.
+- `/account usage` shows, for every account, how much of its five-hour window and its week is free and when each resets. It also shows the sessions on each account and the projects they belong to. At the bottom are the totals over the accounts that can serve a session, in Max 5x plans (a Max 20x counts four). The figures that matter: what is free now, and what is free before sessions start moving off.
 - An account no session has used yet counts as unused until one reports.
 - When no other account has room, the session stays and says so in its log.
 - `CCA_BALANCE=off` turns the moves off. Readings are still saved.
+
+### Projects that matter more
+
+Some projects matter more than others. Give one a weight, and its sessions get more of the room:
+
+```
+/account priority 3              this project (the folder the session started in) counts as 3
+/account priority 0.5 ~/scratch  a folder you care less about counts as half
+/account priority                show the weights set
+```
+
+A project without a weight counts as 1, and a folder inside a weighted one takes its weight. Two rules use the weights:
+
+- When a session picks an account to move to, each session already on an account counts by its weight. Sessions of lighter projects therefore keep off the accounts where heavier ones run, and those accounts' hours go to the heavier project.
+- When an account passes 75% of its five-hour window or 90% of its week, a session of a lighter project moves off if a heavier one shares the account. The rest of the account then goes to the heavier project. It only moves to an account with plenty of room; if there is none, it stays.
+
+The weights are kept in `~/.claude-shared/accounts/priorities.json`, which every session and account reads.
 
 ## What it does
 
@@ -136,6 +154,8 @@ Your accounts and conversations stay where they are.
 | `/account <name>` | In Claude Code: move this conversation to `<name>` once its turn and background work have finished. |
 | `/account <name> now` | In Claude Code: move it at once, stopping that work. |
 | `/account default <name>` | In Claude Code: start new sessions on `<name>`. |
+| `/account usage` | In Claude Code: what is free on every account, when it resets, and where each project's sessions run. |
+| `/account priority [<weight> [<folder>]]` | In Claude Code: show the project weights, or set this project's (or a folder's). |
 
 Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
 

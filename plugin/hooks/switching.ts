@@ -42,6 +42,8 @@ export type SwitchState = {
   cutTurn: boolean
   // The model that last answered a main-loop turn in this process.
   answered: string | undefined
+  // The folder the session started in, which names its project.
+  cwd: string | undefined
 }
 
 export function newState(): SwitchState {
@@ -54,6 +56,7 @@ export function newState(): SwitchState {
     ending: false,
     cutTurn: false,
     answered: undefined,
+    cwd: undefined,
   }
 }
 

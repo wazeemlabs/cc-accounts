@@ -1,6 +1,6 @@
 {
   "name": "cc-accounts",
-  "version": "0.4.6",
+  "version": "0.5.0",
   "description": "/account: show or move the Claude Code account this conversation runs on, and move it off an account that is nearly spent",
   "author": { "name": "Wazeem", "url": "https://github.com/wazeemlabs" },
   "homepage": "https://github.com/wazeemlabs/cc-accounts",

@@ -13,18 +13,29 @@ export type Window = { percentUsed: number; resetsAt?: string }
 
 export type Reading = { account: string; at: number; windows: Record<string, Window> }
 
-// One account a session could move to: its last reading, how many live
-// sessions already run on it, and, after an API call on it failed for a
-// reason of the account's, until when sessions keep off it (`blockedUntil`).
-export type Candidate = { name: string; reading: Reading | undefined; sessions: number; blockedUntil?: number }
+// One account a session could move to: its last reading, the summed weights
+// of the live sessions already on it (`load`: each counts by its project's
+// priority, 1 unless set), how big its plan is in Max 5x plans (`units`),
+// and, after an API call on it failed for a reason of the account's, until
+// when sessions keep off it (`blockedUntil`).
+export type Candidate = {
+  name: string
+  reading: Reading | undefined
+  load: number
+  units: number
+  blockedUntil?: number
+}
 
 const HOUR_MS = 3_600_000
 
 // The thresholds, in percent of a window. A session leaves its account at the
-// end of a turn once a window reaches `leave`. A planned move goes only to an
-// account whose windows are all below `take`, preferring the one with the
-// most room after counting `perSession` points for each live session already
-// on it, so that sessions leaving one account together spread out. A session
+// end of a turn once a window reaches `leave`. Once one reaches `yieldAt`, a
+// session leaves to make room for a heavier one (a project of higher
+// priority) on the same account. A planned move goes only to an account whose
+// windows are all below `take`, preferring the one with the most room after
+// counting `perSession` points for each unit of load already on it, divided
+// by its plan size, so that sessions leaving one account together spread out
+// and keep off the accounts where heavier ones run. A session
 // whose turn was already stopped takes any account below `leave`: any room
 // beats none. A turn that ended on an API error with a window at `limit` or
 // more was stopped by the limit. An account whose API call failed for a
@@ -33,6 +44,7 @@ const HOUR_MS = 3_600_000
 // the whole context uncached, and a limit hit before the reset still moves.
 export const POLICY = {
   leave: { five_hour: 90, seven_day: 95 } as Record<string, number>,
+  yieldAt: { five_hour: 75, seven_day: 90 } as Record<string, number>,
   take: { five_hour: 70, seven_day: 90 } as Record<string, number>,
   perSession: 10,
   limit: 99,
@@ -143,6 +155,11 @@ export function resetsSoon(reading: Reading | undefined, kind: string, now: numb
   return !Number.isNaN(resets) && resets > now && resets - now <= POLICY.resetGraceMs
 }
 
+// The window past which a lighter session makes room for a heavier one, or undefined.
+export function tightWindow(reading: Reading | undefined, now: number): string | undefined {
+  return Object.keys(POLICY.yieldAt).find(kind => percentNow(reading, kind, now) >= POLICY.yieldAt[kind]!)
+}
+
 // The window at its limit, or undefined.
 export function windowAtLimit(reading: Reading | undefined, now: number): string | undefined {
   return Object.keys(POLICY.leave).find(kind => percentNow(reading, kind, now) >= POLICY.limit)
@@ -168,7 +185,7 @@ export function chooseTarget(
     const roomy = Object.keys(bar).every(kind => percentNow(candidate.reading, kind, now) < bar[kind]!)
     if (!roomy) continue
     const used = candidate.reading === undefined ? UNMEASURED_PERCENT : percentNow(candidate.reading, 'five_hour', now)
-    const score = used + POLICY.perSession * candidate.sessions
+    const score = used + (POLICY.perSession * candidate.load) / candidate.units
     if (best === undefined || score < best.score) best = { name: candidate.name, score }
   }
   return best?.name

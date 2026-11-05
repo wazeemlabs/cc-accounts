@@ -1,9 +1,21 @@
 import type { Register } from 'claude-code'
 import { formatList, parseAsk, USAGE } from './accounts'
 import { taskStarted, turnMark } from './background'
-import { balance, noteMeasure, readReading } from './balance'
+import { balance, noteMeasure } from './balance'
 import { context, defaultName, describeError, emailOf, exitOf, record, writeAtomic } from './context'
 import { describeCron, liveCrons } from './crons'
+import {
+  DEFAULT_WEIGHT,
+  MAX_WEIGHT,
+  normalizeFolder,
+  parseWeight,
+  projectName,
+  readPriorities,
+  setPriority,
+  weightOf,
+} from './priorities'
+import { formatReport, gatherReport, totals, totalsLine } from './report'
+import { readReading } from './survey'
 import {
   afterOf,
   carryOut,
@@ -24,11 +36,12 @@ export const register: Register = on => {
     await $.command.register({
       name: 'account',
       description: 'Show or switch the Claude account this session runs on',
-      argumentHint: '[name [now] | default <name>]',
+      argumentHint: '[name [now] | default <name> | usage | priority [<weight> [<folder>]]]',
     })
     const ctx = await context($)
     state.root = ctx?.root
     state.interactive = e.isInteractive
+    state.cwd = e.cwd
     if (ctx?.current !== undefined) {
       $.ui.status(`account ${ctx.current.name}`)
       await record($, ctx, await $.session.id(), ctx.current.name)
@@ -92,7 +105,7 @@ export const register: Register = on => {
     const ctx = await context($)
     if (ctx === undefined) return { text: 'No accounts set up: run `cca init <name>` in a terminal.' }
     const ask = parseAsk(e.args)
-    if (ask.kind === 'usage') return { text: USAGE }
+    if (ask.kind === 'help') return { text: USAGE }
 
     if (ask.kind === 'list') {
       const now = await $.clock.now()
@@ -103,7 +116,40 @@ export const register: Register = on => {
           use: describeUse(await readReading($, ctx.root, account.name), now),
         })),
       )
-      return { text: formatList(rows, ctx.current?.name, await defaultName($, ctx)) }
+      const found = totals(await gatherReport($, ctx, await defaultName($, ctx)))
+      const list = formatList(rows, ctx.current?.name, await defaultName($, ctx))
+      return { text: `${list}\n${totalsLine(found)} /account usage shows when it comes back and where each project runs.` }
+    }
+
+    if (ask.kind === 'report') return { text: formatReport(await gatherReport($, ctx, await defaultName($, ctx))) }
+
+    if (ask.kind === 'priority') {
+      const priorities = await readPriorities($, ctx.root)
+      if (ask.weight === undefined) {
+        const mine = state.cwd === undefined ? undefined : weightOf(priorities, state.cwd)
+        const set = [...priorities.entries()].sort(([, a], [, b]) => b - a)
+        return {
+          text: [
+            mine === undefined || state.cwd === undefined
+              ? 'This session started in no known folder.'
+              : `This project, ${projectName(mine.folder ?? state.cwd)}, counts at ${mine.weight}` +
+                (mine.folder === undefined ? ', the default.' : ` (set for ${mine.folder}).`),
+            ...(set.length === 0 ? [] : ['Weights set:', ...set.map(([folder, weight]) => `  ${String(weight).padEnd(5)}${folder}`)]),
+            `Every other project counts at ${DEFAULT_WEIGHT}. A session counts by its weight on the account it runs on, ` +
+              'so lighter sessions keep off the accounts heavier ones use and make room for them when one runs low.',
+          ].join('\n'),
+        }
+      }
+      const weight = parseWeight(ask.weight)
+      if (weight === undefined) return { text: `A weight is a number above 0 and at most ${MAX_WEIGHT}, such as 3 or 0.5.` }
+      const folder = ask.folder === undefined ? state.cwd : normalizeFolder(ask.folder, ctx.home)
+      if (folder === undefined) return { text: 'Name the folder as a full path, or ~/ and the rest of it.' }
+      await setPriority($, ctx.root, folder, weight)
+      return {
+        text: weight === DEFAULT_WEIGHT
+          ? `${projectName(folder)} (${folder}) counts at the default, ${DEFAULT_WEIGHT}, again.`
+          : `${projectName(folder)} (${folder}) now counts at ${weight}, and so do the folders inside it that have no weight of their own.`,
+      }
     }
 
     const target = ctx.accounts.find(account => account.name === ask.name)

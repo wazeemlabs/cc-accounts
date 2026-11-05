@@ -2,6 +2,13 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.5.0 (2026-11-06)
+
+- Projects can matter more than others. `/account priority 3` gives the project you are in a weight of 3, and `/account priority 0.5 <folder>` gives any folder one. The weights live in `~/.claude-shared/accounts/priorities.json`. When a session picks an account to move to, each session already there counts by its project's weight, so lighter projects keep off the accounts heavier ones use. On an account past 75% of its five-hour window or 90% of its week, a session of a lighter project moves off when a heavier one shares the account, leaving the rest to it. It moves only to an account with plenty of room.
+- A bigger plan carries more sessions: an account's load is divided by its plan size, read from its login record (a Max 20x counts four Max 5x plans).
+- `/account usage` shows what is free on every account and when it resets, the sessions on each account, the projects and their weights, and the totals in Max 5x plans: free now, and free before sessions start moving off. `/account` ends with the total free.
+- cca refuses the account names `default`, `usage`, `priority` and `now`, which `/account` reads as its own words.
+
 ## 0.4.6 (2026-11-06)
 
 - New `cca remove <name>`, for an account whose plan has ended. It takes the account out of the table, so no session starts or moves there, and drops its usage reading and failure records. Its folder and login stay, so `cca add <name> <folder>` brings it back. It refuses `~/.claude`, which every account links, and the account new sessions start on.

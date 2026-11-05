@@ -243,9 +243,9 @@ export function signInThree(w: World): void {
   w.files.set(`${HOME}/.claude-three/.claude.json`, '{"oauthAccount":{"emailAddress":"three@example.com"}}')
 }
 
-// Another live (or ended) session on `account`.
-export function session(w: World, pid: number, account: string, live = true): void {
-  w.files.set(`${HOME}/.claude-shared/sessions/${pid}.json`, JSON.stringify({ pid, sessionId: `s-${pid}`, cwd: '/x' }))
+// Another live (or ended) session on `account`, started in `cwd`.
+export function session(w: World, pid: number, account: string, live = true, cwd = '/x', name = ''): void {
+  w.files.set(`${HOME}/.claude-shared/sessions/${pid}.json`, JSON.stringify({ pid, sessionId: `s-${pid}`, cwd, name }))
   w.files.set(`${ROOT}/by-session/s-${pid}`, `${account}\n`)
   if (live) w.running.add(String(pid))
 }

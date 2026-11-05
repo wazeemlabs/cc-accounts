@@ -16,9 +16,13 @@ describe('parsing', () => {
     expect(parseAsk('2 now')).toEqual({ kind: 'switch', name: '2', force: true })
     expect(parseAsk('default 3')).toEqual({ kind: 'default', name: '3' })
     expect(parseAsk('default now')).toEqual({ kind: 'default', name: 'now' })
-    expect(parseAsk('default')).toEqual({ kind: 'usage' })
-    expect(parseAsk('2 3')).toEqual({ kind: 'usage' })
-    expect(parseAsk('2 now please')).toEqual({ kind: 'usage' })
+    expect(parseAsk('default')).toEqual({ kind: 'help' })
+    expect(parseAsk('2 3')).toEqual({ kind: 'help' })
+    expect(parseAsk('2 now please')).toEqual({ kind: 'help' })
+    expect(parseAsk('usage')).toEqual({ kind: 'report' })
+    expect(parseAsk('priority')).toEqual({ kind: 'priority', weight: undefined, folder: undefined })
+    expect(parseAsk('priority 3')).toEqual({ kind: 'priority', weight: '3', folder: undefined })
+    expect(parseAsk('priority 0.5  ~/Documents/My Project ')).toEqual({ kind: 'priority', weight: '0.5', folder: '~/Documents/My Project' })
   })
 
   test('names the current account by CLAUDE_ACCOUNT, else by config dir, ~/.claude when unset', () => {

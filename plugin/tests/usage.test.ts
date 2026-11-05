@@ -12,6 +12,7 @@ import {
   POLICY,
   readingOf,
   resetsSoon,
+  tightWindow,
   type Candidate,
   type Reading,
 } from '../hooks/usage'
@@ -28,7 +29,7 @@ function reading(account: string, fiveHour: number, weekly = 0, resetsAt = LATER
   ])
 }
 
-const candidate = (name: string, read: Reading | undefined, sessions = 0): Candidate => ({ name, reading: read, sessions })
+const candidate = (name: string, read: Reading | undefined, load = 0, units = 1): Candidate => ({ name, reading: read, load, units })
 
 describe('readings', () => {
   test('round-trip through the usage file', () => {
@@ -114,6 +115,24 @@ describe('which account a session moves to', () => {
     expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 68))], NOW, POLICY.take)).toBe('c')
     expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 70))], NOW, POLICY.take)).toBe('b')
     expect(chooseTarget('a', [candidate('b', undefined, 0), candidate('c', reading('c', 60), 1)], NOW, POLICY.take)).toBe('b')
+  })
+
+  test('load counts each session by its weight, so heavier sessions keep lighter movers away', () => {
+    // b holds one session of weight 3, c three of weight 1 and more use.
+    expect(chooseTarget('a', [candidate('b', reading('b', 10), 3), candidate('c', reading('c', 15), 1)], NOW, POLICY.take)).toBe('c')
+    expect(chooseTarget('a', [candidate('b', reading('b', 10), 0.5), candidate('c', reading('c', 15), 1)], NOW, POLICY.take)).toBe('b')
+  })
+
+  test('a bigger plan carries its load more lightly: a Max 20x takes four times the sessions of a Max 5x', () => {
+    const all = [candidate('b', reading('b', 20), 4, 4), candidate('c', reading('c', 20), 2, 1)]
+    expect(chooseTarget('a', all, NOW, POLICY.take)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', reading('b', 20), 4, 1), candidate('c', reading('c', 20), 2, 1)], NOW, POLICY.take)).toBe('c')
+  })
+
+  test('a lighter session makes room from 75% of five hours or 90% of the week', () => {
+    expect(tightWindow(reading('a', 74.9, 89.9), NOW)).toBe(undefined)
+    expect(tightWindow(reading('a', 75), NOW)).toBe('five_hour')
+    expect(tightWindow(reading('a', 10, 90), NOW)).toBe('seven_day')
   })
 
   test('a stopped turn takes any account below the leave line; a planned move only one below the take line', () => {

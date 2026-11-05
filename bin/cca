@@ -40,7 +40,7 @@ SHARED_STATE=(projects todos file-history sessions)
 MCP_FILE="$SHARED/mcp.json"
 # Linked from ~/.claude into every other account unless share.conf says otherwise.
 DEFAULT_SHARE=(settings.json CLAUDE.md agents commands keybindings.json)
-RESERVED=" init add use remove run uninstall version help "
+RESERVED=" init add use remove run uninstall version help default usage priority now "
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # The plugin rewrites a conversation's record each time it starts, so a record
 # this old belongs to a conversation nobody has opened since; it then opens on

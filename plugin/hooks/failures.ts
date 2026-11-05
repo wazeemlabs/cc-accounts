@@ -146,3 +146,22 @@ export async function blockedUntil(
   const known = times.filter((at): at is number => at !== undefined)
   return known.length === 0 ? undefined : Math.max(...known)
 }
+
+// Every failure record of `account` still in force at `now`: its scope (a
+// model family, or `account`) and until when it holds.
+export async function holdsOf(
+  $: EngineInterface,
+  root: string,
+  account: string,
+  now: number,
+): Promise<{ scope: string; until: number }[]> {
+  const dir = `${root}/blocked/${account}`
+  if (!(await $.fs.exists(dir))) return []
+  const holds: { scope: string; until: number }[] = []
+  for (const entry of await $.fs.list(dir)) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    const until = await heldUntil($, `${dir}/${entry.name}`, account)
+    if (until !== undefined && until > now) holds.push({ scope: entry.name.slice(0, -'.json'.length), until })
+  }
+  return holds.sort((a, b) => a.scope.localeCompare(b.scope))
+}
