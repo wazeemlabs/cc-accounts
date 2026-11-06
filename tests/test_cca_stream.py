@@ -32,7 +32,10 @@ _loader.exec_module(stream)
 # `switch:<text>` writes <text> to the switch file and exits, as the plugin's
 # switch does. Run with --replay-user-messages it first echoes each user
 # message it takes, as Claude Code does, except `ignore:` ones, which it reads
-# and never takes, like a message still in the pipe when a process ends.
+# and never takes, like a message still in the pipe when a process ends. The
+# first child (not started with --resume) leaves control requests whose id
+# starts `silent-` unanswered, like one in flight when a process ends; on
+# `ask:<id>` a child asks the panel a permission question with that id.
 FAKE = textwrap.dedent('''\
     import json, os, sys
     log = open(os.environ['FAKE_LOG'], 'a')
@@ -41,14 +44,22 @@ FAKE = textwrap.dedent('''\
     note({'start': sys.argv[2:], 'bin': sys.argv[1], 'child': os.environ.get('CCA_STREAM_CHILD'),
           'switch': os.environ.get('CLAUDE_ACCOUNT_SWITCH_FILE'), 'supervisor': os.environ.get('CCA_STREAM_PID')})
     echoes = '--replay-user-messages' in sys.argv
+    first = '--resume' not in sys.argv
     for line in sys.stdin:
         message = json.loads(line)
         note({'got': message})
         if message['type'] == 'control_request':
+            if first and message['request_id'].startswith('silent-'):
+                continue
             print(json.dumps({'type': 'control_response', 'response': {'subtype': 'success',
                   'request_id': message['request_id'], 'response': {}}}), flush=True)
             continue
-        text = message['message']['content'][0]['text'] if message['type'] == 'user' else ''
+        if message['type'] != 'user':
+            continue
+        text = message['message']['content'][0]['text']
+        if text.startswith('ask:'):
+            print(json.dumps({'type': 'control_request', 'request_id': text[len('ask:'):],
+                  'request': {'subtype': 'can_use_tool', 'tool_name': 'Bash'}}), flush=True)
         if text.startswith('ignore:'):
             continue
         if echoes and message['type'] == 'user':
@@ -251,6 +262,14 @@ class InProcess(unittest.TestCase):
         self.assertEqual(supervisor.out.getvalue(), b'{"type":"assistant"}\n')
 
 
+class SetupNote(unittest.TestCase):
+    def test_a_line_that_is_json_but_not_an_object_is_passed_over(self):
+        setup = stream.Setup()
+        for text in (b'["control_request"]\n', b'"control_request"\n', b'{"type": "control_request", "request": 3}\n'):
+            setup.note(text)
+        self.assertEqual(setup.replay(), [])
+
+
 class ReadSwitch(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -381,6 +400,61 @@ class Supervisor(unittest.TestCase):
         got = s.received(1)
         self.assertEqual([without_uuid(m) for m in got], [user('Carry on.'), user('ignore:lost')])
         self.assertEqual(got[1]['uuid'], 'u-2')
+
+    def success(self, request_id):
+        return {'type': 'control_response', 'response': {'subtype': 'success', 'request_id': request_id, 'response': {}}}
+
+    def test_a_question_the_old_child_never_answered_is_answered_by_the_new_one(self):
+        s = Supervised(self, [])
+        s.send(control('silent-q', 'mcp_status'))
+        s.send(user(f'switch:work {ID}\n'))
+        s.next()
+        self.assertEqual(s.next(), self.success('silent-q'))
+        s.close()
+        self.assertEqual(s.received(1), [control('silent-q', 'mcp_status')])
+
+    def test_an_interrupt_the_old_child_never_answered_is_answered_for_it(self):
+        # Ending the process ended the turn the interrupt was for.
+        s = Supervised(self, [])
+        s.send(control('silent-i', 'interrupt'))
+        s.send(user(f'switch:work {ID}\n'))
+        s.next()
+        self.assertEqual(s.next(), self.success('silent-i'))
+        s.send(user('next'))
+        self.assertEqual(s.next(), {'type': 'assistant', 'text': 'next'})
+        s.close()
+        self.assertEqual(s.received(1), [user('next')])
+
+    def test_a_setting_the_old_child_never_answered_is_replayed_under_its_own_id(self):
+        s = Supervised(self, [])
+        s.send(control('silent-m', 'set_permission_mode', mode='plan'))
+        s.send(user(f'switch:work {ID}\n'))
+        s.next()
+        self.assertEqual(s.next(), self.success('silent-m'))
+        s.close()
+        self.assertEqual(s.received(1), [control('silent-m', 'set_permission_mode', mode='plan')])
+
+    def test_a_question_the_old_child_left_open_is_withdrawn_from_the_panel(self):
+        s = Supervised(self, [])
+        s.send(user('ask:perm-1'))
+        self.assertEqual(s.next()['request_id'], 'perm-1')
+        s.next()
+        s.send(user(f'switch:work {ID}\n'))
+        s.next()
+        self.assertEqual(s.next(), {'type': 'control_cancel_request', 'request_id': 'perm-1'})
+        s.close()
+
+    def test_a_question_the_panel_answered_is_not_withdrawn(self):
+        s = Supervised(self, [])
+        s.send(user('ask:perm-2'))
+        s.next()
+        s.next()
+        s.send({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': 'perm-2', 'response': {}}})
+        s.send(user(f'switch:work {ID}\n'))
+        s.next()
+        s.send(user('next'))
+        self.assertEqual(s.next(), {'type': 'assistant', 'text': 'next'})
+        s.close()
 
     def test_a_termination_signal_reaches_the_child_and_no_switch_follows(self):
         s = Supervised(self, [])
