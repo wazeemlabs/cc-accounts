@@ -31,6 +31,13 @@ describe('project weights', () => {
     expect(normalizeFolder('~other/app', '/Users/me')).toBe(undefined)
   })
 
+  test('a folder typed with . and .. is keyed as the folder it names', () => {
+    expect(normalizeFolder('/srv/a/../b/./c', '/Users/me')).toBe('/srv/b/c')
+    expect(normalizeFolder('~/code/..', '/Users/me')).toBe('/Users/me')
+    expect(normalizeFolder('/srv//a///b', '/Users/me')).toBe('/srv/a/b')
+    expect(normalizeFolder('/..', '/Users/me')).toBe('/')
+  })
+
   test('the file round-trips, and anything but absolute folders with weights in range is refused', () => {
     expect(parsePriorities(formatPriorities(WEIGHTS))).toEqual(WEIGHTS)
     expect(parsePriorities('{}')).toEqual(new Map())

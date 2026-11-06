@@ -60,6 +60,12 @@ describe('/account usage', () => {
     expect(totalsLine(found)).toBe('Free now, in Max 5x plans: 5.54 of the 5-hour windows and 2.68 of the weeks, over 3 accounts.')
   })
 
+  test('an account at the limit the balancer goes by (99%) is spent and adds nothing', () => {
+    const found = totals({ ...input([]), accounts: [{ state: state('a', 99.4, 10), holds: [] }, { state: state('b', 10, 10), holds: [] }] })
+    expect(found.accounts).toBe(1)
+    expect(formatReport(input([state('a', 99.4, 10)]))).toContain('a           spent until its 5-hour window resets in 2h 9m')
+  })
+
   test('shows each account, its sessions and holds, the totals and every project by weight', () => {
     const text = formatReport({
       ...input([state('cto', 32, 14), state('levoro', 85, 88), state('docs', 0, 100), state('new', undefined)]),

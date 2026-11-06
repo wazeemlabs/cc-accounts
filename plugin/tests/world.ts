@@ -60,6 +60,11 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const running = new Set<string>()
   // The rate-limit windows the session's last response reported.
   const limits: { kind: string; percentUsed: number; resetsAt?: string }[] = []
+  // The folder the session's shell is in was deleted (a removed worktree):
+  // a command started there cannot start.
+  const folder = { gone: false }
+  // Files whose writes fail, by path prefix.
+  const failWrites = new Set<string>()
   mock.env(on, { HOME, ...env })
   const clock = mock.clock(on)
   // A directory exists while it holds a file.
@@ -75,6 +80,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     return { value: names.map(path => ({ name: path.slice(dir.length), kind: 'file', size: 0, mtimeMs: 0, isLink: false })) as never }
   })
   on('fs.write', async (_$, e) => {
+    if ([...failWrites].some(prefix => e.path.startsWith(prefix))) throw new Error(`EACCES ${e.path}`)
     writes.push(e.path)
     files.set(e.path, e.text)
     return { value: undefined }
@@ -88,7 +94,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     ran.push(e.command)
     return {}
   })
-  // The last lines of the conversation's transcript.
+  // The conversation's transcript, which the plugin reads the end of; null: unreadable.
   const transcript: { tail: string | null } = { tail: '' }
   // The session's model setting, as the /config menu shows it.
   const settings = { model: 'claude-fable-5-1' }
@@ -112,6 +118,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const done = (exitCode: number, stderr = '') =>
     ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', async (_$, e) => {
+    if (folder.gone && e.init?.cwd === undefined) throw new Error(`$.process.run(${e.argv[0]}) failed to start: ENOENT`)
     if (e.argv[0] === 'mv') {
       // mv -f <from> <to>
       const text = files.get(e.argv[2] ?? '')
@@ -134,12 +141,20 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
       const stdout = asked.filter(pid => running.has(pid)).map(pid => `${pid}\n`).join('')
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
-    if (e.argv[0] === '/bin/sh' && (e.argv[2] ?? '').startsWith('tail ')) {
-      // The transcript's last lines, for why a turn failed; null: unreadable.
-      const tail = transcript.tail
-      return tail === null
-        ? done(1, 'tail: No such file or directory')
-        : { value: { exitCode: 0, stdout: tail, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const tailCommand = /tail (?:-q )?-(n|c) ([0-9]+)/.exec(e.argv[2] ?? '')
+    if (e.argv[0] === '/bin/sh' && tailCommand !== null) {
+      // The end of the transcript as tail cuts it (-n lines, -c bytes), for
+      // why a turn failed, and cut at 4 MiB as $.process.run does.
+      const text = transcript.tail
+      if (text === null) return done(1, 'tail: No such file or directory')
+      const count = Number(tailCommand[2])
+      const end = tailCommand[1] === 'c'
+        ? text.slice(Math.max(0, text.length - count))
+        : text.split(/(?<=\n)/).slice(-count).join('')
+      const limit = 4 * 1024 * 1024
+      return {
+        value: { exitCode: 0, stdout: end.slice(0, limit), stderr: '', isStdoutTruncated: end.length > limit, isStderrTruncated: false },
+      }
     }
     if (e.argv[0] === '/bin/sh') {
       return { value: { exitCode: 0, stdout: `${SELF}\n ${PARENT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -161,7 +176,10 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     statuses.push(e.text)
     return { value: undefined }
   })
-  return { files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript, settings }
+  return {
+    files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript, settings,
+    folder, failWrites,
+  }
 }
 
 // The API-error row Claude Code appends to the transcript when `error` ends a turn.

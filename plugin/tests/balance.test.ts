@@ -51,6 +51,27 @@ describe('every session saves its account usage', () => {
     expect(parseReading(w.files.get(`${ROOT}/usage/1.json`) ?? '')?.account).toBe('1')
   })
 
+  test('a reading is saved though the folder the session is in has been deleted', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    w.folder.gone = true
+    limits(w, 42)
+    await $.session.measure({ context: { window: 200000 }, rateLimits: [...w.limits], changed: ['rateLimits'] } as never)
+    expect(parseReading(w.files.get(`${ROOT}/usage/1.json`) ?? '')?.windows.five_hour?.percentUsed).toBe(42)
+    expect(w.logs.filter(text => text.includes('could not'))).toEqual([])
+  })
+
+  test('two readings one session saves at once both land, neither tripping on the other', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 42)
+    const measure = { context: { window: 200000 }, rateLimits: [...w.limits], changed: ['rateLimits'] } as never
+    await Promise.all([$.session.measure(measure), $.session.measure(measure)])
+    expect(parseReading(w.files.get(`${ROOT}/usage/1.json`) ?? '')?.account).toBe('1')
+    expect(w.logs.filter(text => text.includes('could not'))).toEqual([])
+    expect([...w.files.keys()].filter(path => path.endsWith('.tmp'))).toEqual([])
+  })
+
   test('a measurement of the context alone writes nothing', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
@@ -103,6 +124,17 @@ describe('a session leaves an account that is nearly spent', () => {
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'five_hour' }, stopped: ['shell "npm test"'] })}\n`)
+    expect(w.killed).toEqual([SIGINT])
+  })
+
+  test('a move goes ahead though the folder the session is in has been deleted', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    w.folder.gone = true
+    limits(w, 91)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request())
     expect(w.killed).toEqual([SIGINT])
   })
 

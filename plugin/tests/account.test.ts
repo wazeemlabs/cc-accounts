@@ -143,6 +143,22 @@ describe('/account', () => {
     expect([...w.files.keys()].filter(path => path.endsWith('.tmp'))).toEqual([])
   })
 
+  test('a session start that cannot record its account says so', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.failWrites.add(`${ROOT}/by-session/`)
+    await $.session.start(START)
+    expect(w.logs.some(text => text.startsWith('cc-accounts: could not') && text.includes('EACCES'))).toBe(true)
+  })
+
+  test('/account default that cannot be saved says so', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    w.failWrites.add(`${ROOT}/default`)
+    const { text } = await $.command.run(run('default 2'))
+    expect(text).toContain('could not')
+    expect(text).toContain('EACCES')
+  })
+
   test('a claude started inside a cca terminal session does not switch its parent', async ($, on) => {
     // Inherited: the parent session's variables, naming another process.
     const w = world(on, { ...TERMINAL, CCA_PID: '77' })

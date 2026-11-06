@@ -36,6 +36,30 @@ describe('a turn the account stopped moves, whatever the readings show', () => {
     expect(w.logs).toContain('cc-accounts: 1 failed the last turn (rate_limit); moving this conversation to 2.')
   })
 
+  test('an API error still counts with a dozen bookkeeping rows written after it', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 40, 30)
+    // Claude Code 2.1.318 writes up to a dozen rows after the error row as the turn ends.
+    const kinds = ['last-prompt', 'custom-title', 'ai-title', 'agent-name', 'mode', 'isolation-latch', 'atis-latch',
+      'frame-link', 'history-suppression', 'bridge-session', 'queue-operation', 'queue-operation']
+    w.transcript.tail = apiError('rate_limit') + kinds.map(type => `${JSON.stringify({ type, sessionId: 'x' })}\n`).join('')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request({ stop: { error: 'rate_limit' } }))
+  })
+
+  test('an API error after a row of several megabytes (a screenshot) still counts', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 40, 30)
+    const screenshot = `${JSON.stringify({ type: 'user', message: { content: 'x'.repeat(5 * 1024 * 1024) } })}\n`
+    w.transcript.tail = screenshot + apiError('rate_limit')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request({ stop: { error: 'rate_limit' } }))
+  })
+
   test('an account that lost its login moves the session though it has no reading yet', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
