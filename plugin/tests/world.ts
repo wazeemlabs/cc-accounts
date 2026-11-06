@@ -1,12 +1,15 @@
 // The world beneath the plugin in its tests: an in-memory disk, the session's
-// id, the processes it signals, its agents, the tool calls it sees and makes
-// (CronList), and the turns of the main loop with what their Stop hook
+// id, the processes it signals, its agents, the tools the engine answers
+// (CronList, so a test can give a session wakeups the plugin must leave
+// alone), and the turns of the main loop with what their Stop hook
 // (record-tasks.py) leaves.
 import { mock, type Engine } from 'claude-code/testing'
 import type { AgentInfo, On } from 'claude-code'
 import type { Task } from '../hooks/background'
-import type { Cron } from '../hooks/crons'
 import { followUpText, formatReading, readingOf, type Move } from '../hooks/usage'
+
+// A scheduled wakeup as CronList lists it.
+export type Cron = { schedule: string; recurring: boolean; prompt: string }
 
 export const HOME = '/Users/me'
 export const ROOT = `${HOME}/.claude-shared/accounts`
@@ -222,7 +225,7 @@ export const LATER = '2100-01-01T00:00:00Z'
 
 // The switch request for a move from 1 to 2.
 export function request(move: Partial<Move> = {}): string {
-  const text = followUpText({ from: '1', to: '2', stop: undefined, interrupted: false, stopped: [], crons: [], ...move })
+  const text = followUpText({ from: '1', to: '2', stop: undefined, interrupted: false, stopped: [], ...move })
   return `2 ${SESSION}\n${text === undefined ? '' : `${text}\n`}`
 }
 

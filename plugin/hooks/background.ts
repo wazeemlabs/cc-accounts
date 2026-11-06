@@ -39,7 +39,7 @@ function taskOf(value: unknown): Task | undefined {
 }
 
 // undefined: the file is not a record (a partial write, another version's).
-// A record 0.4.1 wrote also lists wakeups, which are read live now and ignored here.
+// A record 0.4.1 wrote also lists wakeups, which Claude Code restores on resume; ignored here.
 export function parseRecord(text: string): TaskRecord | undefined {
   let value: unknown
   try {

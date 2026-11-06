@@ -12,7 +12,6 @@
 // CCA_BALANCE=off stops the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
 import { context, exitOf, type Context } from './context'
-import { liveCrons } from './crons'
 import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { accountStates, liveSessions, ownReading, writeReading, type LiveSession } from './survey'
@@ -109,18 +108,12 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   if (stop === undefined && full === undefined && heavier === undefined) return
   // `full ?? tight` is set whenever `stop` is not.
   const window = stop !== undefined && 'window' in stop ? stop.window : full ?? tight ?? 'five_hour'
-  if (stop === undefined) {
-    // A session the extension started before cca-stream cannot be told to
-    // set its wakeups again, so it keeps them, or wakeups it cannot rule out,
-    // until its account stops a turn.
-    if (exit.switchFile === undefined && (await liveCrons($))?.length !== 0) return
-    if (resetsSoon(reading, window, now)) {
-      $.ui.log(
-        `cc-accounts: ${from}'s ${describeWindows(reading, now)}, but the ${windowName(window)} window resets within ` +
-          `${POLICY.resetGraceMs / 60_000} minutes; staying.`,
-      )
-      return
-    }
+  if (stop === undefined && resetsSoon(reading, window, now)) {
+    $.ui.log(
+      `cc-accounts: ${from}'s ${describeWindows(reading, now)}, but the ${windowName(window)} window resets within ` +
+        `${POLICY.resetGraceMs / 60_000} minutes; staying.`,
+    )
+    return
   }
   const family = await sessionFamily($, state.answered)
   // A failure the readings do not explain is recorded, so that no session

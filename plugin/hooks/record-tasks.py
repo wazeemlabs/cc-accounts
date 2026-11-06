@@ -5,9 +5,9 @@ Claude Code passes the hook its input on stdin, with `session_id` and
 `background_tasks` (subagents, shells, monitors and workflows in flight).
 This writes {"tasks": [...]} to <CCA_ROOT>/background/<session id>, where the
 plugin's module reads it when the turn completes, to decide whether a pending
-switch can end the process yet. The session's scheduled wakeups are not
-taken from here: `session_crons` clips their prompts, so the module asks
-CronList when a switch needs them. A session that cca does not manage (no
+switch can end the process yet. The session's scheduled wakeups
+(`session_crons`) are left out: Claude Code restores them itself when the
+conversation is resumed. A session that cca does not manage (no
 accounts.tsv) writes nothing.
 """
 import json

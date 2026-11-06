@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { Cron } from '../hooks/crons'
 import { followUpText, parseReading } from '../hooks/usage'
 import {
   BY_SESSION,
+  type Cron,
   LATER,
   ROOT,
   SELF,
@@ -102,7 +102,7 @@ describe('a session leaves an account that is nearly spent', () => {
     limits(w, 100)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'five_hour' }, stopped: ['shell "npm test"'], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'five_hour' }, stopped: ['shell "npm test"'] })}\n`)
     expect(w.killed).toEqual([SIGINT])
   })
 
@@ -259,7 +259,7 @@ describe('how the move reopens the conversation', () => {
     limits(w, 99.5)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'five_hour' }, stopped: [], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'five_hour' }, stopped: [] })}\n`)
     expect(w.ran).toEqual(['exit'])
   })
 
@@ -301,7 +301,7 @@ describe('how the move reopens the conversation', () => {
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
     expect(w.logs).toContain("cc-accounts: 1's 5-hour window is at 92% and its weekly window at 100%; moving this conversation to 2.")
-    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'seven_day' }, stopped: [], crons: [] })}\n`)
+    expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'seven_day' }, stopped: [] })}\n`)
   })
 
   // Claude Code restores the session's own wakeups when the conversation is

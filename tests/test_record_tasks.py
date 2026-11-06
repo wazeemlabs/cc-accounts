@@ -42,8 +42,8 @@ class RecordTasks(unittest.TestCase):
         self.assertEqual(json.loads(self.record.read_text()),
                          {'tasks': [{'id': 'b1', 'type': 'shell', 'status': 'running', 'description': 'npm test'}]})
 
-    def test_leaves_the_scheduled_wakeups_to_cronlist_whatever_shape_they_come_in(self):
-        # session_crons clips prompts at 1000 characters; the plugin reads them from CronList.
+    def test_leaves_out_the_scheduled_wakeups_whatever_shape_they_come_in(self):
+        # Claude Code restores a session's wakeups on resume, so a switch needs no record of them.
         for crons in ([{'id': 'c1', 'schedule': '* * * * *', 'prompt': 'x… [+20 chars]'}], 'c1'):
             with self.subTest(crons=crons):
                 self.assertEqual(self.hook({**self.stop([]), 'session_crons': crons}).returncode, 0)

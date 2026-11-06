@@ -3,7 +3,6 @@ import { formatList, parseAsk, USAGE } from './accounts'
 import { taskStarted, turnMark } from './background'
 import { balance, noteMeasure } from './balance'
 import { context, defaultName, describeError, emailOf, exitOf, record, writeAtomic } from './context'
-import { describeCron, liveCrons } from './crons'
 import {
   DEFAULT_WEIGHT,
   MAX_WEIGHT,
@@ -178,14 +177,6 @@ export const register: Register = on => {
       : ''
 
     const exit = await exitOf($, sessionId)
-    // A tab opened before cca-stream reopens with nothing to tell the
-    // conversation, so the wakeups the switch drops are named to the person.
-    const unkept = exit?.kind === 'stream' && exit.switchFile === undefined ? await liveCrons($) : []
-    const lost = unkept === undefined
-      ? '\nThis tab was opened before cc-accounts could reopen it in place, and its scheduled wakeups could not be listed: any it holds end with the switch.'
-      : unkept.length > 0
-        ? `\nThis tab was opened before cc-accounts could reopen it in place, so the switch ends its scheduled wakeups. Ask for them again once it has moved: ${unkept.map(describeCron).join('; ')}.`
-        : ''
     const asked = await requestSwitch($, state, ctx, exit, { target: target.name, force: ask.force })
     // Started without cca: the process cannot change its own login, so the
     // choice waits for the conversation's next open.
@@ -199,7 +190,7 @@ export const register: Register = on => {
     if (asked.kind === 'started') {
       const { stopping } = asked
       const stopped = stopping.turn || stopping.tasks.length > 0 ? `, stopping ${describeWait(stopping)}` : ''
-      return { text: `${leadOf(asked.exit, target.name)}${stopped}: ${afterOf(asked.exit, 'it')}${signIn}${lost}` }
+      return { text: `${leadOf(asked.exit, target.name)}${stopped}: ${afterOf(asked.exit, 'it')}${signIn}` }
     }
     const count = asked.wait.tasks.length + (asked.wait.turn ? 1 : 0)
     $.ui.status(`account ${current ?? '(unknown)'}, switching to ${target.name}`)
@@ -208,7 +199,7 @@ export const register: Register = on => {
       text:
         `Switch to ${target.name} queued: waiting for ${describeWait(asked.wait)} to end. ` +
         `Then ${afterOf(asked.exit, target.name)}${signIn}\n` +
-        `To switch now and stop ${count === 1 ? 'it' : 'them'}, type /account ${target.name} now.${stay}${lost}`,
+        `To switch now and stop ${count === 1 ? 'it' : 'them'}, type /account ${target.name} now.${stay}`,
     }
   })
 }

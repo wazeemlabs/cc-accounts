@@ -1,5 +1,3 @@
-import { describeCron, type Cron } from './crons'
-
 // How full each account's rate-limit windows are, and which account a
 // session should move to when its own is nearly spent. Pure: balance.ts does
 // the reading and writing.
@@ -214,14 +212,14 @@ export function describeUse(reading: Reading | undefined, now: number): string {
 // it needs to be told nothing: `stop`, what stopped its last turn;
 // `interrupted`, whether ending the process cut short a turn a message
 // started after the switch was decided; `stopped`, the background work the
-// move ended; `crons`, the scheduled wakeups the move dropped.
+// move ended. Scheduled wakeups need no word: Claude Code restores the
+// session's own when the conversation is resumed.
 export type Move = {
   from: string | undefined
   to: string
   stop: Stop | undefined
   interrupted: boolean
   stopped: readonly string[]
-  crons: readonly Cron[]
 }
 
 // How the conversation is told what stopped its last turn.
@@ -243,14 +241,6 @@ export function followUpText(move: Move): string | undefined {
     }
   } else if (move.interrupted) {
     parts.push(`Moving this conversation to the ${move.to} account interrupted your turn. Carry on from where you stopped.`)
-  }
-  if (move.crons.length > 0) {
-    const carryOn = parts.length > 0
-    if (!carryOn) parts.push(`This conversation moved to the ${move.to} account.`)
-    parts.push(
-      `The move dropped your scheduled wakeups. Schedule them again: ${move.crons.map(describeCron).join('; ')}.` +
-        (carryOn ? '' : ' Nothing else is needed.'),
-    )
   }
   return parts.length === 0 ? undefined : `[cc-accounts] ${parts.join(' ')}`
 }

@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.5.2 (2026-11-06)
+
+- A switch no longer doubles the session's scheduled wakeups. Claude Code now restores them itself when the conversation is resumed, but the follow-up still listed them and asked the conversation to set them again, so each move added a copy. On 2026-11-06 a one-shot job that posts a YouTube comment was doubled this way. The follow-up now only says why a turn stopped or was cut, and a planned move sends none.
+- A VS Code tab opened before cca-stream moves at the leave line even when it holds wakeups. It used to stay until the limit stopped a turn, to keep wakeups it keeps anyway. `/account` no longer warns that such a switch ends them.
+
 ## 0.5.1 (2026-11-06)
 
 - The balancer's log lines name each window with its figure: "levoro's 5-hour window is at 46% and its weekly window at 95%; moving this conversation to ceo-team". Before, "levoro's weekly window is at 5h 46%, week 95%" read as if the weekly window were at 46%. The status line keeps its short form.

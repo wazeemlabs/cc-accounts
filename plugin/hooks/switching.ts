@@ -4,7 +4,6 @@
 // switch waits for the turn to end and the work to finish unless forced.
 import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
-import { liveCrons } from './crons'
 import { followUpText, type Move, type Stop } from './usage'
 import { describeError, record, type Context } from './context'
 
@@ -227,11 +226,10 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
   const { exit, target, from, stop } = pending
   try {
     // What the reopened conversation is told, as things stand now: the work a
-    // forced move stops, which one the account forced asks it to start again,
-    // and the wakeups every move drops. Only a switch file carries a follow-up.
+    // forced move stops, which one the account forced asks it to start again.
+    // Only a switch file carries a follow-up.
     const stopped = stop === undefined ? [] : (await waitingFor($, state)).tasks.map(nameTask)
-    const crons = exit.switchFile === undefined ? [] : ((await liveCrons($)) ?? [])
-    await runExit($, state, pending, { from, to: target, stop, interrupted: false, stopped, crons })
+    await runExit($, state, pending, { from, to: target, stop, interrupted: false, stopped })
   } catch (error) {
     $.ui.log(`cc-accounts: the switch to ${target} failed (${describeError(error)}); type /account ${target} again.`)
   } finally {

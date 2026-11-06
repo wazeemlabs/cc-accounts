@@ -27,7 +27,7 @@ describe('background work', () => {
       tasks: [SHELL],
     })
     expect(parseRecord('{"tasks":[]}')).toEqual({ kind: 'tasks', tasks: [] })
-    // 0.4.1 also saved wakeups; CronList is read for them now.
+    // 0.4.1 also saved wakeups; Claude Code restores them on resume now.
     expect(parseRecord('{"tasks":[],"crons":[{"id":"c1","schedule":"* * * * *"}]}')).toEqual({ kind: 'tasks', tasks: [] })
     expect(parseRecord(turnMark('t1'))).toEqual({ kind: 'turn', turnId: 't1' })
     expect(parseRecord('{"tasks":[{"type":"shell"}]}')).toBe(undefined)
@@ -126,7 +126,7 @@ describe('/account waits for the work a switch would stop', () => {
     w.agents.push({ id: 'a1', description: 'scout', type: 'general-purpose', status: 'running' })
     const { text } = await $.command.run(run('2'))
     expect(text).toContain('waiting for 1 background task (subagent "scout") to end')
-    w.agents[0] = { ...w.agents[0], status: 'completed' }
+    w.agents.splice(0, 1, { id: 'a1', description: 'scout', type: 'general-purpose', status: 'completed' })
     await turn($, w, [])
     await w.clock.advance(0)
     expect(w.killed).toEqual([SIGINT])
