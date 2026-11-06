@@ -63,7 +63,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   // The folder the session's shell is in was deleted (a removed worktree):
   // a command started there cannot start.
   const folder = { gone: false }
-  // Files whose writes fail, by path prefix.
+  // Files that cannot be saved, by path prefix: renaming into place fails.
   const failWrites = new Set<string>()
   mock.env(on, { HOME, ...env })
   const clock = mock.clock(on)
@@ -80,7 +80,6 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     return { value: names.map(path => ({ name: path.slice(dir.length), kind: 'file', size: 0, mtimeMs: 0, isLink: false })) as never }
   })
   on('fs.write', async (_$, e) => {
-    if ([...failWrites].some(prefix => e.path.startsWith(prefix))) throw new Error(`EACCES ${e.path}`)
     writes.push(e.path)
     files.set(e.path, e.text)
     return { value: undefined }
@@ -121,6 +120,8 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     if (folder.gone && e.init?.cwd === undefined) throw new Error(`$.process.run(${e.argv[0]}) failed to start: ENOENT`)
     if (e.argv[0] === 'mv') {
       // mv -f <from> <to>
+      const to = e.argv[3] ?? ''
+      if ([...failWrites].some(prefix => to.startsWith(prefix))) return done(1, `mv: rename to ${to}: Permission denied`)
       const text = files.get(e.argv[2] ?? '')
       if (text === undefined) return done(1, 'No such file or directory')
       files.set(e.argv[3] ?? '', text)

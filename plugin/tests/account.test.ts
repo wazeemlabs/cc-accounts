@@ -147,7 +147,7 @@ describe('/account', () => {
     const w = world(on, SUPERVISED)
     w.failWrites.add(`${ROOT}/by-session/`)
     await $.session.start(START)
-    expect(w.logs.some(text => text.startsWith('cc-accounts: could not') && text.includes('EACCES'))).toBe(true)
+    expect(w.logs.some(text => text.startsWith('cc-accounts: could not') && text.includes('Permission denied'))).toBe(true)
   })
 
   test('/account default that cannot be saved says so', async ($, on) => {
@@ -156,7 +156,7 @@ describe('/account', () => {
     w.failWrites.add(`${ROOT}/default`)
     const { text } = await $.command.run(run('default 2'))
     expect(text).toContain('could not')
-    expect(text).toContain('EACCES')
+    expect(text).toContain('Permission denied')
   })
 
   test('a claude started inside a cca terminal session does not switch its parent', async ($, on) => {

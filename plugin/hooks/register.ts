@@ -46,6 +46,9 @@ export const register: Register = on => {
       await record($, ctx, await $.session.id(), ctx.current.name)
     }
     return result
+  }).catch(async ($, e, next) => {
+    $.ui.log(`cc-accounts: could not record this session's account (${describeError(next.error)}).`)
+    return next(e)
   })
 
   // A main-loop turn in flight, marked in the record file so that its end
@@ -55,6 +58,11 @@ export const register: Register = on => {
       state.turns += 1
       if (state.root !== undefined) await $.fs.write(recordFile(state.root, await $.session.id()), turnMark(e.turnId))
     }
+    return next(e)
+  }).catch(async ($, e, next) => {
+    // The turn is still counted once it was; only its mark is missing, so a
+    // turn that ends without a Stop hook keeps the work listed before it.
+    $.ui.log(`cc-accounts: could not mark this turn's start (${describeError(next.error)}).`)
     return next(e)
   })
 
@@ -74,6 +82,9 @@ export const register: Register = on => {
     }
     if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
     return result
+  }).catch(async ($, e, next) => {
+    $.ui.log(`cc-accounts: could not finish this turn's checks (${describeError(next.error)}).`)
+    return next(e)
   })
 
   // The account's rate-limit windows moved: every session can now see them.
@@ -201,5 +212,5 @@ export const register: Register = on => {
         `Then ${afterOf(asked.exit, target.name)}${signIn}\n` +
         `To switch now and stop ${count === 1 ? 'it' : 'them'}, type /account ${target.name} now.${stay}`,
     }
-  })
+  }).catch(($, _e, next) => ({ text: `cc-accounts: /account could not finish (${describeError(next.error)}).` }))
 }

@@ -44,14 +44,26 @@ export async function defaultName($: EngineInterface, ctx: Context): Promise<str
   return (await $.fs.read(file)).trim() || ctx.accounts[0]?.name
 }
 
+// Runs a command from `/`. $.process.run starts one in the session's folder
+// by default, and a session can delete the folder it is in (a worktree it
+// removed), after which no command starts there (2026-11-06: ENOENT).
+export function run($: EngineInterface, argv: readonly string[]): ReturnType<EngineInterface['process']['run']> {
+  return $.process.run(argv, { cwd: '/' })
+}
+
+// Writes started in this process, which name their temporary files.
+let writesStarted = 0
+
 // Writes a file other sessions and cca read while it may be rewritten: a
-// temporary file beside it, named for this session so that writers never
-// share one, then renamed over it, so a reader sees the old text or the new
-// and never half of it.
+// temporary file beside it, named for this session and this write so that
+// writers never share one, then renamed over it, so a reader sees the old
+// text or the new and never half of it.
 export async function writeAtomic($: EngineInterface, path: string, text: string): Promise<void> {
-  const temp = `${path}.${await $.session.id()}.tmp`
+  writesStarted += 1
+  const write = writesStarted
+  const temp = `${path}.${await $.session.id()}.${write}.tmp`
   await $.fs.write(temp, text)
-  const { exitCode, stderr } = await $.process.run(['mv', '-f', temp, path])
+  const { exitCode, stderr } = await run($, ['mv', '-f', temp, path])
   if (exitCode !== 0) throw new Error(`could not save ${path}: ${stderr.trim()}`)
 }
 
@@ -63,7 +75,7 @@ export async function record($: EngineInterface, ctx: Context, sessionId: string
 // This process's id and its parent's, as decimal strings. $.process.run starts
 // sh directly, so sh's parent is this process.
 async function processIds($: EngineInterface): Promise<{ self: string; parent: string } | undefined> {
-  const { exitCode, stdout } = await $.process.run(['/bin/sh', '-c', 'echo $PPID; ps -o ppid= -p $PPID'])
+  const { exitCode, stdout } = await run($, ['/bin/sh', '-c', 'echo $PPID; ps -o ppid= -p $PPID'])
   const [self, parent] = stdout.split('\n').map(line => line.trim())
   return exitCode === 0 && self && parent ? { self, parent } : undefined
 }

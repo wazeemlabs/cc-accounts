@@ -30,13 +30,18 @@ export function parseWeight(text: string): number | undefined {
   return weight > 0 && weight <= MAX_WEIGHT ? weight : undefined
 }
 
-// A folder as the file keys it: absolute, `~` expanded, no trailing slash.
+// A folder as the file keys it, the way a session's folder reads: absolute,
+// `~` expanded, `.` and `..` resolved, no doubled or trailing slash.
 // Undefined for a relative path, which names no one folder.
 export function normalizeFolder(path: string, home: string): string | undefined {
   const expanded = path === '~' ? home : path.startsWith('~/') ? `${home}${path.slice(1)}` : path
   if (!expanded.startsWith('/')) return undefined
-  const trimmed = expanded.replace(/\/+$/, '')
-  return trimmed === '' ? '/' : trimmed
+  const parts: string[] = []
+  for (const part of expanded.split('/')) {
+    if (part === '..') parts.pop()
+    else if (part !== '' && part !== '.') parts.push(part)
+  }
+  return `/${parts.join('/')}`
 }
 
 // The file's weights, or undefined when it is not a priorities file.

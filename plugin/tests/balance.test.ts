@@ -45,7 +45,7 @@ describe('every session saves its account usage', () => {
     await $.session.start(START)
     limits(w, 42)
     await $.session.measure({ context: { window: 200000 }, rateLimits: [...w.limits], changed: ['rateLimits'] } as never)
-    expect(w.writes).toContain(`${ROOT}/usage/1.json.${SESSION}.tmp`)
+    expect(w.writes.some(path => path.startsWith(`${ROOT}/usage/1.json.${SESSION}.`) && path.endsWith('.tmp'))).toBe(true)
     expect(w.writes).not.toContain(`${ROOT}/usage/1.json`)
     expect([...w.files.keys()].filter(path => path.endsWith('.tmp'))).toEqual([])
     expect(parseReading(w.files.get(`${ROOT}/usage/1.json`) ?? '')?.account).toBe('1')

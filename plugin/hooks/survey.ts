@@ -5,7 +5,7 @@
 // each with the folder it started in.
 import type { EngineInterface } from 'claude-code'
 import { configFileOf, emailIn, tierIn, unitsOfTier, type Account } from './accounts'
-import { writeAtomic, type Context } from './context'
+import { run, writeAtomic, type Context } from './context'
 import { formatReading, parseReading, readingOf, type Reading } from './usage'
 
 export function usageFile(root: string, account: string): string {
@@ -64,7 +64,7 @@ export async function liveSessions($: EngineInterface, ctx: Context): Promise<Li
     }
   }
   if (entries.length === 0) return []
-  const { stdout } = await $.process.run(['ps', '-o', 'pid=', '-p', entries.map(entry => entry.pid).join(',')])
+  const { stdout } = await run($, ['ps', '-o', 'pid=', '-p', entries.map(entry => entry.pid).join(',')])
   const alive = new Set(stdout.split('\n').map(line => line.trim()).filter(line => line !== ''))
   const live: LiveSession[] = []
   for (const entry of entries) {

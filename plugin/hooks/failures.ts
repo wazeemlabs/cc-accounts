@@ -16,7 +16,7 @@
 // `model_requires_usage_credits`), so it is recorded for the model family
 // that hit it, and sessions on other families still move there.
 import type { EngineInterface } from 'claude-code'
-import { describeError, writeAtomic, type Context } from './context'
+import { describeError, run, writeAtomic, type Context } from './context'
 import { blockMsOf } from './usage'
 
 // The scope of a failure that is the whole account's.
@@ -78,19 +78,24 @@ export function failureIn(tail: string): string | undefined {
   return found
 }
 
-// Rows after the API-error one (system notes) are few and short; the error
-// row itself is short.
-const TAIL_LINES = 6
+// How much of the transcript's end is read for the error row. The rows
+// written after it as a turn ends are short but up to a dozen (2.1.318:
+// titles, mode, bridge records, queue entries), and the row before it can
+// be megabytes (a screenshot), so the end is read by bytes, not lines; the
+// first row, cut by the read, does not parse and is skipped.
+const TAIL_BYTES = 1024 * 1024
 
 // The error word that ended this conversation's last turn, from its
-// transcript in the shared projects folder; undefined when it shows none or
-// cannot be read (the caller then goes by the readings).
+// transcript in the shared projects folder (the newest, should a resume from
+// another folder have left two); undefined when it shows none or cannot be
+// read (the caller then goes by the readings).
 export async function turnFailure($: EngineInterface, ctx: Context): Promise<string | undefined> {
   const sessionId = await $.session.id()
-  const { exitCode, stdout, stderr, isStdoutTruncated } = await $.process.run([
+  const { exitCode, stdout, stderr, isStdoutTruncated } = await run($, [
     '/bin/sh',
     '-c',
-    `tail -q -n ${TAIL_LINES} "$1"/projects/*/"$2".jsonl`,
+    'f=$(ls -t "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); ' +
+      `if [ -z "$f" ]; then echo "no transcript of $2" >&2; exit 1; fi; tail -c ${TAIL_BYTES} "$f"`,
     'sh',
     ctx.shared,
     sessionId,

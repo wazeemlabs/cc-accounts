@@ -7,7 +7,7 @@ import type { Context } from './context'
 import { holdsOf } from './failures'
 import { projectName, readPriorities, weightOf, DEFAULT_WEIGHT, type Priorities } from './priorities'
 import { accountStates, liveSessions, type AccountState, type LiveSession } from './survey'
-import { percentNow, POLICY, windowName, type Reading } from './usage'
+import { percentNow, POLICY, windowAtLimit, windowName, type Reading } from './usage'
 
 export type ReportInput = {
   now: number
@@ -34,11 +34,6 @@ function resetIn(reading: Reading, kind: string, now: number): string {
   return Number.isNaN(at) || at <= now ? '-' : untilText(at, now)
 }
 
-// The window at its limit, if any: the account serves no session until it resets.
-function spentWindow(reading: Reading | undefined, now: number): string | undefined {
-  return Object.keys(POLICY.leave).find(kind => percentNow(reading, kind, now) >= 100)
-}
-
 export type Totals = { accounts: number; free: Record<string, number>; beforeMoves: Record<string, number> }
 
 // Free room over the accounts that can serve a session now (signed in,
@@ -49,7 +44,7 @@ export function totals(input: ReportInput): Totals {
   const found: Totals = { accounts: 0, free: { five_hour: 0, seven_day: 0 }, beforeMoves: { five_hour: 0, seven_day: 0 } }
   for (const { state, holds } of input.accounts) {
     const { reading, units } = state
-    if (state.email === undefined || reading === undefined || spentWindow(reading, input.now) !== undefined) continue
+    if (state.email === undefined || reading === undefined || windowAtLimit(reading, input.now) !== undefined) continue
     if (holds.some(hold => hold.scope === 'account')) continue
     found.accounts += 1
     for (const kind of Object.keys(found.free)) {
@@ -88,7 +83,7 @@ function accountLine(input: ReportInput, row: ReportInput['accounts'][number]): 
   if (state.email === undefined) return `${head}not signed in`
   const { reading } = state
   if (reading === undefined) return `${head}no reading yet; ${notes.join(', ')}`
-  const spent = spentWindow(reading, input.now)
+  const spent = windowAtLimit(reading, input.now)
   if (spent !== undefined) {
     return `${head}spent until its ${windowName(spent)} window resets in ${resetIn(reading, spent, input.now)}; ${notes.join(', ')}`
   }

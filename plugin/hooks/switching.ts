@@ -5,7 +5,7 @@
 import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
 import { followUpText, type Move, type Stop } from './usage'
-import { describeError, record, type Context } from './context'
+import { describeError, record, run, type Context } from './context'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
 // waits on the process, reads the switch file and resumes the conversation
@@ -120,7 +120,7 @@ export async function readRecord($: EngineInterface, state: SwitchState): Promis
 
 // Whether a process still runs.
 async function alive($: EngineInterface, pid: string): Promise<boolean> {
-  const { exitCode } = await $.process.run(['kill', '-0', pid])
+  const { exitCode } = await run($, ['kill', '-0', pid])
   return exitCode === 0
 }
 
@@ -145,7 +145,7 @@ const END_POLL_MS = 500
 async function endProcess($: EngineInterface, pid: string, between: () => Promise<void>): Promise<string | undefined> {
   for (const [index, step] of END_STEPS.entries()) {
     if (index > 0) await between()
-    const { exitCode, stderr } = await $.process.run(['kill', step.signal, pid])
+    const { exitCode, stderr } = await run($, ['kill', step.signal, pid])
     if (exitCode !== 0) return `kill ${step.signal} failed: ${stderr.trim()}`
     for (let waited = 0; waited < step.waitMs; waited += END_POLL_MS) {
       await $.clock.sleep(END_POLL_MS)
@@ -166,10 +166,10 @@ export function switchRequest(target: string, sessionId: string, followUp: strin
 // is told to pass it to this process again.
 async function withdraw($: EngineInterface, exit: Exit): Promise<void> {
   if (exit.kind !== 'stream' || exit.switchFile === undefined) return
-  const removed = await $.process.run(['rm', '-f', exit.switchFile])
+  const removed = await run($, ['rm', '-f', exit.switchFile])
   if (removed.exitCode !== 0) throw new Error(`could not remove ${exit.switchFile}: ${removed.stderr.trim()}`)
   if (exit.supervisor === undefined) return
-  const told = await $.process.run(['kill', '-USR1', exit.supervisor])
+  const told = await run($, ['kill', '-USR1', exit.supervisor])
   if (told.exitCode !== 0) throw new Error(`could not tell cca-stream ${exit.supervisor}: ${told.stderr.trim()}`)
 }
 
