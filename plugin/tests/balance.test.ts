@@ -192,16 +192,15 @@ describe('a move is carried out once, and the reopened conversation is told what
     expect(w.writes.filter(path => path === SWITCH)).toEqual([SWITCH])
   })
 
-  test('a wakeup set in the turn the limit stopped is handed over, its prompt whole', async ($, on) => {
+  test('a turn the limit stopped reopens with no word on its wakeups, which Claude Code restores on resume', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
     const turnId = await startTurn($)
-    const long: Cron = { schedule: '0 * * * *', recurring: true, prompt: 'review the open pull requests. '.repeat(50) }
-    schedule(w, [long])
+    schedule(w, [LOOP])
     limits(w, 100)
     await endTurn($, w, turnId)
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(request({ stop: { window: 'five_hour' }, crons: [long] }))
+    expect(w.files.get(SWITCH)).toBe(request({ stop: { window: 'five_hour' } }))
   })
 
   test('a turn a queued message starts as the move ends the process is cut, and the conversation is told to carry on', async ($, on) => {
@@ -241,7 +240,7 @@ describe('a move is carried out once, and the reopened conversation is told what
     expect(w.files.get(SWITCH)).toBe(request())
   })
 
-  test('wakeups CronList cannot list are reported, and the move goes ahead without them', async ($, on) => {
+  test('a move never reads the wakeups, so a CronList that refuses changes nothing', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
     w.denied.set('CronList', 'not allowed here')
@@ -249,7 +248,7 @@ describe('a move is carried out once, and the reopened conversation is told what
     await turn($, w, [])
     await w.clock.advance(0)
     expect(w.files.get(SWITCH)).toBe(request())
-    expect(w.logs).toContain("cc-accounts: could not list this session's scheduled wakeups (not allowed here).")
+    expect(w.logs.filter(line => line.includes('wakeups'))).toEqual([])
   })
 })
 
@@ -305,60 +304,52 @@ describe('how the move reopens the conversation', () => {
     expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'seven_day' }, stopped: [], crons: [] })}\n`)
   })
 
-  test('a move hands the reopened conversation the wakeups it dropped', async ($, on) => {
+  // Claude Code restores the session's own wakeups when the conversation is
+  // resumed (since 2.1.310 at the latest), so a move must not ask for them
+  // again: that doubled every wakeup.
+  test('a planned move reopens with no message, whatever wakeups the session holds', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
     limits(w, 91)
     await turn($, w, [], [LOOP])
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(
-      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: undefined, stopped: [], crons: [LOOP] })}\n`,
-    )
+    expect(w.files.get(SWITCH)).toBe(request())
   })
 
-  test('a VS Code session started before cca-stream keeps its wakeups until the limit forces a move', async ($, on) => {
+  test('a VS Code session started before cca-stream moves at the leave line whatever wakeups it holds', async ($, on) => {
     const w = world(on, STREAM)
     await $.session.start(START)
     limits(w, 91)
     await turn($, w, [], [LOOP])
     await w.clock.advance(0)
-    expect(w.killed).toEqual([])
-    limits(w, 100)
-    await endTurn($, w, await startTurn($))
-    await w.clock.advance(0)
+    expect(w.files.get(BY_SESSION)).toBe('2\n')
     expect(w.killed).toEqual([SIGINT])
   })
 
-  test('a VS Code session started before cca-stream whose wakeups cannot be listed stays until the limit', async ($, on) => {
+  test('a VS Code session started before cca-stream moves when its wakeups cannot be listed', async ($, on) => {
     const w = world(on, STREAM)
     await $.session.start(START)
     w.denied.set('CronList', 'no')
     limits(w, 91)
     await turn($, w, [])
     await w.clock.advance(0)
-    expect(w.killed).toEqual([])
+    expect(w.killed).toEqual([SIGINT])
   })
 
-  test('/account in a tab opened before cca-stream names the wakeups the switch ends', async ($, on) => {
+  test('/account in a tab opened before cca-stream says nothing of wakeups', async ($, on) => {
     const w = world(on, STREAM)
     await $.session.start(START)
     await turn($, w, [], [LOOP])
     const { text } = await $.command.run(run('2'))
-    expect(text).toBe(
-      'Switched to 2: your next message continues this conversation on it.\n' +
-        'This tab was opened before cc-accounts could reopen it in place, so the switch ends its scheduled wakeups. ' +
-        'Ask for them again once it has moved: recurring at "*/5 * * * *" with the prompt "check CI".',
-    )
+    expect(text).toBe('Switched to 2: your next message continues this conversation on it.')
   })
 
-  test('/account also hands over the wakeups it drops', async ($, on) => {
+  test('/account reopens with no message, whatever wakeups the session holds', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
     await turn($, w, [], [LOOP])
     await $.command.run(run('2'))
     await w.clock.advance(0)
-    expect(w.files.get(SWITCH)).toBe(
-      `2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: undefined, stopped: [], crons: [LOOP] })}\n`,
-    )
+    expect(w.files.get(SWITCH)).toBe(request())
   })
 })
