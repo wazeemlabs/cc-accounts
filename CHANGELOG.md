@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.5.1 (2026-11-06)
+
+- The balancer's log lines name each window with its figure: "levoro's 5-hour window is at 46% and its weekly window at 95%; moving this conversation to ceo-team". Before, "levoro's weekly window is at 5h 46%, week 95%" read as if the weekly window were at 46%. The status line keeps its short form.
+
 ## 0.5.0 (2026-11-06)
 
 - Projects can matter more than others. `/account priority 3` gives the project you are in a weight of 3, and `/account priority 0.5 <folder>` gives any folder one. The weights live in `~/.claude-shared/accounts/priorities.json`. When a session picks an account to move to, each session already there counts by its project's weight, so lighter projects keep off the accounts heavier ones use. On an account past 75% of its five-hour window or 90% of its week, a session of a lighter project moves off when a heavier one shares the account, leaving the rest to it. It moves only to an account with plenty of room.

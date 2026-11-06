@@ -3,6 +3,7 @@ import {
   blockMsOf,
   chooseTarget,
   describeUse,
+  describeWindows,
   followUpText,
   formatReading,
   fullWindow,
@@ -182,6 +183,12 @@ describe('a window about to reset', () => {
 })
 
 describe('what the session is told', () => {
+  test('a log line names each window and its figure in words', () => {
+    expect(describeWindows(reading('a', 46.4, 95), NOW)).toBe('5-hour window is at 46% and its weekly window at 95%')
+    expect(describeWindows(readingOf('a', NOW, [{ kind: 'seven_day', percentUsed: 12, resetsAt: LATER }]), NOW)).toBe('weekly window is at 12%')
+    expect(describeWindows(undefined, NOW)).toBe('usage is not known yet')
+  })
+
   test('the figure for the status line and /account', () => {
     expect(describeUse(reading('a', 42.4, 7.6), NOW)).toBe('5h 42%, week 8%')
     expect(describeUse(readingOf('a', NOW, [{ kind: 'five_hour', percentUsed: 3, resetsAt: LATER }]), NOW)).toBe('5h 3%')

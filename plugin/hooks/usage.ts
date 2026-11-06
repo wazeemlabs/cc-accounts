@@ -191,6 +191,18 @@ export function chooseTarget(
   return best?.name
 }
 
+// The windows in words, to follow an account's name and `'s` in a log line:
+// `5-hour window is at 46% and its weekly window at 95%`.
+export function describeWindows(reading: Reading | undefined, now: number): string {
+  const parts = ['five_hour', 'seven_day']
+    .filter(kind => reading?.windows[kind] !== undefined)
+    .map((kind, index) => {
+      const figure = `${Math.round(percentNow(reading, kind, now))}%`
+      return index === 0 ? `${windowName(kind)} window is at ${figure}` : `its ${windowName(kind)} window at ${figure}`
+    })
+  return parts.length === 0 ? 'usage is not known yet' : parts.join(' and ')
+}
+
 // `5h 42%`, for the status line and /account; '' with no reading.
 export function describeUse(reading: Reading | undefined, now: number): string {
   if (reading === undefined || reading.windows.five_hour === undefined) return ''

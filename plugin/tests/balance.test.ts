@@ -139,7 +139,7 @@ describe('a session leaves an account that is nearly spent', () => {
     await w.clock.advance(0)
     expect(w.killed).toEqual([])
     expect(w.files.get(BY_SESSION)).toBe('1\n')
-    expect(w.logs.at(-1)).toBe("cc-accounts: 1's 5-hour window is at 5h 95%, week 0%, and no other account has room to move to.")
+    expect(w.logs.at(-1)).toBe("cc-accounts: 1's 5-hour window is at 95% and its weekly window at 0%, and no other account has room to move to.")
   })
 
   test('CCA_BALANCE=off keeps every session where it is', async ($, on) => {
@@ -301,7 +301,7 @@ describe('how the move reopens the conversation', () => {
     limits(w, 92, 100)
     await endTurn($, w, await startTurn($))
     await w.clock.advance(0)
-    expect(w.logs).toContain("cc-accounts: 1's weekly window is at 5h 92%, week 100%; moving this conversation to 2.")
+    expect(w.logs).toContain("cc-accounts: 1's 5-hour window is at 92% and its weekly window at 100%; moving this conversation to 2.")
     expect(w.files.get(SWITCH)).toBe(`2 ${SESSION}\n${followUpText({ from: '1', to: '2', interrupted: false, stop: { window: 'seven_day' }, stopped: [], crons: [] })}\n`)
   })
 

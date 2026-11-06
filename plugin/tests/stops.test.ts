@@ -204,7 +204,7 @@ describe('a window about to reset', () => {
     await turn($, w, [])
     await w.clock.advance(0)
     expect(w.killed).toEqual([])
-    expect(w.logs.at(-1)).toBe("cc-accounts: 1's 5-hour window is at 5h 92%, week 0% but resets within 15 minutes; staying.")
+    expect(w.logs.at(-1)).toBe("cc-accounts: 1's 5-hour window is at 92% and its weekly window at 0%, but the 5-hour window resets within 15 minutes; staying.")
   })
 
   test('one further off moves as before', async ($, on) => {

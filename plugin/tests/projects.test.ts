@@ -32,7 +32,8 @@ describe('a lighter session makes room for a heavier one', () => {
     expect(w.files.get(BY_SESSION)).toBe('2\n')
     expect(w.killed).toEqual([SIGINT])
     expect(w.logs).toContain(
-      'cc-accounts: 1 is at 5h 78%, week 0%, and heavy (priority 3) on it outweighs this project (priority 1); moving this conversation to 2.',
+      "cc-accounts: 1's 5-hour window is at 78% and its weekly window at 0%, and heavy (priority 3) on it outweighs this project " +
+        '(priority 1); moving this conversation to 2.',
     )
   })
 

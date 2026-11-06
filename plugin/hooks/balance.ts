@@ -21,6 +21,7 @@ import {
   ACCOUNT_FAILURES,
   chooseTarget,
   describeUse,
+  describeWindows,
   fullWindow,
   POLICY,
   resetsSoon,
@@ -114,7 +115,10 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
     // until its account stops a turn.
     if (exit.switchFile === undefined && (await liveCrons($))?.length !== 0) return
     if (resetsSoon(reading, window, now)) {
-      $.ui.log(`cc-accounts: ${from}'s ${windowName(window)} window is at ${describeUse(reading, now)} but resets within ${POLICY.resetGraceMs / 60_000} minutes; staying.`)
+      $.ui.log(
+        `cc-accounts: ${from}'s ${describeWindows(reading, now)}, but the ${windowName(window)} window resets within ` +
+          `${POLICY.resetGraceMs / 60_000} minutes; staying.`,
+      )
       return
     }
   }
@@ -128,9 +132,9 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const why = stop !== undefined && 'error' in stop
     ? `${from} failed the last turn (${stop.error})`
     : heavier !== undefined
-      ? `${from} is at ${describeUse(reading, now)}, and ${projectName(heavier.folder)} (priority ${heavier.weight}) on it outweighs ` +
+      ? `${from}'s ${describeWindows(reading, now)}, and ${projectName(heavier.folder)} (priority ${heavier.weight}) on it outweighs ` +
         `this project (priority ${mine.weight})`
-      : `${from}'s ${windowName(window)} window is at ${describeUse(reading, now)}`
+      : `${from}'s ${describeWindows(reading, now)}`
   if (target === undefined) {
     // Making room is a courtesy: with nowhere better to go, the session stays quietly.
     if (heavier === undefined) $.ui.log(`cc-accounts: ${why}, and no other account has room to move to.`)
