@@ -49,6 +49,46 @@ setup
 "$CCA" run
 check "use changes the account new sessions start on" "dir=$HOME/.claude-two account=2 args=" "$(cat "$LOG")"
 
+# The plugin publishes where a new session should start (accounts/start).
+age() { # file, seconds ago
+  python3 -I -c 'import os, sys, time; t = time.time() - float(sys.argv[2]); os.utime(sys.argv[1], (t, t))' "$1" "$2"
+}
+
+setup
+echo 1 > "$CCA_ROOT/default"; age "$CCA_ROOT/default" 600
+echo 2 > "$CCA_ROOT/start"
+"$CCA" run -p hi
+check "a new session starts where the plugin's fresh choice says" "dir=$HOME/.claude-two account=2 args=-p hi" "$(cat "$LOG")"
+
+setup
+echo 2 > "$CCA_ROOT/start"; age "$CCA_ROOT/start" 600
+echo 1 > "$CCA_ROOT/default"
+"$CCA" run
+check "a default set after the choice wins until the plugin chooses again" "dir=unset account=1 args=" "$(cat "$LOG")"
+
+setup
+echo 2 > "$CCA_ROOT/start"; age "$CCA_ROOT/start" 7200
+"$CCA" run
+check "a choice over an hour old is not trusted" "dir=unset account=1 args=" "$(cat "$LOG")"
+
+setup
+echo gone > "$CCA_ROOT/start"
+"$CCA" run
+check "a choice naming an account no longer in the table is passed over" "dir=unset account=1 args=" "$(cat "$LOG")"
+
+setup
+echo 2 > "$CCA_ROOT/start"
+echo 1 > "$CCA_ROOT/by-session/$ID"
+"$CCA" run --resume "$ID"
+check "a resumed conversation keeps to the account it last ran on" "dir=unset account=1 args=--resume $ID" "$(cat "$LOG")"
+
+setup
+echo 2 > "$CCA_ROOT/start"
+out="$("$CCA")"
+check "list marks where new sessions start, and says the default is low" \
+  "* 2|* new sessions start here; 1, the default, is low on room. Move a running one with /account <name>." \
+  "$(echo "$out" | sed -n 2p | awk '{print $1, $2}')|$(echo "$out" | tail -1)"
+
 setup
 "$CCA" use nope 2>/dev/null; status=$?
 check "use refuses an unknown account" "2 1" "$status $(cat "$CCA_ROOT/default" 2>/dev/null || echo 1)"

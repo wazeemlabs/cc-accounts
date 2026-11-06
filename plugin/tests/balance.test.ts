@@ -284,6 +284,28 @@ describe('a move is carried out once, and the reopened conversation is told what
   })
 })
 
+describe('where new sessions start', () => {
+  test("every turn's end publishes the account a new session should start on for cca", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 40)
+    await turn($, w, [])
+    expect(w.files.get(`${ROOT}/start`)).toBe('1\n')
+    // Past the take line: account 2 (signed in, unmeasured) takes new sessions.
+    limits(w, 80)
+    await turn($, w, [])
+    expect(w.files.get(`${ROOT}/start`)).toBe('2\n')
+  })
+
+  test('with the balancer off nothing is published, and cca keeps to the default', async ($, on) => {
+    const w = world(on, { ...SUPERVISED, CCA_BALANCE: 'off' })
+    await $.session.start(START)
+    limits(w, 80)
+    await turn($, w, [])
+    expect(w.files.has(`${ROOT}/start`)).toBe(false)
+  })
+})
+
 describe('how the move reopens the conversation', () => {
   test('in a terminal the message rides in the switch file and the session exits', async ($, on) => {
     const w = world(on, TERMINAL)

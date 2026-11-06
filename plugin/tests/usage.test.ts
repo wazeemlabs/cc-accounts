@@ -13,6 +13,7 @@ import {
   POLICY,
   readingOf,
   resetsSoon,
+  startAccount,
   tightWindow,
   type Candidate,
   type Reading,
@@ -165,6 +166,33 @@ describe('which account a session moves to', () => {
 
   test('ties go to the account listed first', () => {
     expect(chooseTarget('a', [candidate('b', undefined), candidate('c', undefined)], NOW, POLICY.take)).toBe('b')
+  })
+})
+
+describe('which account a new session starts on', () => {
+  test('the default while it has room below the take line', () => {
+    const all = [candidate('a', reading('a', 60)), candidate('b', reading('b', 0))]
+    expect(startAccount('a', all, NOW)).toBe('a')
+    // Unmeasured, it is taken on trust.
+    expect(startAccount('a', [candidate('a', undefined), candidate('b', reading('b', 0))], NOW)).toBe('a')
+  })
+
+  test('past the take line, the account a planned move would take', () => {
+    const all = [candidate('a', reading('a', 80)), candidate('b', reading('b', 40)), candidate('c', reading('c', 10))]
+    expect(startAccount('a', all, NOW)).toBe('c')
+    expect(startAccount('a', [candidate('a', reading('a', 10, 92)), candidate('b', reading('b', 5))], NOW)).toBe('b')
+  })
+
+  test('with none below the take line, the one a stopped turn would take; with none at all, the default', () => {
+    expect(startAccount('a', [candidate('a', reading('a', 95)), candidate('b', reading('b', 85))], NOW)).toBe('b')
+    expect(startAccount('a', [candidate('a', reading('a', 95)), candidate('b', reading('b', 92))], NOW)).toBe('a')
+  })
+
+  test('a default held off after a failure, or not signed in (no candidate), is passed over', () => {
+    const held = { ...candidate('a', reading('a', 0)), blockedUntil: NOW + 1 }
+    expect(startAccount('a', [held, candidate('b', reading('b', 50))], NOW)).toBe('b')
+    expect(startAccount('a', [candidate('b', reading('b', 50))], NOW)).toBe('b')
+    expect(startAccount(undefined, [candidate('b', reading('b', 50))], NOW)).toBe('b')
   })
 })
 

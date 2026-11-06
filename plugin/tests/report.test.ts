@@ -25,6 +25,7 @@ function input(accounts: AccountState[], extra: Partial<ReportInput> = {}): Repo
     priorities: new Map(),
     current: undefined,
     defaultName: undefined,
+    startName: undefined,
     ...extra,
   }
 }
@@ -83,6 +84,7 @@ describe('/account usage', () => {
       priorities: new Map([['/p/app', 3]]),
       current: 'cto',
       defaultName: 'levoro',
+      startName: 'levoro',
     })
     expect(text.split('\n')).toEqual([
       'account     5-hour free  resets in  week free  resets in   sessions',
@@ -100,6 +102,12 @@ describe('/account usage', () => {
       'sub                             1         1   levoro',
       'Change a weight with /account priority <weight> [folder]; 1 is the default.',
     ])
+  })
+
+  test('marks the account new sessions start on, and the default when it is low on room', () => {
+    const text = formatReport(input([state('cto', 32, 14), state('levoro', 85, 88)], { defaultName: 'levoro', startName: 'cto' }))
+    expect(text).toContain('cto                 68%      2h 9m        86%      3d 4h   0, ← new sessions')
+    expect(text).toContain('levoro              15%      2h 9m        12%      3d 4h   0, ← default, low on room')
   })
 
   test('with no sessions and no weights it says so', () => {

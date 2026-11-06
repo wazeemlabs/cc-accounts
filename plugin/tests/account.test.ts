@@ -134,6 +134,20 @@ describe('/account', () => {
     expect(w.released).toEqual([SUPERVISOR])
   })
 
+  test('marks where new sessions start, and the default when it is low on room', async ($, on) => {
+    const w = world(on, { CLAUDE_ACCOUNT: '2' })
+    w.files.set(`${ROOT}/default`, '1\n')
+    w.files.set(
+      `${ROOT}/usage/1.json`,
+      JSON.stringify({ account: '1', at: 0, windows: { five_hour: { percentUsed: 85, resetsAt: '2100-01-01T00:00:00Z' } } }),
+    )
+    await $.session.start(START)
+    const { text } = await $.command.run(run(''))
+    expect(text).toContain('1        one@example.com              5h 85%                ← default, low on room')
+    expect(text).toContain('2        two@example.com              -                     ← this session, new sessions')
+    expect(w.files.get(`${ROOT}/start`)).toBe('2\n')
+  })
+
   test('/account default is written whole, never half for cca to read', async ($, on) => {
     const w = world(on, STREAM)
     await $.session.start(START)
