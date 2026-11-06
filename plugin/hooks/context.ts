@@ -38,6 +38,12 @@ export async function emailOf($: EngineInterface, account: Account, home: string
   return (await $.fs.exists(file)) ? emailIn(await $.fs.read(file)) : undefined
 }
 
+// Where the plugin publishes the account a new session should start on, for
+// cca: the account's name and a newline.
+export function startFile(root: string): string {
+  return `${root}/start`
+}
+
 export async function defaultName($: EngineInterface, ctx: Context): Promise<string | undefined> {
   const file = `${ctx.root}/default`
   if (!(await $.fs.exists(file))) return ctx.accounts[0]?.name

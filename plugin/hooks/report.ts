@@ -16,6 +16,8 @@ export type ReportInput = {
   priorities: Priorities
   current: string | undefined
   defaultName: string | undefined
+  // Where new sessions start: the default unless it is low on room.
+  startName: string | undefined
 }
 
 // How long until `at`: `3d 4h`, `2h 9m`, `20m`, `under a minute`.
@@ -77,7 +79,8 @@ function accountLine(input: ReportInput, row: ReportInput['accounts'][number]): 
     ...holds.map(hold => `${hold.scope === 'account' ? 'held' : `${hold.scope} held`} ${untilText(hold.until, input.now)}`),
     state.sized ? '' : 'plan size unknown, counted as one Max 5x',
     name === input.current ? '← this session' : '',
-    name === input.defaultName ? '← new sessions' : '',
+    name === input.startName ? '← new sessions' : '',
+    name === input.defaultName && input.defaultName !== input.startName ? '← default, low on room' : '',
   ].filter(note => note !== '')
   const head = pad(name, 12)
   if (state.email === undefined) return `${head}not signed in`
@@ -135,6 +138,7 @@ export async function gatherReport(
   $: EngineInterface,
   ctx: Context,
   defaultName: string | undefined,
+  startName: string | undefined,
 ): Promise<ReportInput> {
   const now = await $.clock.now()
   const states = await accountStates($, ctx)
@@ -145,5 +149,6 @@ export async function gatherReport(
     priorities: await readPriorities($, ctx.root),
     current: ctx.current?.name,
     defaultName,
+    startName,
   }
 }

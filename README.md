@@ -41,7 +41,7 @@ Done. Keep using `claude` as before.
 | Move the conversation you are in to another account | Type `/account personal` in Claude Code |
 | See your accounts | Type `/account`, or run `cca` in a terminal |
 | Start Claude Code on a given account | `cca personal` |
-| Choose the account new sessions start on | `cca use personal` |
+| Choose the account new sessions start on while it has room | `cca use personal` |
 
 In a terminal, `/account` closes the session and reopens the same conversation on the other account, with the options you started it with. In VS Code, the conversation reopens on the other account in the same tab.
 
@@ -58,6 +58,8 @@ A switch does not cut work short. If Claude is in the middle of a turn, or a sub
 You do not need to do anything for this. Every session saves its account's five-hour and weekly usage where the other sessions can read it. When a turn ends with the session's account at 90% of its five-hour window or 95% of its week, the session moves to the signed-in account with the most room. Live sessions already on an account count against it, so sessions that leave one account together spread out. The move waits for the session's background work, as `/account` does.
 
 If the limit stops a turn before that happens, the session moves at once and the conversation reopens with a message telling it to carry on, so the work goes on with nobody typing. That message names any background work the move stopped.
+
+New sessions start on the default account while it has room. Once it passes 70% of its five-hour window or 90% of its week, new sessions start on the account a move would pick, so they do not begin on an account about to run out. `/account` and `cca` show where new sessions start now.
 
 - The status line shows the account and its usage, for example `account work · 5h 42%, week 10%`, and `/account` lists every account's last reading with the total free.
 - `/account usage` shows, for every account, how much of its five-hour window and its week is free and when each resets. It also shows the sessions on each account and the projects they belong to. At the bottom are the totals over the accounts that can serve a session, in Max 5x plans (a Max 20x counts four). The figures that matter: what is free now, and what is free before sessions start moving off.
@@ -142,10 +144,10 @@ Your accounts and conversations stay where they are.
 
 | Command | What it does |
 |---|---|
-| `cca` | List the accounts. `*` marks where new sessions start. |
+| `cca` | List the accounts. `*` marks where new sessions start: the default, or another account while the default is low on room. |
 | `cca <name> [claude options]` | Run Claude Code on `<name>`. |
 | `cca add <name> [folder]` | Add an account. Its folder defaults to `~/.claude-<name>`. Running it again for an account relinks what it shares. |
-| `cca use <name>` | Start new sessions on `<name>`. |
+| `cca use <name>` | Start new sessions on `<name>` while it has room. |
 | `cca remove <name>` | Stop using `<name>`, for a plan that ended: no session starts or moves there. Its folder and login stay, so `cca add <name> <folder>` brings it back. |
 | `cca init <name>` | Set up, naming the account you are signed in to now. The installer runs this. |
 | `cca uninstall` | Undo setup's changes to your shell, settings and editors. |
@@ -153,7 +155,7 @@ Your accounts and conversations stay where they are.
 | `/account` | In Claude Code: list the accounts with their last usage readings. |
 | `/account <name>` | In Claude Code: move this conversation to `<name>` once its turn and background work have finished. |
 | `/account <name> now` | In Claude Code: move it at once, stopping that work. |
-| `/account default <name>` | In Claude Code: start new sessions on `<name>`. |
+| `/account default <name>` | In Claude Code: start new sessions on `<name>` while it has room. |
 | `/account usage` | In Claude Code: what is free on every account, when it resets, and where each project's sessions run. |
 | `/account priority [<weight> [<folder>]]` | In Claude Code: show the project weights, or set this project's (or a folder's). |
 

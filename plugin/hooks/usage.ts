@@ -168,6 +168,13 @@ export function windowAtLimit(reading: Reading | undefined, now: number): string
 // is only a last resort. A reading whose window has reset is known empty.
 const UNMEASURED_PERCENT = POLICY.take.five_hour! - 1
 
+// Whether `candidate` can take a session now: not held off after a failure,
+// and every window below `bar`.
+function fits(candidate: Candidate, now: number, bar: Readonly<Record<string, number>>): boolean {
+  if (candidate.blockedUntil !== undefined && now < candidate.blockedUntil) return false
+  return Object.keys(bar).every(kind => percentNow(candidate.reading, kind, now) < bar[kind]!)
+}
+
 // The account to move to, or undefined when none has room below `bar`
 // (POLICY.take for a planned move, POLICY.leave for a stopped turn's).
 export function chooseTarget(
@@ -178,15 +185,23 @@ export function chooseTarget(
 ): string | undefined {
   let best: { name: string; score: number } | undefined
   for (const candidate of candidates) {
-    if (candidate.name === current) continue
-    if (candidate.blockedUntil !== undefined && now < candidate.blockedUntil) continue
-    const roomy = Object.keys(bar).every(kind => percentNow(candidate.reading, kind, now) < bar[kind]!)
-    if (!roomy) continue
+    if (candidate.name === current || !fits(candidate, now, bar)) continue
     const used = candidate.reading === undefined ? UNMEASURED_PERCENT : percentNow(candidate.reading, 'five_hour', now)
     const score = used + (POLICY.perSession * candidate.load) / candidate.units
     if (best === undefined || score < best.score) best = { name: candidate.name, score }
   }
   return best?.name
+}
+
+// The account a new session should start on: the default (`preferred`)
+// while it has room below the take line, a new session being a planned
+// arrival; else the account a planned move would take; else the one a
+// stopped turn would; else the default, when no account has room.
+export function startAccount(preferred: string | undefined, candidates: readonly Candidate[], now: number): string | undefined {
+  const own = candidates.find(candidate => candidate.name === preferred)
+  if (own !== undefined && fits(own, now, POLICY.take)) return preferred
+  const from = preferred ?? ''
+  return chooseTarget(from, candidates, now, POLICY.take) ?? chooseTarget(from, candidates, now, POLICY.leave) ?? preferred
 }
 
 // The windows in words, to follow an account's name and `'s` in a log line:

@@ -11,7 +11,7 @@
 // lighter session moves off to leave the rest to a heavier one.
 // CCA_BALANCE=off stops the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
-import { context, exitOf, type Context } from './context'
+import { context, defaultName, exitOf, startFile, writeAtomic, type Context } from './context'
 import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { accountStates, liveSessions, ownReading, writeReading, type LiveSession } from './survey'
@@ -24,6 +24,7 @@ import {
   fullWindow,
   POLICY,
   resetsSoon,
+  startAccount,
   tightWindow,
   windowAtLimit,
   windowName,
@@ -52,6 +53,24 @@ export async function candidates(
       blockedUntil: await blockedUntil($, ctx.root, state.account.name, family),
     })),
   )
+}
+
+// Where a new session should start, from every account's readings (this
+// session's own, fresher than its file, for its account): the default while
+// it has room, else the account a move would take. Published for cca, which
+// reads it when it starts a new conversation, at every turn's end and by
+// /account, so it follows the readings. With the balancer off nothing is
+// published, and cca keeps to the default.
+export async function publishStart($: EngineInterface, ctx: Context): Promise<string | undefined> {
+  const preferred = await defaultName($, ctx)
+  if ((await $.env.get('CCA_BALANCE')) === 'off') return preferred
+  const live = await liveSessions($, ctx)
+  const options = await candidates($, ctx, undefined, live, await readPriorities($, ctx.root))
+  const own = ctx.current === undefined ? undefined : await ownReading($, ctx.current.name)
+  const current = options.map(option => (own !== undefined && option.name === own.account ? { ...option, reading: own } : option))
+  const chosen = startAccount(preferred, current, await $.clock.now())
+  if (chosen !== undefined) await writeAtomic($, startFile(ctx.root), `${chosen}\n`)
+  return chosen
 }
 
 // After each measurement: save the reading for every session to see, and

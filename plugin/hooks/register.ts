@@ -1,8 +1,8 @@
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 import { formatList, parseAsk, USAGE } from './accounts'
 import { taskStarted, turnMark } from './background'
-import { balance, noteMeasure } from './balance'
-import { context, defaultName, describeError, emailOf, exitOf, record, writeAtomic } from './context'
+import { balance, noteMeasure, publishStart } from './balance'
+import { context, defaultName, describeError, emailOf, exitOf, record, writeAtomic, type Context } from './context'
 import {
   DEFAULT_WEIGHT,
   MAX_WEIGHT,
@@ -26,6 +26,17 @@ import {
   requestSwitch,
 } from './switching'
 import { describeUse } from './usage'
+
+// Where new sessions start, published for cca as it is shown; the default
+// when that cannot be worked out (reported).
+async function startOrDefault($: EngineInterface, ctx: Context, preferred: string | undefined): Promise<string | undefined> {
+  try {
+    return await publishStart($, ctx)
+  } catch (error) {
+    $.ui.log(`cc-accounts: could not work out where new sessions start (${describeError(error)}).`)
+    return preferred
+  }
+}
 
 export const register: Register = on => {
   const state = newState()
@@ -80,6 +91,8 @@ export const register: Register = on => {
       // Reported, and the session stays where it is: the next turn's end checks again.
       $.ui.log(`cc-accounts: could not check this account's usage (${describeError(error)}).`)
     }
+    const ctx = await context($)
+    if (ctx !== undefined) await startOrDefault($, ctx, undefined)
     if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
     return result
   }).catch(async ($, e, next) => {
@@ -126,12 +139,17 @@ export const register: Register = on => {
           use: describeUse(await readReading($, ctx.root, account.name), now),
         })),
       )
-      const found = totals(await gatherReport($, ctx, await defaultName($, ctx)))
-      const list = formatList(rows, ctx.current?.name, await defaultName($, ctx))
+      const preferred = await defaultName($, ctx)
+      const start = await startOrDefault($, ctx, preferred)
+      const found = totals(await gatherReport($, ctx, preferred, start))
+      const list = formatList(rows, ctx.current?.name, preferred, start)
       return { text: `${list}\n${totalsLine(found)} /account usage shows when it comes back and where each project runs.` }
     }
 
-    if (ask.kind === 'report') return { text: formatReport(await gatherReport($, ctx, await defaultName($, ctx))) }
+    if (ask.kind === 'report') {
+      const preferred = await defaultName($, ctx)
+      return { text: formatReport(await gatherReport($, ctx, preferred, await startOrDefault($, ctx, preferred))) }
+    }
 
     if (ask.kind === 'priority') {
       const priorities = await readPriorities($, ctx.root)
@@ -169,7 +187,12 @@ export const register: Register = on => {
 
     if (ask.kind === 'default') {
       await writeAtomic($, `${ctx.root}/default`, `${target.name}\n`)
-      return { text: `New sessions start on ${target.name}.` }
+      const start = await startOrDefault($, ctx, target.name)
+      return {
+        text: start === target.name
+          ? `New sessions start on ${target.name}.`
+          : `${target.name} is the default; new sessions start on ${start} while it is low on room.`,
+      }
     }
 
     if (state.ending) return { text: 'This session is already switching accounts.' }

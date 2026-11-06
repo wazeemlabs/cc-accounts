@@ -2,6 +2,15 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.5.3 (2026-11-06)
+
+- New sessions start on an account with room. They used to start on the default account whatever its usage: on 2026-11-06 that was an account at 99% of its week, so every new session ran its first turn there and moved only after it. The plugin now writes where a new session should start (`accounts/start`) at the end of every turn: the default while it has room, else the account a move would pick. cca starts new conversations there. A default you set afterwards wins until the next turn's end. `/account`, `/account usage` and `cca` show where new sessions start.
+- A session whose shell folder had been deleted (a worktree it removed) could not save its usage or move: every command cc-accounts ran started in that folder and failed. They now run from `/`.
+- A turn stopped by a per-model limit or a lost login is recognised again when Claude Code writes up to a dozen rows after the error, as 2.1.318 does, or when a screenshot row comes before it. The transcript's last megabyte is read, not its last six lines.
+- After a switch in VS Code, nothing the panel or the old process asked is left waiting. A setting the old process never answered is replayed under the panel's own id. An interrupt is answered, since the turn has ended. Any other open request goes to the new process. A permission prompt the old process left open is withdrawn.
+- A failure in a session's start, a turn's checks or `/account` is reported in the session log or the reply, not dropped silently.
+- Two saves of one file from one session can no longer collide, a priority folder typed with `.` or `..` matches the folder sessions report, and `/account usage` calls an account spent at the same 99% the balancer uses.
+
 ## 0.5.2 (2026-11-06)
 
 - A switch no longer doubles the session's scheduled wakeups. Claude Code now restores them itself when the conversation is resumed, but the follow-up still listed them and asked the conversation to set them again, so each move added a copy. On 2026-11-06 a one-shot job that posts a YouTube comment was doubled this way. The follow-up now only says why a turn stopped or was cut, and a planned move sends none.
