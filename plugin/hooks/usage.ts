@@ -41,9 +41,9 @@ const HOUR_MS = 3_600_000
 // the full window resets within `resetGraceMs`: a move costs the new account
 // the whole context uncached, and a limit hit before the reset still moves.
 export const POLICY = {
-  leave: { five_hour: 90, seven_day: 95 } as Record<string, number>,
-  yieldAt: { five_hour: 75, seven_day: 90 } as Record<string, number>,
-  take: { five_hour: 70, seven_day: 90 } as Record<string, number>,
+  leave: { five_hour: 90, seven_day: 99 } as Record<string, number>,
+  yieldAt: { five_hour: 75, seven_day: 95 } as Record<string, number>,
+  take: { five_hour: 70, seven_day: 97 } as Record<string, number>,
   perSession: 10,
   limit: 99,
   limitBlockMs: HOUR_MS,

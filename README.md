@@ -55,7 +55,7 @@ A switch does not cut work short. If Claude is in the middle of a turn, or a sub
 
 ## Staying under the usage limits
 
-You do not need to do anything for this. Every session saves its account's five-hour and weekly usage where the other sessions can read it. When a turn ends with the session's account at 90% of its five-hour window or 95% of its week, the session moves to the signed-in account with the most room. Live sessions already on an account count against it, so sessions that leave one account together spread out. The move waits for the session's background work, as `/account` does.
+You do not need to do anything for this. Every session saves its account's five-hour and weekly usage where the other sessions can read it. When a turn ends with the session's account at 90% of its five-hour window or 99% of its week, the session moves to the signed-in account with the most room. Live sessions already on an account count against it, so sessions that leave one account together spread out. The move waits for the session's background work, as `/account` does.
 
 If the limit stops a turn before that happens, the session moves at once and the conversation reopens with a message telling it to carry on, so the work goes on with nobody typing. That message names any background work the move stopped.
 

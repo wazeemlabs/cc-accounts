@@ -138,10 +138,10 @@ describe('a session leaves an account that is nearly spent', () => {
     expect(w.killed).toEqual([SIGINT])
   })
 
-  test('the weekly window at 95% moves it too', async ($, on) => {
+  test('the weekly window at 99% moves it too', async ($, on) => {
     const w = world(on, SUPERVISED)
     await $.session.start(START)
-    limits(w, 10, 96)
+    limits(w, 10, 99)
     await turn($, w, [])
     await w.clock.advance(0)
     expect(w.files.get(BY_SESSION)).toBe('2\n')

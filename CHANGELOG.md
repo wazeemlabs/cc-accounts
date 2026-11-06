@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.5.4 (2026-11-07)
+
+- Sessions use an account's week to 99%, not 95%. The owner's call on 2026-11-07: every account is to be spent in full, and a turn stopped at the limit already moves on. A session now leaves at 99% of its week (was 95%), a planned move takes an account below 97% (was 90%), and a lighter session makes room for a heavier one from 95% (was 90%). The five-hour thresholds are unchanged. A move at 99% leaves about one point of room, so a long turn can still hit the limit mid-turn; the stopped-turn move then carries it on.
+
 ## 0.5.3 (2026-11-06)
 
 - New sessions start on an account with room. They used to start on the default account whatever its usage: on 2026-11-06 that was an account at 99% of its week, so every new session ran its first turn there and moved only after it. The plugin now writes where a new session should start (`accounts/start`) at the end of every turn: the default while it has room, else the account a move would pick. cca starts new conversations there. A default you set afterwards wins until the next turn's end. `/account`, `/account usage` and `cca` show where new sessions start.

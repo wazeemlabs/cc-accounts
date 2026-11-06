@@ -57,7 +57,7 @@ describe('/account usage', () => {
     // a's room, four times b's (a Max 20x) and fable-held's: 0.68 + 3.96 + 0.90 and 0.86 + 0.92 + 0.90;
     // below the leave line 0.58 + 3.56 + 0.80 and 0.81 + 0.72 + 0.85.
     expect([found.free.five_hour, found.free.seven_day, found.beforeMoves.five_hour, found.beforeMoves.seven_day].map(cents))
-      .toEqual([5.54, 2.68, 4.94, 2.38])
+      .toEqual([5.54, 2.68, 4.94, 2.62])
     expect(totalsLine(found)).toBe('Free now, in Max 5x plans: 5.54 of the 5-hour windows and 2.68 of the weeks, over 3 accounts.')
   })
 
@@ -94,7 +94,7 @@ describe('/account usage', () => {
       'new         no reading yet; 0, plan size unknown, counted as one Max 5x',
       '',
       'Free now, in Max 5x plans: 0.83 of the 5-hour windows and 0.98 of the weeks, over 2 accounts.',
-      'Free before sessions move off (5-hour 90%, week 95%): 0.63 and 0.88.',
+      'Free before sessions move off (5-hour 90%, week 99%): 0.63 and 0.96.',
       '',
       'project                  priority  sessions   on',
       'app                             3         1   cto',

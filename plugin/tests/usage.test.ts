@@ -74,10 +74,10 @@ describe('readings', () => {
 })
 
 describe('when a session leaves its account', () => {
-  test('at 90% of the five-hour window or 95% of the week, and not below', () => {
-    expect(fullWindow(reading('a', 89.9, 94.9), NOW)).toBe(undefined)
+  test('at 90% of the five-hour window or 99% of the week, and not below', () => {
+    expect(fullWindow(reading('a', 89.9, 98.9), NOW)).toBe(undefined)
     expect(fullWindow(reading('a', 90), NOW)).toBe('five_hour')
-    expect(fullWindow(reading('a', 10, 95), NOW)).toBe('seven_day')
+    expect(fullWindow(reading('a', 10, 99), NOW)).toBe('seven_day')
     expect(fullWindow(reading('a', 95, 0, EARLIER), NOW)).toBe(undefined)
     expect(fullWindow(undefined, NOW)).toBe(undefined)
   })
@@ -101,10 +101,10 @@ describe('which account a session moves to', () => {
     expect(chooseTarget('a', [candidate('b', reading('b', 0), 2), candidate('c', reading('c', 25), 0)], NOW, POLICY.take)).toBe('b')
   })
 
-  test('takes no account at 70% of five hours or 90% of the week', () => {
+  test('takes no account at 70% of five hours or 97% of the week', () => {
     expect(chooseTarget('a', [candidate('b', reading('b', 70))], NOW, POLICY.take)).toBe(undefined)
-    expect(chooseTarget('a', [candidate('b', reading('b', 10, 90))], NOW, POLICY.take)).toBe(undefined)
-    expect(chooseTarget('a', [candidate('b', reading('b', 69.9, 89.9))], NOW, POLICY.take)).toBe('b')
+    expect(chooseTarget('a', [candidate('b', reading('b', 10, 97))], NOW, POLICY.take)).toBe(undefined)
+    expect(chooseTarget('a', [candidate('b', reading('b', 69.9, 96.9))], NOW, POLICY.take)).toBe('b')
   })
 
   test('an account whose window has reset counts as empty', () => {
@@ -131,18 +131,18 @@ describe('which account a session moves to', () => {
     expect(chooseTarget('a', [candidate('b', reading('b', 20), 4, 1), candidate('c', reading('c', 20), 2, 1)], NOW, POLICY.take)).toBe('c')
   })
 
-  test('a lighter session makes room from 75% of five hours or 90% of the week', () => {
-    expect(tightWindow(reading('a', 74.9, 89.9), NOW)).toBe(undefined)
+  test('a lighter session makes room from 75% of five hours or 95% of the week', () => {
+    expect(tightWindow(reading('a', 74.9, 94.9), NOW)).toBe(undefined)
     expect(tightWindow(reading('a', 75), NOW)).toBe('five_hour')
-    expect(tightWindow(reading('a', 10, 90), NOW)).toBe('seven_day')
+    expect(tightWindow(reading('a', 10, 95), NOW)).toBe('seven_day')
   })
 
   test('a stopped turn takes any account below the leave line; a planned move only one below the take line', () => {
-    const all = [candidate('b', reading('b', 80, 92))]
+    const all = [candidate('b', reading('b', 80, 98))]
     expect(chooseTarget('a', all, NOW, POLICY.take)).toBe(undefined)
     expect(chooseTarget('a', all, NOW, POLICY.leave)).toBe('b')
     expect(chooseTarget('a', [candidate('b', reading('b', 90))], NOW, POLICY.leave)).toBe(undefined)
-    expect(chooseTarget('a', [candidate('b', reading('b', 10, 95))], NOW, POLICY.leave)).toBe(undefined)
+    expect(chooseTarget('a', [candidate('b', reading('b', 10, 99))], NOW, POLICY.leave)).toBe(undefined)
   })
 
   test('skips an account until its failure record runs out, then takes it again', () => {
@@ -180,7 +180,7 @@ describe('which account a new session starts on', () => {
   test('past the take line, the account a planned move would take', () => {
     const all = [candidate('a', reading('a', 80)), candidate('b', reading('b', 40)), candidate('c', reading('c', 10))]
     expect(startAccount('a', all, NOW)).toBe('c')
-    expect(startAccount('a', [candidate('a', reading('a', 10, 92)), candidate('b', reading('b', 5))], NOW)).toBe('b')
+    expect(startAccount('a', [candidate('a', reading('a', 10, 98)), candidate('b', reading('b', 5))], NOW)).toBe('b')
   })
 
   test('with none below the take line, the one a stopped turn would take; with none at all, the default', () => {
