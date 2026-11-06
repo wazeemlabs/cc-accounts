@@ -4,7 +4,7 @@
 // alone), and the turns of the main loop with what their Stop hook
 // (record-tasks.py) leaves.
 import { mock, type Engine } from 'claude-code/testing'
-import type { AgentInfo, On } from 'claude-code'
+import type { AgentInfo, On, TurnUsage } from 'claude-code'
 import type { Task } from '../hooks/background'
 import { followUpText, formatReading, readingOf, type Move } from '../hooks/usage'
 
@@ -219,10 +219,16 @@ export async function endTurn(
   w: ReturnType<typeof world>,
   turnId: string,
   stop?: readonly Task[],
+  usage?: TurnUsage,
 ): Promise<void> {
   if (stop !== undefined) w.files.set(RECORD, `${JSON.stringify({ tasks: stop })}\n`)
   const reason = stop === undefined ? 'error' : 'answer'
-  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId, reason })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId, reason, ...(usage && { usage }) })
+}
+
+// What a turn on `model` cost: `output` output tokens and nothing else.
+export function cost(model: string, output: number): TurnUsage {
+  return { model, input_tokens: 0, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 }
 
 // A whole turn whose Stop hook listed `stop`, after which the session holds
@@ -232,9 +238,10 @@ export async function turn(
   w: ReturnType<typeof world>,
   stop: readonly Task[],
   crons: readonly Cron[] = [],
+  usage?: TurnUsage,
 ): Promise<void> {
   schedule(w, crons)
-  await endTurn($, w, await startTurn($), stop)
+  await endTurn($, w, await startTurn($), stop, usage)
 }
 
 type World = ReturnType<typeof world>
@@ -256,8 +263,11 @@ export function limits(w: World, fiveHour: number, weekly = 0, resetsAt = LATER)
 }
 
 // Another account's reading, as one of its sessions saved it.
-export function saved(w: World, account: string, fiveHour: number): void {
-  const reading = readingOf(account, 0, [{ kind: 'five_hour', percentUsed: fiveHour, resetsAt: LATER }])
+export function saved(w: World, account: string, fiveHour: number, weekly?: number, resetsAt = LATER): void {
+  const reading = readingOf(account, 0, [
+    { kind: 'five_hour', percentUsed: fiveHour, resetsAt: LATER },
+    ...(weekly === undefined ? [] : [{ kind: 'seven_day', percentUsed: weekly, resetsAt }]),
+  ])
   w.files.set(`${ROOT}/usage/${account}.json`, formatReading(reading))
 }
 

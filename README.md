@@ -84,6 +84,23 @@ A project without a weight counts as 1, and a folder inside a weighted one takes
 
 The weights are kept in `~/.claude-shared/accounts/priorities.json`, which every session and account reads.
 
+### Budgets, so every project lasts the week
+
+Weights decide who gets an account's room; budgets decide how much each project may spend in a day, so that one project cannot use up the week before another has had its share. A budget is in points, one percent of a Max 5x week, per UTC day:
+
+```
+/account budget 35 ~/Documents/Studio   the studio's sessions may spend 35 points a day
+/account budget 4                        this project may spend 4 a day
+/account budget                          show every project's budget, spend and standing today
+/account budget 0 ~/Documents/Studio    remove it
+```
+
+Each day the accounts supply so many points: each account's room below the leave line, spread evenly until its week resets, plus a fresh week's share once it has. A project with a budget gets its budget. The projects without one share what is left, by their weights. A project may spend its allowance a quarter of a day ahead of the clock, so a burst at the start of the day is not parked at once.
+
+Every session counts what its turns cost (input, cached and output tokens, weighted by model: Opus 1, Fable 2, Sonnet 0.6, Haiku 0.2, and cache reads at a tenth), and the accounts' own readings say what those tokens come to in points, so spend is counted in the same unit as the budgets. A project that has spent more than its allowance so far is over budget: its sessions are parked between turns. A parked session's tool calls are refused with a line saying how much was spent, how much was allowed and when the day turns, and it goes on by itself once the allowance catches up or the day turns. A turn in flight is never cut. With no budget set, nothing is parked. `CCA_BUDGET=off` turns parking off; spend is still counted.
+
+`/account usage` ends with the budgets table. The files: `budgets.json`, `spend/<day>/<session>.json` and `calibration/<day>/<account>.json` under `~/.claude-shared/accounts`.
+
 ## What it does
 
 Claude Code keeps one login per config folder, and each folder keeps its own conversations. cc-accounts gives each account its own folder and shares these between all of them:
@@ -158,8 +175,9 @@ Your accounts and conversations stay where they are.
 | `/account default <name>` | In Claude Code: start new sessions on `<name>` while it has room. |
 | `/account usage` | In Claude Code: what is free on every account, when it resets, and where each project's sessions run. |
 | `/account priority [<weight> [<folder>]]` | In Claude Code: show the project weights, or set this project's (or a folder's). |
+| `/account budget [<points a day> [<folder>]]` | In Claude Code: show every project's budget and spend today, or set this project's (or a folder's); 0 removes it. |
 
-Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
+Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_BUDGET=off` stops sessions being parked over budget, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
 
 ## Use only your own accounts
 

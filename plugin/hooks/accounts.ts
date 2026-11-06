@@ -9,13 +9,15 @@ export type Ask =
   | { kind: 'switch'; name: string; force: boolean }
   | { kind: 'default'; name: string }
   | { kind: 'priority'; weight: string | undefined; folder: string | undefined }
+  | { kind: 'budget'; points: string | undefined; folder: string | undefined }
   | { kind: 'help' }
 
 export const USAGE =
   'Usage: /account (list), /account <name> (switch this session once its work is done), ' +
   '/account <name> now (switch at once, stopping that work), /account default <name>, ' +
   '/account usage (what is free on every account, and where each project runs), ' +
-  '/account priority [<weight> [<folder>]] (how much a project matters; this one by default)'
+  '/account priority [<weight> [<folder>]] (how much a project matters; this one by default), ' +
+  '/account budget [<points a day> [<folder>]] (what a project may spend each UTC day; 0 removes it)'
 
 export function parseTable(text: string): Account[] {
   return text
@@ -32,9 +34,10 @@ export function parseAsk(args: string): Ask {
   const [first, second, ...rest] = words
   if (first === undefined) return { kind: 'list' }
   // A folder may hold spaces: everything after the weight is the folder.
-  if (first === 'priority') {
+  if (first === 'priority' || first === 'budget') {
     const folder = second === undefined ? undefined : trimmed.slice(trimmed.indexOf(second) + second.length).trim()
-    return { kind: 'priority', weight: second, folder: folder === '' ? undefined : folder }
+    const rest = folder === '' ? undefined : folder
+    return first === 'priority' ? { kind: 'priority', weight: second, folder: rest } : { kind: 'budget', points: second, folder: rest }
   }
   if (second === undefined) {
     if (first === 'default') return { kind: 'help' }

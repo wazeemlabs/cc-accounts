@@ -26,6 +26,22 @@ import {
   requestSwitch,
 } from './switching'
 import { describeUse } from './usage'
+import {
+  budgetLines,
+  currentPlan,
+  MAX_BUDGET,
+  parkedText,
+  parkedNow,
+  parseBudget,
+  projectOf,
+  readBudgets,
+  recordCalibration,
+  recordSpend,
+  setBudget,
+  weightedTokens,
+  type ProjectBudget,
+} from './budgets'
+import { ownReading } from './survey'
 
 // Where new sessions start, published for cca as it is shown; the default
 // when that cannot be worked out (reported).
@@ -38,8 +54,36 @@ async function startOrDefault($: EngineInterface, ctx: Context, preferred: strin
   }
 }
 
+// This session's project over its day's allowance, decided at each
+// main-loop turn's end and checked again at a parked session's tool calls,
+// so a turn in flight is never cut and a parked session wakes once the
+// allowance catches up.
+type Parked = { project: ProjectBudget | undefined }
+
+async function park(
+  $: EngineInterface,
+  ctx: Context,
+  cwd: string | undefined,
+  parked: Parked,
+  now: number,
+): Promise<Awaited<ReturnType<typeof parkedNow>>> {
+  if (cwd === undefined) return undefined
+  const found = await parkedNow($, ctx, cwd, now)
+  const was = parked.project
+  parked.project = found?.project
+  if (found !== undefined && was === undefined) {
+    $.ui.log(parkedText(found.project, found.plan, now))
+    $.ui.status(`account ${ctx.current?.name ?? '(unknown)'} · parked: ${projectName(found.project.folder)} over budget`)
+  } else if (found === undefined && was !== undefined) {
+    $.ui.log(`cc-accounts: ${projectName(was.folder)} is within its budget again; this session goes on.`)
+    $.ui.status(`account ${ctx.current?.name ?? '(unknown)'}`)
+  }
+  return found
+}
+
 export const register: Register = on => {
   const state = newState()
+  const parked: Parked = { project: undefined }
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -79,7 +123,14 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId !== undefined) return result
+    // A subagent's turns cost the account too, and count against the budget.
+    if (e.agentId !== undefined) {
+      const ctx = await context($)
+      if (ctx !== undefined && e.usage !== undefined && state.cwd !== undefined) {
+        await recordSpend($, ctx.root, await $.session.id(), state.cwd, await $.clock.now(), weightedTokens(e.usage))
+      }
+      return result
+    }
     state.turns = Math.max(0, state.turns - 1)
     if (e.usage?.model !== undefined) state.answered = e.usage.model
     // A turn that ends while the process is being ended was cut short by the switch.
@@ -92,7 +143,19 @@ export const register: Register = on => {
       $.ui.log(`cc-accounts: could not check this account's usage (${describeError(error)}).`)
     }
     const ctx = await context($)
-    if (ctx !== undefined) await startOrDefault($, ctx, undefined)
+    if (ctx !== undefined) {
+      try {
+        const now = await $.clock.now()
+        if (e.usage !== undefined && state.cwd !== undefined) {
+          await recordSpend($, ctx.root, await $.session.id(), state.cwd, now, weightedTokens(e.usage))
+        }
+        await park($, ctx, state.cwd, parked, now)
+      } catch (error) {
+        // Reported; the turn's cost is uncounted and the session goes on unparked until the next turn's end.
+        $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
+      }
+      await startOrDefault($, ctx, undefined)
+    }
     if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
     return result
   }).catch(async ($, e, next) => {
@@ -103,7 +166,12 @@ export const register: Register = on => {
   // The account's rate-limit windows moved: every session can now see them.
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
-    if (e.changed.includes('rateLimits')) await noteMeasure($, state)
+    if (e.changed.includes('rateLimits')) {
+      await noteMeasure($, state)
+      const ctx = await context($)
+      const reading = ctx?.current === undefined ? undefined : await ownReading($, ctx.current.name)
+      if (ctx !== undefined && reading !== undefined) await recordCalibration($, ctx.root, reading)
+    }
     return result
   }).catch(async ($, e, next) => {
     $.ui.log(`cc-accounts: could not save this account's usage (${describeError(next.error)}).`)
@@ -113,6 +181,12 @@ export const register: Register = on => {
   // Background work started since the last Stop hook, for a turn that ends
   // without one.
   on('tool.call', async ($, e, next) => {
+    if (parked.project !== undefined) {
+      const ctx = await context($)
+      const now = await $.clock.now()
+      const found = ctx === undefined ? undefined : await park($, ctx, state.cwd, parked, now)
+      if (found !== undefined) return { deny: parkedText(found.project, found.plan, now) }
+    }
     const answer = await next(e)
     if (answer.result !== undefined) {
       const task = taskStarted(e.tool, e as unknown as Record<string, unknown>, answer.result)
@@ -141,14 +215,14 @@ export const register: Register = on => {
       )
       const preferred = await defaultName($, ctx)
       const start = await startOrDefault($, ctx, preferred)
-      const found = totals(await gatherReport($, ctx, preferred, start))
+      const found = totals(await gatherReport($, ctx, preferred, start, state.cwd))
       const list = formatList(rows, ctx.current?.name, preferred, start)
       return { text: `${list}\n${totalsLine(found)} /account usage shows when it comes back and where each project runs.` }
     }
 
     if (ask.kind === 'report') {
       const preferred = await defaultName($, ctx)
-      return { text: formatReport(await gatherReport($, ctx, preferred, await startOrDefault($, ctx, preferred))) }
+      return { text: formatReport(await gatherReport($, ctx, preferred, await startOrDefault($, ctx, preferred), state.cwd)) }
     }
 
     if (ask.kind === 'priority') {
@@ -177,6 +251,29 @@ export const register: Register = on => {
         text: weight === DEFAULT_WEIGHT
           ? `${projectName(folder)} (${folder}) counts at the default, ${DEFAULT_WEIGHT}, again.`
           : `${projectName(folder)} (${folder}) now counts at ${weight}, and so do the folders inside it that have no weight of their own.`,
+      }
+    }
+
+    if (ask.kind === 'budget') {
+      if (ask.points === undefined) {
+        const budgets = await readBudgets($, ctx.root)
+        if (budgets.size === 0) {
+          return { text: 'No budgets set: every project may spend what the accounts have. Set one with /account budget <points a day> [folder].' }
+        }
+        const now = await $.clock.now()
+        const project = state.cwd === undefined ? undefined : projectOf(budgets, await readPriorities($, ctx.root), state.cwd)
+        return { text: budgetLines(await currentPlan($, ctx, now), project, now).join('\n') }
+      }
+      const points = ask.points === '0' ? 0 : parseBudget(ask.points)
+      if (points === undefined) return { text: `A budget is a number of points a day above 0 and at most ${MAX_BUDGET}, such as 35; 0 removes it.` }
+      const folder = ask.folder === undefined ? state.cwd : normalizeFolder(ask.folder, ctx.home)
+      if (folder === undefined) return { text: 'Name the folder as a full path, or ~/ and the rest of it.' }
+      await setBudget($, ctx.root, folder, points)
+      return {
+        text: points === 0
+          ? `${projectName(folder)} (${folder}) has no budget of its own: it shares what is left after the budgets set.`
+          : `${projectName(folder)} (${folder}) may spend ${points} points a day, and so may the folders inside it that have no budget of their own. ` +
+            'Projects with no budget share what the accounts supply beyond the budgets set, by their weights.',
       }
     }
 

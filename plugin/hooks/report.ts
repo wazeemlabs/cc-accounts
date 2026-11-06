@@ -8,6 +8,7 @@ import { holdsOf } from './failures'
 import { projectName, readPriorities, weightOf, DEFAULT_WEIGHT, type Priorities } from './priorities'
 import { accountStates, liveSessions, type AccountState, type LiveSession } from './survey'
 import { percentNow, POLICY, windowAtLimit, windowName, type Reading } from './usage'
+import { budgetLines, currentPlan, projectOf, readBudgets, type Plan } from './budgets'
 
 export type ReportInput = {
   now: number
@@ -18,6 +19,9 @@ export type ReportInput = {
   defaultName: string | undefined
   // Where new sessions start: the default unless it is low on room.
   startName: string | undefined
+  // The day's budgets, and the project this session is in, when a budget is set.
+  plan?: Plan
+  project?: string
 }
 
 // How long until `at`: `3d 4h`, `2h 9m`, `20m`, `under a minute`.
@@ -130,6 +134,9 @@ export function formatReport(input: ReportInput): string {
     set.length === 0
       ? `Every project counts at ${DEFAULT_WEIGHT}. Weigh one with /account priority <weight> [folder].`
       : 'Change a weight with /account priority <weight> [folder]; 1 is the default.',
+    ...(input.plan === undefined
+      ? ['No budgets set: every project may spend what the accounts have. Set one with /account budget <points a day> [folder].']
+      : ['', ...budgetLines(input.plan, input.project, input.now)]),
   ].join('\n')
 }
 
@@ -139,16 +146,23 @@ export async function gatherReport(
   ctx: Context,
   defaultName: string | undefined,
   startName: string | undefined,
+  cwd: string | undefined,
 ): Promise<ReportInput> {
   const now = await $.clock.now()
   const states = await accountStates($, ctx)
+  const priorities = await readPriorities($, ctx.root)
+  const budgets = await readBudgets($, ctx.root)
   return {
     now,
     accounts: await Promise.all(states.map(async state => ({ state, holds: await holdsOf($, ctx.root, state.account.name, now) }))),
     live: await liveSessions($, ctx),
-    priorities: await readPriorities($, ctx.root),
+    priorities,
     current: ctx.current?.name,
     defaultName,
     startName,
+    ...(budgets.size === 0 ? {} : {
+      plan: await currentPlan($, ctx, now),
+      project: cwd === undefined ? undefined : projectOf(budgets, priorities, cwd),
+    }),
   }
 }

@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.6.0 (2026-11-07)
+
+- Project budgets. `/account budget <points a day> [folder]` holds a project to so many points a day, a point being one percent of a Max 5x week; projects without a budget share what the accounts supply beyond the budgets, by their weights. Every session counts what its turns cost, weighted by model, and the accounts' own readings calibrate tokens to points. A project over its allowance so far (a quarter of a day ahead of the clock) has its sessions parked between turns: their tool calls are refused with the figures and when the day turns, and they go on by themselves once the allowance catches up. A turn in flight is never cut. `/account usage` ends with the budgets table. `CCA_BUDGET=off` turns parking off. Asked for on 2026-11-07, when two projects sharing five accounts needed one to last the week beside the other's daily films.
+
 ## 0.5.4 (2026-11-07)
 
 - Sessions use an account's week to 99%, not 95%. The owner's call on 2026-11-07: every account is to be spent in full, and a turn stopped at the limit already moves on. A session now leaves at 99% of its week (was 95%), a planned move takes an account below 97% (was 90%), and a lighter session makes room for a heavier one from 95% (was 90%). The five-hour thresholds are unchanged. A move at 99% leaves about one point of room, so a long turn can still hit the limit mid-turn; the stopped-turn move then carries it on.

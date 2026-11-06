@@ -70,10 +70,16 @@ export function formatPriorities(priorities: Priorities): string {
 // The weight a session started in `cwd` takes, and the folder that set it
 // (undefined for the default).
 export function weightOf(priorities: Priorities, cwd: string): { weight: number; folder: string | undefined } {
-  let found: { weight: number; folder: string | undefined } = { weight: DEFAULT_WEIGHT, folder: undefined }
-  for (const [folder, weight] of priorities) {
+  const folder = nearestFolder(priorities, cwd)
+  return folder === undefined ? { weight: DEFAULT_WEIGHT, folder: undefined } : { weight: priorities.get(folder)!, folder }
+}
+
+// The nearest folder in `folders` at or above `cwd`, or undefined.
+export function nearestFolder(folders: ReadonlyMap<string, unknown>, cwd: string): string | undefined {
+  let found: string | undefined
+  for (const folder of folders.keys()) {
     const covers = cwd === folder || cwd.startsWith(folder === '/' ? '/' : `${folder}/`)
-    if (covers && (found.folder === undefined || folder.length > found.folder.length)) found = { weight, folder }
+    if (covers && (found === undefined || folder.length > found.length)) found = folder
   }
   return found
 }

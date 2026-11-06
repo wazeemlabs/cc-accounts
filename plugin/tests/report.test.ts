@@ -101,6 +101,7 @@ describe('/account usage', () => {
       'misc                            1         1   cto',
       'sub                             1         1   levoro',
       'Change a weight with /account priority <weight> [folder]; 1 is the default.',
+      'No budgets set: every project may spend what the accounts have. Set one with /account budget <points a day> [folder].',
     ])
   })
 
@@ -112,9 +113,10 @@ describe('/account usage', () => {
 
   test('with no sessions and no weights it says so', () => {
     const lines = formatReport(input([state('a', 10, 10)])).split('\n')
-    expect(lines.slice(-2)).toEqual([
+    expect(lines.slice(-3)).toEqual([
       'No live sessions.',
       'Every project counts at 1. Weigh one with /account priority <weight> [folder].',
+      'No budgets set: every project may spend what the accounts have. Set one with /account budget <points a day> [folder].',
     ])
   })
 })
