@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""cca-stream-lines: the stream-json lines cca-stream reads between the VS Code
+panel and Claude Code, and what it keeps of them across a switch: the user
+messages a child has not taken (Unread), the panel's session setup (Setup)
+and the control requests in flight each way (Open). Loaded by cca-stream."""
+import json
+import threading
+import uuid
+
+REPLAY_PREFIX = 'cca-replay-'
+
+
+def parse_control(line):
+    """(type, request id, request or response) of a control line, or None for
+    any other line. A response's request id is inside its `response`."""
+    if b'"control_' not in line:
+        return None
+    try:
+        value = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    kind = value.get('type')
+    if kind == 'control_response':
+        body = value.get('response')
+        request_id = body.get('request_id') if isinstance(body, dict) else None
+    elif kind in ('control_request', 'control_cancel_request'):
+        body = value.get('request')
+        request_id = value.get('request_id')
+    else:
+        return None
+    if not isinstance(request_id, str):
+        return None
+    return kind, request_id, body if isinstance(body, dict) else {}
+
+
+def is_setup(subtype):
+    """Whether a request of this kind sets session state, which a new child
+    is given again."""
+    return subtype in ('initialize', 'ui_attach') or subtype.startswith('set_')
+
+
+def control_line(value):
+    return (json.dumps(value) + '\n').encode()
+
+
+def user_message(text, conversation):
+    message = {'type': 'user', 'uuid': str(uuid.uuid4()),
+               'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
+               'parent_tool_use_id': None, 'session_id': conversation}
+    return (json.dumps(message) + '\n').encode()
+
+
+def user_uuid(line, echo):
+    """The uuid of a user message line: one the panel sent, or with `echo`,
+    Claude Code's echo of one it took (isReplay). None for anything else."""
+    if b'"user"' not in line or (echo and b'"isReplay"' not in line):
+        return None
+    try:
+        value = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get('type') != 'user' or (echo and value.get('isReplay') is not True):
+        return None
+    found = value.get('uuid')
+    return found if isinstance(found, str) and found else None
+
+
+class Unread:
+    """The user messages sent to the current child that it has not echoed,
+    so has not taken into the conversation. Kept only when the child echoes
+    (--replay-user-messages); without echoes nothing can be told apart."""
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.lock = threading.Lock()
+        self.lines = {}
+
+    def sending(self, line):
+        """Notes `line` before it is written, so that an echo, which can come
+        back before the write returns, finds it. Returns its uuid, or None
+        when it is not kept."""
+        found = user_uuid(line, echo=False) if self.enabled else None
+        if found is not None:
+            with self.lock:
+                self.lines[found] = line
+        return found
+
+    def forget(self, found):
+        """A line noted with `sending` that never reached the child."""
+        if found is not None:
+            with self.lock:
+                self.lines.pop(found, None)
+
+    def echoed(self, line):
+        found = user_uuid(line, echo=True) if self.enabled else None
+        if found is not None:
+            with self.lock:
+                self.lines.pop(found, None)
+
+    def take(self):
+        """The unread lines, in the order sent, forgotten here."""
+        with self.lock:
+            lines, self.lines = list(self.lines.values()), {}
+        return lines
+
+
+class Setup:
+    """The panel's session setup, as it sent it, to replay to a new child:
+    the latest request of each kind, with the id the panel gave it."""
+
+    def __init__(self):
+        self.requests = {}
+        self.replays = 0
+
+    def note(self, line):
+        found = parse_control(line)
+        subtype = found[2].get('subtype') if found is not None and found[0] == 'control_request' else None
+        if not isinstance(subtype, str):
+            return
+        if subtype == 'ui_detach':
+            self.requests.pop('ui_attach', None)
+        elif is_setup(subtype):
+            self.requests[subtype] = (found[1], found[2])
+
+    def holds(self, request_id):
+        return any(held == request_id for held, _request in self.requests.values())
+
+    def replay(self, unanswered=frozenset()):
+        """The recorded requests as lines, initialize first: under a fresh id,
+        whose answer is dropped, or under the panel's own when the old child
+        never answered it, so the panel gets the new child's answer."""
+        order = sorted(self.requests, key=lambda subtype: subtype != 'initialize')
+        lines = []
+        for subtype in order:
+            request_id, request = self.requests[subtype]
+            if request_id not in unanswered:
+                self.replays += 1
+                request_id = f'{REPLAY_PREFIX}{self.replays}'
+            lines.append(control_line({'type': 'control_request', 'request_id': request_id, 'request': request}))
+        return lines
+
+
+class Open:
+    """The control requests in flight between the panel and the current
+    child: the panel's, by id with their kind and line, until the child
+    answers; the child's, until the panel answers or the child withdraws."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.panel = {}
+        self.child = set()
+
+    def sending(self, line):
+        """A panel line about to go to the child; returns the id it keeps
+        open, for `forget` should the line not reach the child."""
+        found = parse_control(line)
+        if found is None or found[0] != 'control_request' or found[1].startswith(REPLAY_PREFIX):
+            return None
+        with self.lock:
+            self.panel[found[1]] = (found[2].get('subtype'), line)
+        return found[1]
+
+    def forget(self, request_id):
+        if request_id is not None:
+            with self.lock:
+                self.panel.pop(request_id, None)
+
+    def from_panel(self, line):
+        """A panel line as it arrives: its answer to a child's question, or
+        its withdrawal of a request of its own."""
+        found = parse_control(line)
+        if found is None:
+            return
+        kind, request_id, _body = found
+        with self.lock:
+            if kind == 'control_response':
+                self.child.discard(request_id)
+            elif kind == 'control_cancel_request':
+                self.panel.pop(request_id, None)
+
+    def from_child(self, line):
+        found = parse_control(line)
+        if found is None:
+            return
+        kind, request_id, _body = found
+        with self.lock:
+            if kind == 'control_response':
+                self.panel.pop(request_id, None)
+            elif kind == 'control_request':
+                self.child.add(request_id)
+            else:
+                self.child.discard(request_id)
+
+    def take(self):
+        """(the panel's open requests, the child's open ids), forgotten here."""
+        with self.lock:
+            panel, child = self.panel, self.child
+            self.panel, self.child = {}, set()
+        return panel, child
+
+
+def is_replay_answer(line):
+    if REPLAY_PREFIX.encode() not in line:
+        return False
+    found = parse_control(line)
+    return found is not None and found[0] == 'control_response' and found[1].startswith(REPLAY_PREFIX)

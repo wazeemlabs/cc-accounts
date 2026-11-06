@@ -20,4 +20,4 @@ test-plugin:
 
 lint:
 	shellcheck -x bin/cca install.sh tests/*.sh
-	python3 -m py_compile libexec/cca-setup libexec/cca-sync libexec/cca-keep-args libexec/cca-stream plugin/hooks/record-tasks.py
+	python3 -m py_compile libexec/cca-setup libexec/cca-sync libexec/cca-keep-args libexec/cca-stream libexec/cca-stream-lines plugin/hooks/record-tasks.py

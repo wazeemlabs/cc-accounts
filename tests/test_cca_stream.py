@@ -1,8 +1,6 @@
 """Tests for libexec/cca-stream, which keeps a VS Code session's process alive
 across an account switch. Run: python3 -m unittest discover -s tests"""
 import argparse
-import importlib.machinery
-import importlib.util
 import io
 import json
 import os
@@ -17,15 +15,7 @@ import threading
 import types
 import unittest
 
-HERE = pathlib.Path(__file__).resolve().parent
-SCRIPT = HERE.parent / 'libexec' / 'cca-stream'
-ID = '0f4a6c1e-1111-4222-8333-944455556666'
-WAIT = 10
-
-_loader = importlib.machinery.SourceFileLoader('cca_stream', str(SCRIPT))
-_spec = importlib.util.spec_from_loader('cca_stream', _loader)
-stream = importlib.util.module_from_spec(_spec)
-_loader.exec_module(stream)
+from stream_fixtures import ID, SCRIPT, WAIT, control, line, stream, user, without_uuid
 
 # Stands in for `cca <claude>`: logs how it was started and every line it
 # reads, answers control requests, answers user messages, and on
@@ -74,24 +64,6 @@ FAKE = textwrap.dedent('''\
             sys.exit(int(text[len('exit:'):]))
     sys.exit(0)
 ''')
-
-
-def user(text, uuid=None):
-    message = {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
-               'parent_tool_use_id': None, 'session_id': ID}
-    return message if uuid is None else {**message, 'uuid': uuid}
-
-
-def without_uuid(message):
-    return {key: value for key, value in message.items() if key != 'uuid'}
-
-
-def line(value):
-    return (json.dumps(value) + '\n').encode()
-
-
-def control(request_id, subtype, **fields):
-    return {'type': 'control_request', 'request_id': request_id, 'request': {'subtype': subtype, **fields}}
 
 
 class Supervised:
@@ -177,43 +149,6 @@ class RelaunchArgs(unittest.TestCase):
         self.assertEqual(stream.relaunch_args([], ID), ['--resume', ID])
 
 
-class Unread(unittest.TestCase):
-    def test_forgets_a_message_once_claude_code_echoes_it_and_hands_back_the_rest_in_order(self):
-        unread = stream.Unread(True)
-        for name in ('a', 'b', 'c'):
-            unread.sending(line(user(name, f'u-{name}')))
-        unread.echoed(line({'type': 'user', 'uuid': 'u-b', 'isReplay': True}))
-        self.assertEqual(unread.take(), [line(user('a', 'u-a')), line(user('c', 'u-c'))])
-        self.assertEqual(unread.take(), [])
-
-    def test_only_an_echo_counts_and_only_user_messages_with_a_uuid_are_kept(self):
-        unread = stream.Unread(True)
-        unread.sending(line(user('a', 'u-a')))
-        unread.sending(line(user('no uuid')))
-        unread.sending(line(control('p1', 'interrupt')))
-        unread.sending(b'not json "user"\n')
-        unread.echoed(line({'type': 'user', 'uuid': 'u-a'}))
-        unread.echoed(line({'type': 'assistant', 'uuid': 'u-a', 'isReplay': True}))
-        self.assertEqual(unread.take(), [line(user('a', 'u-a'))])
-
-    def test_a_message_that_never_reached_the_child_is_forgotten_and_an_early_echo_still_counts(self):
-        unread = stream.Unread(True)
-        unread.forget(unread.sending(line(user('a', 'u-a'))))
-        unread.sending(line(user('b', 'u-b')))
-        unread.echoed(line({'type': 'user', 'uuid': 'u-b', 'isReplay': True}))
-        self.assertEqual(unread.take(), [])
-
-    def test_keeps_nothing_when_the_child_does_not_echo(self):
-        unread = stream.Unread(False)
-        unread.sending(line(user('a', 'u-a')))
-        self.assertEqual(unread.take(), [])
-
-    def test_the_follow_up_carries_a_uuid_of_its_own(self):
-        first, second = (json.loads(stream.user_message('Carry on.', ID)) for _ in range(2))
-        self.assertEqual(without_uuid(first), user('Carry on.'))
-        self.assertNotEqual(first['uuid'], second['uuid'])
-
-
 class InProcess(unittest.TestCase):
     """The supervisor's parts, driven one step at a time."""
 
@@ -260,14 +195,6 @@ class InProcess(unittest.TestCase):
         self.assertEqual(supervisor.out.getvalue(), b'')
         supervisor.pump_stdout(new)
         self.assertEqual(supervisor.out.getvalue(), b'{"type":"assistant"}\n')
-
-
-class SetupNote(unittest.TestCase):
-    def test_a_line_that_is_json_but_not_an_object_is_passed_over(self):
-        setup = stream.Setup()
-        for text in (b'["control_request"]\n', b'"control_request"\n', b'{"type": "control_request", "request": 3}\n'):
-            setup.note(text)
-        self.assertEqual(setup.replay(), [])
 
 
 class ReadSwitch(unittest.TestCase):
