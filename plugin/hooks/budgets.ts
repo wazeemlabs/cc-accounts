@@ -156,9 +156,14 @@ export function weightedTokens(usage: {
   )
 }
 
-// One session's spend on one day, as it keeps it.
+// One session's or client's spend on one day, in weighted tokens.
 export type Spend = { cwd: string; tokens: number }
 
+const TOKEN_KINDS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const
+
+// A day's record: a session's own (`tokens`, weighted as each turn ended),
+// or a client's from `cca spend` (`usage`, raw counts per model, weighted
+// here so a token's cost has one definition). Undefined when it is neither.
 export function parseSpend(text: string): Spend | undefined {
   let value: unknown
   try {
@@ -166,8 +171,18 @@ export function parseSpend(text: string): Spend | undefined {
   } catch {
     return undefined
   }
-  if (!isObject(value) || typeof value.cwd !== 'string' || typeof value.tokens !== 'number') return undefined
-  return { cwd: value.cwd, tokens: value.tokens }
+  if (!isObject(value) || typeof value.cwd !== 'string') return undefined
+  if (typeof value.tokens === 'number') return { cwd: value.cwd, tokens: value.tokens }
+  if (!isObject(value.usage)) return undefined
+  let tokens = 0
+  for (const [model, counts] of Object.entries(value.usage)) {
+    if (!isObject(counts)) return undefined
+    const read = TOKEN_KINDS.map((kind) => counts[kind])
+    if (!read.every((count): count is number => typeof count === 'number' && Number.isFinite(count) && count >= 0)) return undefined
+    const [input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens] = read
+    tokens += weightedTokens({ model, input_tokens: input_tokens!, output_tokens: output_tokens!, cache_read_input_tokens: cache_read_input_tokens!, cache_creation_input_tokens: cache_creation_input_tokens! })
+  }
+  return { cwd: value.cwd, tokens }
 }
 
 // Adds a turn's cost to this session's record of the day. Only this session

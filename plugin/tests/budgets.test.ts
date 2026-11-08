@@ -15,6 +15,7 @@ import {
   parseBudget,
   parseBudgets,
   parseCalibration,
+  parseSpend,
   plan,
   projectOf,
   spendDir,
@@ -74,6 +75,25 @@ describe('budgets', () => {
     expect(weightedTokens({ model: 'claude-fable-5-1', ...counts })).toBe(600)
     expect(cents(weightedTokens({ model: 'claude-sonnet-5-5', ...counts }))).toBe(cents(180))
     expect(weightedTokens({ model: 'something-else', ...counts })).toBe(300)
+  })
+
+  test("a client's record from cca spend is weighed per model as a session's turns are", () => {
+    const counts = { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 40 }
+    const record = JSON.stringify({ cwd: '/work', account: 'cto', usage: { 'claude-opus-5-5': counts, 'claude-sonnet-5-5': counts } })
+    // 300 for Opus, 0.6 × 300 for Sonnet.
+    expect(cents(parseSpend(record)!.tokens)).toBe(cents(480))
+    expect(parseSpend(record)!.cwd).toBe('/work')
+    expect(parseSpend('{"cwd":"/work","tokens":7}')).toEqual({ cwd: '/work', tokens: 7 })
+  })
+
+  test('a client record with a missing, negative or non-numeric count is not read', () => {
+    const counts = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1 }
+    expect(parseSpend(JSON.stringify({ cwd: '/work', usage: { m: { ...counts, output_tokens: -1 } } }))).toBeUndefined()
+    expect(parseSpend(JSON.stringify({ cwd: '/work', usage: { m: { ...counts, input_tokens: '1' } } }))).toBeUndefined()
+    const { cache_read_input_tokens: _dropped, ...missing } = counts
+    expect(parseSpend(JSON.stringify({ cwd: '/work', usage: { m: missing } }))).toBeUndefined()
+    expect(parseSpend(JSON.stringify({ cwd: '/work', usage: { m: 3 } }))).toBeUndefined()
+    expect(parseSpend(JSON.stringify({ cwd: '/work' }))).toBeUndefined()
   })
 
   test("a day's calibration sums the rises between readings and counts a new week from zero", () => {
@@ -235,6 +255,18 @@ describe('a session over its budget is parked between turns', () => {
     expect(await $.tool.call(read('Read'))).toEqual({ result: undefined, text: '' })
     expect(w.logs.at(-1)).toBe('cc-accounts: work is within its budget again; this session goes on.')
     expect(w.statuses.at(-1)).toBe('account 1')
+  })
+
+  test("a client's spend from cca spend counts against its project's budget and parks the project's sessions", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(budgetFile(ROOT), weights({ '/work': 1 }))
+    // 400,000 output tokens on Opus through a bridge: 0.29 points, past the quarter point allowed at the day's start.
+    const counts = { input_tokens: 0, output_tokens: 400_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+    w.files.set(`${spendDir(ROOT, '1970-01-01')}/client-1-abc.json`, `${JSON.stringify({ cwd: '/work', account: '1', usage: { 'claude-opus-5-5': counts } })}\n`)
+    await $.session.start(START)
+    await turn($, w, [], [], cost('claude-opus-5-5', 1))
+    const refused = await $.tool.call(read('Read'))
+    expect('deny' in refused && refused.deny?.startsWith('cc-accounts: work has spent 0.3 of the 1 points')).toBe(true)
   })
 
   test('with no budget set, nothing is parked', async ($, on) => {

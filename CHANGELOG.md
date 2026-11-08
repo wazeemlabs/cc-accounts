@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.7.0 (2026-11-08)
+
+- `cca spend` counts a call that a client outside Claude Code made, such as an LLM bridge signed in to one of the accounts: `cca spend <model> <input> <output> <cache_read> <cache_write> --project <folder> --account <name or email>`. The call's tokens count in the project's budget and in calibration like a session's turns. Asked for on 2026-11-08, when a project's chat moved onto a bridge on one of the accounts. Its use would otherwise have raised that account's readings with nothing counted beside it, so every project's tokens would have read as more points than they are. Calls running in parallel all count. Raw counts are kept per model, and the plugin weighs them as it weighs a session's turns.
+
 ## 0.6.1 (2026-11-08)
 
 - A session's older reading of an account's week no longer counts as a new week. Calibration took any reading lower than the last as a reset and added the whole reading to the day's points. On 2026-11-08 two sessions on one account reported 40% and then 39%, and the day's record counted 42 points where the account had used 9. That made a point worth a third of the tokens it is, counted Wazeem Studio's 7.6 points as 24 and parked all its sessions within their budget. A new week is now told by its reset moment, which a calibration record keeps: only a reading whose week resets at least a day later starts counting from zero. A lower reading of the same week adds nothing, and the next rise counts from the highest.

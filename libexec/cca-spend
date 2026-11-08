@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""cca-spend --root <dir> --account <name> --project <folder> <model> <input> <output> <cache_read> <cache_write>
+
+Adds one model call's token counts to the day's spend, for a client that
+calls Claude outside a Claude Code session the plugin runs in (an LLM bridge
+signed in to one of the accounts), so project budgets and calibration count
+its use. The counts are kept raw, summed per model; the plugin weights them
+when it reads the day (weightedTokens in plugin/hooks/budgets.ts), the one
+definition of what a token costs. bin/cca resolves the account to its name
+before calling this.
+
+The record is spend/<UTC day>/client-<account>-<project digest>.json. Calls
+can run in parallel, so each update holds an exclusive lock on the record's
+lock file and replaces the record atomically.
+"""
+import argparse
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+import time
+
+# A model id or alias as clients report it (`claude-opus-5-5`, `opus[1m]`).
+MODEL = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$')
+KINDS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
+
+
+def day_of(at_ms):
+    return datetime.datetime.fromtimestamp(at_ms / 1000, datetime.timezone.utc).strftime('%Y-%m-%d')
+
+
+def record_path(root, day, account, project):
+    digest = hashlib.sha256(project.encode()).hexdigest()[:12]
+    return os.path.join(root, 'spend', day, f'client-{account}-{digest}.json')
+
+
+def added(before, project, account, model, counts):
+    """The record after adding one call's counts to `before` (None for a new day)."""
+    usage = dict(before['usage']) if before is not None else {}
+    total = dict(usage.get(model, {kind: 0 for kind in KINDS}))
+    for kind, count in zip(KINDS, counts):
+        total[kind] = total.get(kind, 0) + count
+    usage[model] = total
+    return {'cwd': project, 'account': account, 'usage': usage}
+
+
+def readable(path):
+    """The record at `path`, or None when there is none or it is not one this
+    command wrote (it is then replaced: a damaged record loses its own day's
+    counts only)."""
+    try:
+        with open(path) as file:
+            value = json.load(file)
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        print(f'cca spend: {path} was not a spend record; starting it again', file=sys.stderr)
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get('usage'), dict):
+        print(f'cca spend: {path} was not a spend record; starting it again', file=sys.stderr)
+        return None
+    return value
+
+
+def record(root, account, project, model, counts, at_ms):
+    path = record_path(root, day_of(at_ms), account, project)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(f'{path}.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        value = added(readable(path), project, account, model, counts)
+        handle, temporary = tempfile.mkstemp(dir=os.path.dirname(path), suffix='.tmp')
+        try:
+            with os.fdopen(handle, 'w') as file:
+                file.write(json.dumps(value) + '\n')
+            os.replace(temporary, path)
+        except BaseException:
+            os.unlink(temporary)
+            raise
+    return path
+
+
+def count(text):
+    if not re.fullmatch(r'[0-9]+', text):
+        raise argparse.ArgumentTypeError(f'a token count is a whole number, not {text!r}')
+    return int(text)
+
+
+def model_id(text):
+    if not MODEL.fullmatch(text):
+        raise argparse.ArgumentTypeError(f'not a model id: {text!r}')
+    return text
+
+
+def project_folder(text):
+    if not os.path.isabs(text):
+        raise argparse.ArgumentTypeError(f'the project is an absolute folder, not {text!r}')
+    return os.path.normpath(text)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog='cca spend', description=__doc__.split('\n\n')[1])
+    parser.add_argument('--root', required=True)
+    parser.add_argument('--account', required=True)
+    parser.add_argument('--project', required=True, type=project_folder)
+    parser.add_argument('model', type=model_id)
+    for kind in ('input', 'output', 'cache_read', 'cache_write'):
+        parser.add_argument(kind, type=count)
+    args = parser.parse_args(argv)
+    counts = (args.input, args.output, args.cache_read, args.cache_write)
+    record(args.root, args.account, args.project, args.model, counts, time.time() * 1000)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

@@ -99,7 +99,15 @@ Each day the accounts supply so many points: each account's room below the leave
 
 Every session counts what its turns cost (input, cached and output tokens, weighted by model: Opus 1, Fable 2, Sonnet 0.6, Haiku 0.2, and cache reads at a tenth), and the accounts' own readings say what those tokens come to in points, so spend is counted in the same unit as the budgets. A project that has spent more than its allowance so far is over budget: its sessions are parked between turns. A parked session's tool calls are refused with a line saying how much was spent, how much was allowed and when the day turns, and it goes on by itself once the allowance catches up or the day turns. A turn in flight is never cut. With no budget set, nothing is parked. `CCA_BUDGET=off` turns parking off; spend is still counted.
 
-`/account usage` ends with the budgets table. The files: `budgets.json`, `spend/<day>/<session>.json` and `calibration/<day>/<account>.json` under `~/.claude-shared/accounts`.
+A client that calls Claude outside a Claude Code session, such as an LLM bridge signed in to one of the accounts, counts its calls with `cca spend` after each one:
+
+```
+cca spend <model> <input> <output> <cache_read> <cache_write> --project <folder> --account <name or email>
+```
+
+The call's tokens then count in the project's budget and in the readings' calibration, like a session's turns. Without this, a bridge's use raises an account's reading with nothing counted beside it, and every project's tokens read as more points than they are. `cca spend` exits 2 when it refuses the call (an account no name or email matches, a count that is not a whole number, a project that is not an absolute folder); a model it does not know is kept and weighed as Opus, as a session's turns are.
+
+`/account usage` ends with the budgets table. The files: `budgets.json`, `spend/<day>/<session>.json` (`client-<account>-<digest>.json` for `cca spend`) and `calibration/<day>/<account>.json` under `~/.claude-shared/accounts`.
 
 ## What it does
 

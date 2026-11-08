@@ -377,4 +377,50 @@ mcp_setup
 CCA_MCP_SYNC=off CCA_TRUST_SYNC=off "$CCA" 2 2>/dev/null
 check "with both syncs off nothing is synced" "['fetch'] [] None None" "$(synced)"
 
+# cca spend: a client outside Claude Code counts its calls in the day's spend.
+spend_record() { # account, project
+  local digest day
+  digest="$(printf '%s' "$2" | shasum -a 256 | cut -c1-12)"
+  day="$(date -u +%F)"
+  cat "$CCA_ROOT/spend/$day/client-$1-$digest.json" 2>/dev/null
+}
+
+setup
+"$CCA" spend claude-opus-5-5 100 10 1000 40 --project /work/legal --account 2
+"$CCA" spend claude-opus-5-5 1 2 3 4 --project /work/legal --account two@example.com
+"$CCA" spend claude-sonnet-5-5 5 0 0 0 --account 2 --project /work/legal/
+check "spend sums one call's raw counts per model, by name or email, into the account's record for the project" \
+  '{"cwd": "/work/legal", "account": "2", "usage": {"claude-opus-5-5": {"input_tokens": 101, "output_tokens": 12, "cache_read_input_tokens": 1003, "cache_creation_input_tokens": 44}, "claude-sonnet-5-5": {"input_tokens": 5, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}' \
+  "$(spend_record 2 /work/legal)"
+
+setup
+out="$("$CCA" spend claude-opus-5-5 1 1 1 1 --project /work --account nobody 2>&1)"; status=$?
+check "spend refuses an account no name or email matches" "2 cca: no account is named or signed in as 'nobody'" "$status $out"
+
+setup
+"$CCA" spend claude-opus-5-5 1 x 1 1 --project /work --account 1 2>/dev/null; status=$?
+check "spend refuses a count that is not a whole number" "2 " "$status $(ls "$CCA_ROOT/spend" 2>/dev/null)"
+
+setup
+"$CCA" spend claude-opus-5-5 1 1 1 1 --project work --account 1 2>/dev/null; status=$?
+check "spend refuses a project that is not an absolute folder" "2" "$status"
+
+setup
+"$CCA" spend 'opus; rm' 1 1 1 1 --project /work --account 1 2>/dev/null; status=$?
+check "spend refuses a model that is not a model id" "2" "$status"
+
+setup
+"$CCA" spend claude-opus-5-5 1 1 1 1 --project /work 2>/dev/null; status=$?
+check "spend without an account is refused" "2" "$status"
+
+setup
+"$CCA" spend some-new-model 7 0 0 0 --project /work --account 1; status=$?
+check "spend keeps a model it does not know, for the plugin to weigh as it weighs any unknown model" \
+  "0 7" "$status $(spend_record 1 /work | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["usage"]["some-new-model"]["input_tokens"])')"
+
+setup
+for _ in $(seq 1 20); do "$CCA" spend claude-opus-5-5 1 0 0 0 --project /work --account 1 & done; wait
+check "spend calls running at once all count" "20" \
+  "$(spend_record 1 /work | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["usage"]["claude-opus-5-5"]["input_tokens"])')"
+
 finish

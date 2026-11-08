@@ -16,6 +16,9 @@
 #                              used, else where new sessions start (what `claude`
 #                              runs after init)
 #   cca uninstall              undo init's shell, settings and VS Code changes
+#   cca spend <model> <input> <output> <cache_read> <cache_write> --project <folder> --account <name or email>
+#                              count one call a client outside Claude Code made
+#                              (an LLM bridge) in the day's project budgets
 #   cca version | help
 #
 # Inside a session, /account <name> moves the conversation to <name> once its
@@ -41,7 +44,7 @@ SHARED_STATE=(projects todos file-history sessions)
 MCP_FILE="$SHARED/mcp.json"
 # Linked from ~/.claude into every other account unless share.conf says otherwise.
 DEFAULT_SHARE=(settings.json CLAUDE.md agents commands keybindings.json)
-RESERVED=" init add use remove run uninstall version help default usage priority now "
+RESERVED=" init add use remove run uninstall version help default usage priority now spend "
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # The plugin rewrites a conversation's record each time it starts, so a record
 # this old belongs to a conversation nobody has opened since; it then opens on
@@ -87,6 +90,16 @@ dir_of() {
 # An account's global config, where its login and folder trust live.
 config_of() {
   if [[ "$1" == "$HOME_DIR" ]]; then echo "$HOME/.claude.json"; else echo "$1/.claude.json"; fi
+}
+
+# The account a client names by its cca name or by the email it is signed
+# in as, or nothing when no account matches.
+account_named() {
+  local name dir
+  [[ -f "$TABLE" ]] || return 0
+  while IFS=$'\t' read -r name dir; do
+    if [[ "$1" == "$name" || "$1" == "$(email_of "$dir")" ]]; then echo "$name"; return 0; fi
+  done < "$TABLE"
 }
 
 email_of() {
@@ -342,6 +355,21 @@ case "${1:-}" in
     fi
     ;;
   run) shift; launch "$(choose "$@")" "$@" ;;
+  spend)
+    shift
+    usage="usage: cca spend <model> <input> <output> <cache_read> <cache_write> --project <folder> --account <name or email>"
+    args=(); account=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --account) [[ $# -ge 2 ]] || die "$usage"; account="$2"; shift 2 ;;
+        *) args+=("$1"); shift ;;
+      esac
+    done
+    [[ -n "$account" ]] || die "$usage"
+    name="$(account_named "$account")"
+    [[ -n "$name" ]] || die "no account is named or signed in as '$account'"
+    exec python3 -I "$LIBEXEC/cca-spend" --root "$ROOT" --account "$name" "${args[@]}"
+    ;;
   /*)
     # VS Code's claudeProcessWrapper: the extension's own binary first. A
     # session the panel talks to in stream-json runs under
