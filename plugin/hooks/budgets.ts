@@ -204,10 +204,11 @@ export async function readSpend($: EngineInterface, root: string, day: string): 
   return found
 }
 
-// How much of its week an account was seen to use on a day: the last
-// weekly reading, and the points consumed since the day's first reading,
-// summed over the increments between readings (a drop is a reset).
-export type Calibration = { last: number; consumed: number }
+// How much of its week an account was seen to use on a day: the highest
+// weekly reading of the week in progress, the moment that week resets, and
+// the points consumed since the day's first reading, summed over the rises
+// between readings.
+export type Calibration = { last: number; consumed: number; resetsAt?: string }
 
 export function parseCalibration(text: string): Calibration | undefined {
   let value: unknown
@@ -217,17 +218,29 @@ export function parseCalibration(text: string): Calibration | undefined {
     return undefined
   }
   if (!isObject(value) || typeof value.last !== 'number' || typeof value.consumed !== 'number') return undefined
-  return { last: value.last, consumed: value.consumed }
+  if (value.resetsAt !== undefined && typeof value.resetsAt !== 'string') return undefined
+  return value.resetsAt === undefined
+    ? { last: value.last, consumed: value.consumed }
+    : { last: value.last, consumed: value.consumed, resetsAt: value.resetsAt }
 }
 
-// The day's record after a reading of `percent`. Two sessions of one
-// account measuring at the same moment can drop one increment, which
-// undercounts the points and overstates the tokens each is worth: spend is
-// then counted low, never high.
-export function calibrated(before: Calibration | undefined, percent: number): Calibration {
-  if (before === undefined) return { last: percent, consumed: 0 }
-  const step = percent >= before.last ? percent - before.last : percent
-  return { last: percent, consumed: before.consumed + step }
+// The day's record after a reading of `percent` for the week resetting at
+// `resetsAt`. Only a reset moment at least a day later starts a new week,
+// whose reading counts from zero; the moment a reading reports can drift by
+// seconds within one week. A lower reading of the same week is another
+// session's older view of it and adds nothing: counting it as a fresh week
+// once tripled a day's points and parked a project within its budget.
+// Two sessions measuring at the same moment can drop one increment, which
+// undercounts the points: spend is then counted low, never high.
+export function calibrated(before: Calibration | undefined, percent: number, resetsAt?: string): Calibration {
+  const at = resetsAt === undefined ? {} : { resetsAt }
+  if (before === undefined) return { last: percent, consumed: 0, ...at }
+  const recordedReset = before.resetsAt === undefined ? NaN : Date.parse(before.resetsAt)
+  const readingReset = resetsAt === undefined ? NaN : Date.parse(resetsAt)
+  if (readingReset - recordedReset >= DAY_MS) return { last: percent, consumed: before.consumed + percent, ...at }
+  const kept = before.resetsAt === undefined ? at : { resetsAt: before.resetsAt }
+  if (percent <= before.last) return { last: before.last, consumed: before.consumed, ...kept }
+  return { last: percent, consumed: before.consumed + percent - before.last, ...kept }
 }
 
 export async function recordCalibration($: EngineInterface, root: string, reading: Reading): Promise<void> {
@@ -235,7 +248,7 @@ export async function recordCalibration($: EngineInterface, root: string, readin
   if (window === undefined) return
   const file = calibrationFile(root, dayOf(reading.at), reading.account)
   const before = (await $.fs.exists(file)) ? parseCalibration(await $.fs.read(file)) : undefined
-  await writeAtomic($, file, `${JSON.stringify(calibrated(before, window.percentUsed))}\n`)
+  await writeAtomic($, file, `${JSON.stringify(calibrated(before, window.percentUsed, window.resetsAt))}\n`)
 }
 
 // Weighted tokens per point, from the last CALIBRATION_DAYS days: every

@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.6.1 (2026-11-08)
+
+- A session's older reading of an account's week no longer counts as a new week. Calibration took any reading lower than the last as a reset and added the whole reading to the day's points. On 2026-11-08 two sessions on one account reported 40% and then 39%, and the day's record counted 42 points where the account had used 9. That made a point worth a third of the tokens it is, counted Wazeem Studio's 7.6 points as 24 and parked all its sessions within their budget. A new week is now told by its reset moment, which a calibration record keeps: only a reading whose week resets at least a day later starts counting from zero. A lower reading of the same week adds nothing, and the next rise counts from the highest.
+
 ## 0.6.0 (2026-11-07)
 
 - Project budgets. `/account budget <points a day> [folder]` holds a project to so many points a day, a point being one percent of a Max 5x week; projects without a budget share what the accounts supply beyond the budgets, by their weights. Every session counts what its turns cost, weighted by model, and the accounts' own readings calibrate tokens to points. A project over its allowance so far (a quarter of a day ahead of the clock) has its sessions parked between turns: their tool calls are refused with the figures and when the day turns, and they go on by themselves once the allowance catches up. A turn in flight is never cut. `/account usage` ends with the budgets table. `CCA_BUDGET=off` turns parking off. Asked for on 2026-11-07, when two projects sharing five accounts needed one to last the week beside the other's daily films.

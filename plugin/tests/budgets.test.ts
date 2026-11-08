@@ -14,6 +14,7 @@ import {
   parkedText,
   parseBudget,
   parseBudgets,
+  parseCalibration,
   plan,
   projectOf,
   spendDir,
@@ -75,12 +76,36 @@ describe('budgets', () => {
     expect(weightedTokens({ model: 'something-else', ...counts })).toBe(300)
   })
 
-  test("a day's calibration sums the rises between readings and counts a drop as a reset", () => {
-    const first = calibrated(undefined, 40)
-    expect(first).toEqual({ last: 40, consumed: 0 })
-    const second = calibrated(first, 43.5)
-    expect(second).toEqual({ last: 43.5, consumed: 3.5 })
-    expect(calibrated(second, 2)).toEqual({ last: 2, consumed: 5.5 })
+  test("a day's calibration sums the rises between readings and counts a new week from zero", () => {
+    const week = '2026-11-11T00:00:00.000Z'
+    const first = calibrated(undefined, 40, week)
+    expect(first).toEqual({ last: 40, consumed: 0, resetsAt: week })
+    const second = calibrated(first, 43.5, week)
+    expect(second).toEqual({ last: 43.5, consumed: 3.5, resetsAt: week })
+    const next = '2026-11-18T00:00:00.000Z'
+    expect(calibrated(second, 2, next)).toEqual({ last: 2, consumed: 5.5, resetsAt: next })
+  })
+
+  test("a lower reading of the same week adds nothing, and the next rise counts from the highest", () => {
+    const week = '2026-11-11T00:00:00.000Z'
+    // A session's older view (39 after 40) is not a reset.
+    const stale = calibrated({ last: 40, consumed: 9, resetsAt: week }, 39, week)
+    expect(stale).toEqual({ last: 40, consumed: 9, resetsAt: week })
+    expect(calibrated(stale, 41, week)).toEqual({ last: 41, consumed: 10, resetsAt: week })
+    // A reset moment drifting by seconds is the same week.
+    expect(calibrated(stale, 38, '2026-11-11T00:00:05.000Z')).toEqual({ last: 40, consumed: 9, resetsAt: week })
+  })
+
+  test('a lower reading with no reset moment on either side is taken as the same week', () => {
+    expect(calibrated({ last: 40, consumed: 9 }, 39)).toEqual({ last: 40, consumed: 9 })
+    expect(calibrated({ last: 40, consumed: 9 }, 42)).toEqual({ last: 42, consumed: 11 })
+    expect(calibrated({ last: 40, consumed: 9 }, 3, '2026-11-18T00:00:00.000Z')).toEqual({ last: 40, consumed: 9, resetsAt: '2026-11-18T00:00:00.000Z' })
+  })
+
+  test('a calibration record with a reset moment that is not text is refused', () => {
+    expect(parseCalibration('{"last":40,"consumed":9,"resetsAt":"2026-11-11T00:00:00.000Z"}')).toEqual({ last: 40, consumed: 9, resetsAt: '2026-11-11T00:00:00.000Z' })
+    expect(parseCalibration('{"last":40,"consumed":9,"resetsAt":5}')).toBeUndefined()
+    expect(parseCalibration('{"last":40,"consumed":9}')).toEqual({ last: 40, consumed: 9 })
   })
 
   test("an account's daily supply spreads its room until its week resets", () => {
@@ -171,6 +196,22 @@ describe('a session over its budget is parked between turns', () => {
     w.limits[1]!.percentUsed = 42
     await $.session.measure({ context: { window: 200000 }, rateLimits: [...w.limits], changed: ['rateLimits'] } as never)
     expect(w.files.get(calibrationFile(ROOT, '1970-01-01', '1'))).toBe('{"last":42,"consumed":2}\n')
+  })
+
+  test("a session's older view of the same week, reported after a newer one, adds nothing to the day's calibration", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    const week = '2026-11-11T00:00:00.000Z'
+    w.limits.push({ kind: 'five_hour', percentUsed: 10 }, { kind: 'seven_day', percentUsed: 0, resetsAt: week })
+    const measure = async (percent: number): Promise<void> => {
+      w.limits[1]!.percentUsed = percent
+      await $.session.measure({ context: { window: 200000 }, rateLimits: [...w.limits], changed: ['rateLimits'] } as never)
+    }
+    await measure(31)
+    await measure(40)
+    await measure(39)
+    await measure(40)
+    expect(w.files.get(calibrationFile(ROOT, '1970-01-01', '1'))).toBe(`{"last":40,"consumed":9,"resetsAt":"${week}"}\n`)
   })
 
   test('past its allowance so far, its tool calls are refused once the turn ends, and taken again when the allowance catches up', async ($, on) => {
