@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.7.1 (2026-11-09)
+
+- A client's calls on an account that no session measured that day stay out of calibration. Only Claude Code sessions report an account's readings, so an account only an LLM bridge uses has no calibration record, and its tokens made every point look larger and every project's spend read low. On 2026-11-09 a project's recall run moved onto such an account. Its calls still count in their project's budget. A client record without the account it called is no longer read.
+
 ## 0.7.0 (2026-11-08)
 
 - `cca spend` counts a call that a client outside Claude Code made, such as an LLM bridge signed in to one of the accounts: `cca spend <model> <input> <output> <cache_read> <cache_write> --project <folder> --account <name or email>`. The call's tokens count in the project's budget and in calibration like a session's turns. Asked for on 2026-11-08, when a project's chat moved onto a bridge on one of the accounts. Its use would otherwise have raised that account's readings with nothing counted beside it, so every project's tokens would have read as more points than they are. Calls running in parallel all count. Raw counts are kept per model, and the plugin weighs them as it weighs a session's turns.

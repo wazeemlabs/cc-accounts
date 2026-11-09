@@ -156,8 +156,9 @@ export function weightedTokens(usage: {
   )
 }
 
-// One session's or client's spend on one day, in weighted tokens.
-export type Spend = { cwd: string; tokens: number }
+// One session's or client's spend on one day, in weighted tokens; a client's
+// names the account it called, which no session of its own may be measuring.
+export type Spend = { cwd: string; tokens: number; account?: string }
 
 const TOKEN_KINDS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const
 
@@ -182,7 +183,8 @@ export function parseSpend(text: string): Spend | undefined {
     const [input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens] = read
     tokens += weightedTokens({ model, input_tokens: input_tokens!, output_tokens: output_tokens!, cache_read_input_tokens: cache_read_input_tokens!, cache_creation_input_tokens: cache_creation_input_tokens! })
   }
-  return { cwd: value.cwd, tokens }
+  if (typeof value.account !== 'string') return undefined
+  return { cwd: value.cwd, tokens, account: value.account }
 }
 
 // Adds a turn's cost to this session's record of the day. Only this session
@@ -268,16 +270,22 @@ export async function recordCalibration($: EngineInterface, root: string, readin
 
 // Weighted tokens per point, from the last CALIBRATION_DAYS days: every
 // session's tokens over every account's consumption, when the accounts
-// consumed enough to trust; else the default.
+// consumed enough to trust; else the default. A client's tokens count only on
+// a day its account was measured: an account only a client used reports no
+// consumption, and its tokens alone would make every point look larger.
 export async function tokensPerPoint($: EngineInterface, root: string, accounts: readonly string[], at: number): Promise<number> {
   let tokens = 0
   let points = 0
   for (const day of daysBack(at, CALIBRATION_DAYS)) {
-    for (const spend of (await readSpend($, root, day)).values()) tokens += spend.tokens
+    const measured = new Set<string>()
     for (const account of accounts) {
       const file = calibrationFile(root, day, account)
       if (!(await $.fs.exists(file))) continue
+      measured.add(account)
       points += parseCalibration(await $.fs.read(file))?.consumed ?? 0
+    }
+    for (const spend of (await readSpend($, root, day)).values()) {
+      if (spend.account === undefined || measured.has(spend.account)) tokens += spend.tokens
     }
   }
   return points >= CALIBRATION_POINTS && tokens > 0 ? tokens / points : DEFAULT_TOKENS_PER_POINT

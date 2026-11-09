@@ -105,7 +105,7 @@ A client that calls Claude outside a Claude Code session, such as an LLM bridge 
 cca spend <model> <input> <output> <cache_read> <cache_write> --project <folder> --account <name or email>
 ```
 
-The call's tokens then count in the project's budget and in the readings' calibration, like a session's turns. Without this, a bridge's use raises an account's reading with nothing counted beside it, and every project's tokens read as more points than they are. `cca spend` exits 2 when it refuses the call (an account no name or email matches, a count that is not a whole number, a project that is not an absolute folder); a model it does not know is kept and weighed as Opus, as a session's turns are.
+The call's tokens then count in the project's budget and in the readings' calibration, like a session's turns. Without this, a bridge's use raises an account's reading with nothing counted beside it, and every project's tokens read as more points than they are. An account only a client uses gives no readings, since only Claude Code sessions report them; its calls still count in their project's budget, and stay out of calibration that day. `cca spend` exits 2 when it refuses the call (an account no name or email matches, a count that is not a whole number, a project that is not an absolute folder); a model it does not know is kept and weighed as Opus, as a session's turns are.
 
 `/account usage` ends with the budgets table. The files: `budgets.json`, `spend/<day>/<session>.json` (`client-<account>-<digest>.json` for `cca spend`) and `calibration/<day>/<account>.json` under `~/.claude-shared/accounts`.
 

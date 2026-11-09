@@ -94,6 +94,8 @@ describe('budgets', () => {
     expect(parseSpend(JSON.stringify({ cwd: '/work', usage: { m: missing } }))).toBeUndefined()
     expect(parseSpend(JSON.stringify({ cwd: '/work', usage: { m: 3 } }))).toBeUndefined()
     expect(parseSpend(JSON.stringify({ cwd: '/work' }))).toBeUndefined()
+    // A client's record names the account it called.
+    expect(parseSpend(JSON.stringify({ cwd: '/work', usage: { m: counts } }))).toBeUndefined()
   })
 
   test("a day's calibration sums the rises between readings and counts a new week from zero", () => {
@@ -232,6 +234,23 @@ describe('a session over its budget is parked between turns', () => {
     await measure(39)
     await measure(40)
     expect(w.files.get(calibrationFile(ROOT, '1970-01-01', '1'))).toBe(`{"last":40,"consumed":9,"resetsAt":"${week}"}\n`)
+  })
+
+  test("a point's size counts a client's tokens only on a day its account was measured", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    const day = spendDir(ROOT, '1970-01-01')
+    const client = (account: string, output: number): string =>
+      `${JSON.stringify({ cwd: '/work', account, usage: { 'claude-opus-5-5': { input_tokens: 0, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })}\n`
+    w.files.set(calibrationFile(ROOT, '1970-01-01', '1'), '{"last":30,"consumed":10}\n')
+    w.files.set(`${day}/${SESSION}.json`, '{"cwd":"/work","tokens":70000000}\n')
+    // 7 M weighted on account 1, which sessions measured; 50 M on account 2, which nothing measured.
+    w.files.set(`${day}/client-1-abc.json`, client('1', 1_400_000))
+    w.files.set(`${day}/client-2-abc.json`, client('2', 10_000_000))
+    w.files.set(budgetFile(ROOT), weights({ '/work': 100 }))
+    await $.session.start(START)
+    // (70 + 7) M over 10 points; counting account 2's 50 M would make it 12.7 M.
+    const shown = (await $.command.run(run('budget'))).text ?? ''
+    expect(shown).toContain('a point is about 7.7 M weighted tokens')
   })
 
   test('past its allowance so far, its tool calls are refused once the turn ends, and taken again when the allowance catches up', async ($, on) => {
