@@ -17,7 +17,8 @@ export type ReportInput = {
   priorities: Priorities
   current: string | undefined
   defaultName: string | undefined
-  // Where new sessions start: the default unless it is low on room.
+  // Where new sessions start: the default, unless it is low on room or another
+  // account's week with room resets sooner.
   startName: string | undefined
   // The day's budgets, and the project this session is in, when a budget is set.
   plan?: Plan
@@ -84,7 +85,7 @@ function accountLine(input: ReportInput, row: ReportInput['accounts'][number]): 
     state.sized ? '' : 'plan size unknown, counted as one Max 5x',
     name === input.current ? '← this session' : '',
     name === input.startName ? '← new sessions' : '',
-    name === input.defaultName && input.defaultName !== input.startName ? '← default, low on room' : '',
+    name === input.defaultName && input.defaultName !== input.startName ? '← default, passed over' : '',
   ].filter(note => note !== '')
   const head = pad(name, 12)
   if (state.email === undefined) return `${head}not signed in`

@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.8.0 (2026-11-09)
+
+- Room is spent before the week that holds it resets. A week's unused room is lost at its reset, but sessions went to the account with the most five-hour room and new sessions started on the default, so on 2026-11-09 new sessions started on an account fresh from its reset while another's week, resetting two days later, still had a quarter of its room. Now a move, planned or after a stopped turn, takes the account with room whose week resets first; among weeks resetting at the same moment it takes the one with the most five-hour room, counting the load already on it, as before. New sessions start on the account a move would pick, the default winning among weeks that reset together and when no reset is known. With nothing pressing on its account, a session also moves at a turn's end to an account whose week resets at least six hours before its own and has room below the take line; an account with no known reset never draws such a move. `cca` and `/account` mark a default new sessions pass over as "passed over", since it may have room and still wait for an earlier week.
+
 ## 0.7.1 (2026-11-09)
 
 - A client's calls on an account that no session measured that day stay out of calibration. Only Claude Code sessions report an account's readings, so an account only an LLM bridge uses has no calibration record, and its tokens made every point look larger and every project's spend read low. On 2026-11-09 a project's recall run moved onto such an account. Its calls still count in their project's budget. A client record without the account it called is no longer read.

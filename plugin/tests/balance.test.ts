@@ -284,6 +284,54 @@ describe('a move is carried out once, and the reopened conversation is told what
   })
 })
 
+describe("a session spends the room of the week that resets first", () => {
+  const SOON = '1970-01-03T00:00:00Z'
+
+  test('with nothing pressing on its account, it moves to one whose week resets well before its own and has room', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 10, 20)
+    saved(w, '2', 10, 50, SOON)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request())
+    expect(w.logs.at(-1)).toBe(
+      "cc-accounts: 2's week resets at 1970-01-03 00:00 UTC, well before 1's, and has room it would lose; moving this conversation to 2.",
+    )
+  })
+
+  test('it stays where the other week has no room below the take line or no known reset', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 10, 20)
+    saved(w, '2', 10, 97, SOON)
+    await turn($, w, [])
+    saved(w, '2', 10)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.has(SWITCH)).toBe(false)
+  })
+
+  test('with the balancer off it stays', async ($, on) => {
+    const w = world(on, { ...SUPERVISED, CCA_BALANCE: 'off' })
+    await $.session.start(START)
+    limits(w, 10, 20)
+    saved(w, '2', 10, 50, SOON)
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.has(SWITCH)).toBe(false)
+  })
+
+  test('new sessions start on the account whose week resets first, the default being the later one', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 10, 20)
+    saved(w, '2', 40, 50, SOON)
+    await turn($, w, [SHELL])
+    expect(w.files.get(`${ROOT}/start`)).toBe('2\n')
+  })
+})
+
 describe('where new sessions start', () => {
   test("every turn's end publishes the account a new session should start on for cca", async ($, on) => {
     const w = world(on, SUPERVISED)

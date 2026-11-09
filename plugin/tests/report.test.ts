@@ -105,10 +105,10 @@ describe('/account usage', () => {
     ])
   })
 
-  test('marks the account new sessions start on, and the default when it is low on room', () => {
+  test('marks the account new sessions start on, and the default when it is passed over', () => {
     const text = formatReport(input([state('cto', 32, 14), state('levoro', 85, 88)], { defaultName: 'levoro', startName: 'cto' }))
     expect(text).toContain('cto                 68%      2h 9m        86%      3d 4h   0, ← new sessions')
-    expect(text).toContain('levoro              15%      2h 9m        12%      3d 4h   0, ← default, low on room')
+    expect(text).toContain('levoro              15%      2h 9m        12%      3d 4h   0, ← default, passed over')
   })
 
   test('with no sessions and no weights it says so', () => {

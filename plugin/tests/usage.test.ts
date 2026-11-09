@@ -13,8 +13,10 @@ import {
   POLICY,
   readingOf,
   resetsSoon,
+  soonerTarget,
   startAccount,
   tightWindow,
+  weekEnds,
   type Candidate,
   type Reading,
 } from '../hooks/usage'
@@ -32,6 +34,14 @@ function reading(account: string, fiveHour: number, weekly = 0, resetsAt = LATER
 }
 
 const candidate = (name: string, read: Reading | undefined, load = 0, units = 1): Candidate => ({ name, reading: read, load, units })
+
+// A reading whose week resets `hours` from NOW.
+function weekly(account: string, fiveHour: number, hours: number, percent = 50): Reading {
+  return readingOf(account, NOW, [
+    { kind: 'five_hour', percentUsed: fiveHour, resetsAt: LATER },
+    { kind: 'seven_day', percentUsed: percent, resetsAt: new Date(NOW + hours * HOUR).toISOString() },
+  ])
+}
 
 describe('readings', () => {
   test('round-trip through the usage file', () => {
@@ -116,7 +126,8 @@ describe('which account a session moves to', () => {
     expect(chooseTarget('a', [candidate('b', undefined)], NOW, POLICY.take)).toBe('b')
     expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 68))], NOW, POLICY.take)).toBe('c')
     expect(chooseTarget('a', [candidate('b', undefined), candidate('c', reading('c', 70))], NOW, POLICY.take)).toBe('b')
-    expect(chooseTarget('a', [candidate('b', undefined, 0), candidate('c', reading('c', 60), 1)], NOW, POLICY.take)).toBe('b')
+    // A measured account's week has a known reset and is spent before it, whatever the five-hour load.
+    expect(chooseTarget('a', [candidate('b', undefined, 0), candidate('c', reading('c', 60), 1)], NOW, POLICY.take)).toBe('c')
   })
 
   test('load counts each session by its weight, so heavier sessions keep lighter movers away', () => {
@@ -169,12 +180,47 @@ describe('which account a session moves to', () => {
   })
 })
 
+describe("room is spent before the week that holds it resets", () => {
+  test("a week's end is its reset moment, and unknown for an account nobody measured or a week already reset", () => {
+    expect(weekEnds(weekly('a', 0, 10), NOW)).toBe(NOW + 10 * HOUR)
+    expect(weekEnds(undefined, NOW)).toBe(Infinity)
+    expect(weekEnds(readingOf('a', NOW, [{ kind: 'five_hour', percentUsed: 1 }]), NOW)).toBe(Infinity)
+    expect(weekEnds(weekly('a', 0, -1), NOW)).toBe(Infinity)
+  })
+
+  test('a move takes the account whose week resets first, though another has more five-hour room', () => {
+    const all = [candidate('b', weekly('b', 0, 100)), candidate('c', weekly('c', 60, 20)), candidate('d', weekly('d', 10, 50))]
+    expect(chooseTarget('a', all, NOW, POLICY.take)).toBe('c')
+    // Past the take line it is passed over, for the next week to reset.
+    expect(chooseTarget('a', [all[0]!, candidate('c', weekly('c', 60, 20, 97)), all[2]!], NOW, POLICY.take)).toBe('d')
+  })
+
+  test('a new session starts on the account whose week resets first; the default wins only among weeks that reset together', () => {
+    expect(startAccount('a', [candidate('a', weekly('a', 0, 100)), candidate('b', weekly('b', 40, 20))], NOW)).toBe('b')
+    expect(startAccount('a', [candidate('a', weekly('a', 40, 20)), candidate('b', weekly('b', 0, 20))], NOW)).toBe('a')
+  })
+
+  test('a session moves to an account whose week resets at least six hours before its own and has room', () => {
+    const here = candidate('a', weekly('a', 0, 100))
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 94))], NOW)).toBe('b')
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 94.1))], NOW)).toBe(undefined)
+    // Nothing past the take line, and no account whose week has no known reset.
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 70, 20))], NOW)).toBe(undefined)
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 0, 20, 97))], NOW)).toBe(undefined)
+    expect(soonerTarget(here, [here, candidate('b', undefined)], NOW)).toBe(undefined)
+    expect(soonerTarget(candidate('a', undefined), [candidate('b', undefined)], NOW)).toBe(undefined)
+    // A session on an unmeasured account moves to one whose week is known to reset.
+    expect(soonerTarget(candidate('a', undefined), [candidate('b', weekly('b', 0, 20))], NOW)).toBe('b')
+  })
+})
+
 describe('which account a new session starts on', () => {
   test('the default while it has room below the take line', () => {
     const all = [candidate('a', reading('a', 60)), candidate('b', reading('b', 0))]
     expect(startAccount('a', all, NOW)).toBe('a')
-    // Unmeasured, it is taken on trust.
-    expect(startAccount('a', [candidate('a', undefined), candidate('b', reading('b', 0))], NOW)).toBe('a')
+    // Unmeasured, it gives way to an account whose week is known to reset; with none measured, it is taken on trust.
+    expect(startAccount('a', [candidate('a', undefined), candidate('b', reading('b', 0))], NOW)).toBe('b')
+    expect(startAccount('a', [candidate('a', undefined), candidate('b', undefined)], NOW)).toBe('a')
   })
 
   test('past the take line, the account a planned move would take', () => {

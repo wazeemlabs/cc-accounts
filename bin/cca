@@ -9,6 +9,7 @@
 #   cca add <name> [dir]       add an account (default dir ~/.claude-<name>) and sign in
 #   cca                        list the accounts; * marks where new sessions start
 #   cca use <name>             start new sessions on <name> while it has room
+#                              and no other account's week resets sooner
 #   cca remove <name>          stop using <name>: no session starts or moves
 #                              there; its folder and login are left as they are
 #   cca <name> [claude args]   run Claude Code on <name>
@@ -25,7 +26,8 @@
 # turn and background work have finished (/account <name> now does not wait):
 # in a terminal it closes and reopens on <name> with the same flags; in VS Code
 # it reopens on <name> in the same tab. A session whose account is nearly
-# spent moves to the account with the most room by itself (CCA_BALANCE=off
+# spent, or whose week resets well after another account's with room, moves
+# by itself to the account whose week resets first (CCA_BALANCE=off
 # stops it).
 set -euo pipefail
 
@@ -287,7 +289,7 @@ list() {
   if [[ "$start" == "$def" ]]; then
     echo "* new sessions start here. Move a running one with /account <name>."
   else
-    echo "* new sessions start here; $def, the default, is low on room. Move a running one with /account <name>."
+    echo "* new sessions start here; $def, the default, is passed over: low on room, or another account's week with room resets sooner. Move a running one with /account <name>."
   fi
 }
 

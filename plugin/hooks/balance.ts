@@ -1,7 +1,9 @@
 // Keeping sessions off accounts that are nearly spent. Each session writes
 // its account's rate-limit readings to usage/<account>.json; at the end of
 // each main-loop turn, a session whose account has a window at its leave
-// threshold moves to the account with the most room (usage.ts decides which).
+// threshold moves to the account with room whose week resets first, and one
+// whose week resets well after another's with room moves there (usage.ts
+// decides which).
 // A turn the account itself stopped (a window at its limit, or an API error
 // of the account's: a per-model limit, a lost login) moves at once and
 // reopens with a follow-up message, so the work carries on with nobody
@@ -24,11 +26,14 @@ import {
   fullWindow,
   POLICY,
   resetsSoon,
+  soonerTarget,
   startAccount,
   tightWindow,
+  weekEnds,
   windowAtLimit,
   windowName,
   type Candidate,
+  type Reading,
   type Stop,
 } from './usage'
 
@@ -114,7 +119,7 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const stop = stopped ? stopOf(await turnFailure($, ctx), windowAtLimit(reading, now)) : undefined
   const full = fullWindow(reading, now)
   const tight = tightWindow(reading, now)
-  if (stop === undefined && full === undefined && tight === undefined) return
+  if (stop === undefined && full === undefined && tight === undefined) return spendSooner($, state, ctx, reading, now)
   const exit = await exitOf($, await $.session.id())
   if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
   const live = await liveSessions($, ctx)
@@ -124,7 +129,7 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const heavier = stop === undefined && full === undefined
     ? heavierOn(live, priorities, from, await $.session.id(), mine.weight)
     : undefined
-  if (stop === undefined && full === undefined && heavier === undefined) return
+  if (stop === undefined && full === undefined && heavier === undefined) return spendSooner($, state, ctx, reading, now)
   // `full ?? tight` is set whenever `stop` is not.
   const window = stop !== undefined && 'window' in stop ? stop.window : full ?? tight ?? 'five_hour'
   if (stop === undefined && resetsSoon(reading, window, now)) {
@@ -156,4 +161,27 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const waits = asked.kind === 'queued'
   if (waits) $.ui.status(`account ${from}, moving to ${target}`)
   $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
+}
+
+// With nothing pressing on its account: move to an account whose week resets
+// well before this one's and has room, so that room is spent before the reset
+// takes it (usage.ts, soonerTarget). The move is planned, so it waits for the
+// session's background work and goes only where a planned move may.
+async function spendSooner($: EngineInterface, state: SwitchState, ctx: Context, reading: Reading | undefined, now: number): Promise<void> {
+  const from = ctx.current?.name
+  if (from === undefined) return
+  const exit = await exitOf($, await $.session.id())
+  if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
+  const live = await liveSessions($, ctx)
+  const options = await candidates($, ctx, await sessionFamily($, state.answered), live, await readPriorities($, ctx.root))
+  const target = soonerTarget({ name: from, reading, load: 0, units: 1 }, options, now)
+  if (target === undefined) return
+  const resets = new Date(weekEnds(options.find(option => option.name === target)?.reading, now)).toISOString().slice(0, 16).replace('T', ' ')
+  const asked = await requestSwitch($, state, ctx, exit, { target, force: false, stop: undefined })
+  const waits = asked.kind === 'queued'
+  if (waits) $.ui.status(`account ${from}, moving to ${target}`)
+  $.ui.log(
+    `cc-accounts: ${target}'s week resets at ${resets} UTC, well before ${from}'s, and has room it would lose; ` +
+      `moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`,
+  )
 }

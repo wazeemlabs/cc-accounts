@@ -30,7 +30,8 @@ const HOUR_MS = 3_600_000
 // end of a turn once a window reaches `leave`. Once one reaches `yieldAt`, a
 // session leaves to make room for a heavier one (a project of higher
 // priority) on the same account. A planned move goes only to an account whose
-// windows are all below `take`, preferring the one with the most room after
+// windows are all below `take`, preferring the one whose week resets first,
+// then among weeks resetting together the one with the most room after
 // counting `perSession` points for each unit of load already on it, divided
 // by its plan size, so that sessions leaving one account together spread out
 // and keep off the accounts where heavier ones run. A session
@@ -40,6 +41,11 @@ const HOUR_MS = 3_600_000
 // reason of its own is skipped for a while (`blockMsOf`). A planned move is not made when
 // the full window resets within `resetGraceMs`: a move costs the new account
 // the whole context uncached, and a limit hit before the reset still moves.
+// Room an account's week has left is lost when the week resets, so among the
+// accounts with room the one whose week resets first is spent first, and a
+// session moves to it from an account whose week resets at least `soonerMs`
+// later (`soonerTarget`); the margin keeps sessions from moving for an
+// hour's difference.
 export const POLICY = {
   leave: { five_hour: 90, seven_day: 99 } as Record<string, number>,
   yieldAt: { five_hour: 75, seven_day: 95 } as Record<string, number>,
@@ -49,6 +55,7 @@ export const POLICY = {
   limitBlockMs: HOUR_MS,
   refusalBlockMs: 24 * HOUR_MS,
   resetGraceMs: 15 * 60_000,
+  soonerMs: 6 * HOUR_MS,
 }
 
 // How long a failure keeps sessions off an account. A usage limit may clear
@@ -175,33 +182,63 @@ function fits(candidate: Candidate, now: number, bar: Readonly<Record<string, nu
   return Object.keys(bar).every(kind => percentNow(candidate.reading, kind, now) < bar[kind]!)
 }
 
+// When the account's week resets, the moment its room is lost; Infinity when
+// no reading says (an account nobody has measured, a week already reset).
+export function weekEnds(reading: Reading | undefined, now: number): number {
+  const resetsAt = reading?.windows.seven_day?.resetsAt
+  if (resetsAt === undefined) return Infinity
+  const resets = Date.parse(resetsAt)
+  return Number.isNaN(resets) || resets <= now ? Infinity : resets
+}
+
 // The account to move to, or undefined when none has room below `bar`
-// (POLICY.take for a planned move, POLICY.leave for a stopped turn's).
+// (POLICY.take for a planned move, POLICY.leave for a stopped turn's): the
+// one whose week resets first, its room being lost first; among accounts
+// whose weeks reset together, `preferred` if it is one of them, else the one
+// with the most five-hour room after counting the load already on it.
 export function chooseTarget(
   current: string,
   candidates: readonly Candidate[],
   now: number,
   bar: Readonly<Record<string, number>>,
+  preferred?: string,
 ): string | undefined {
-  let best: { name: string; score: number } | undefined
+  let best: { name: string; ends: number; first: boolean; score: number } | undefined
   for (const candidate of candidates) {
     if (candidate.name === current || !fits(candidate, now, bar)) continue
     const used = candidate.reading === undefined ? UNMEASURED_PERCENT : percentNow(candidate.reading, 'five_hour', now)
-    const score = used + (POLICY.perSession * candidate.load) / candidate.units
-    if (best === undefined || score < best.score) best = { name: candidate.name, score }
+    const option = {
+      name: candidate.name,
+      ends: weekEnds(candidate.reading, now),
+      first: candidate.name === preferred,
+      score: used + (POLICY.perSession * candidate.load) / candidate.units,
+    }
+    if (best === undefined || option.ends < best.ends ||
+      (option.ends === best.ends && (option.first > best.first || (option.first === best.first && option.score < best.score)))) {
+      best = option
+    }
   }
   return best?.name
 }
 
-// The account a new session should start on: the default (`preferred`)
-// while it has room below the take line, a new session being a planned
-// arrival; else the account a planned move would take; else the one a
-// stopped turn would; else the default, when no account has room.
+// The account a new session should start on, a new session being a planned
+// arrival: the one a planned move would take, the default (`preferred`)
+// winning among accounts whose weeks reset together; else the one a stopped
+// turn would; else the default, when no account has room.
 export function startAccount(preferred: string | undefined, candidates: readonly Candidate[], now: number): string | undefined {
-  const own = candidates.find(candidate => candidate.name === preferred)
-  if (own !== undefined && fits(own, now, POLICY.take)) return preferred
-  const from = preferred ?? ''
-  return chooseTarget(from, candidates, now, POLICY.take) ?? chooseTarget(from, candidates, now, POLICY.leave) ?? preferred
+  return chooseTarget('', candidates, now, POLICY.take, preferred) ?? chooseTarget('', candidates, now, POLICY.leave, preferred) ?? preferred
+}
+
+// An account with room whose week resets at least POLICY.soonerMs before
+// the one the session is on, which it should move to so that room is spent
+// before it is lost; undefined when there is none.
+export function soonerTarget(current: Candidate, candidates: readonly Candidate[], now: number): string | undefined {
+  const target = chooseTarget(current.name, candidates, now, POLICY.take)
+  const found = candidates.find(candidate => candidate.name === target)
+  if (found === undefined) return undefined
+  const ends = weekEnds(found.reading, now)
+  // A week with no known reset loses nothing that moving would save.
+  return Number.isFinite(ends) && ends + POLICY.soonerMs <= weekEnds(current.reading, now) ? target : undefined
 }
 
 // The windows in words, to follow an account's name and `'s` in a log line:

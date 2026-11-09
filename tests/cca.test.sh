@@ -86,7 +86,7 @@ setup
 echo 2 > "$CCA_ROOT/start"
 out="$("$CCA")"
 check "list marks where new sessions start, and says the default is low" \
-  "* 2|* new sessions start here; 1, the default, is low on room. Move a running one with /account <name>." \
+  "* 2|* new sessions start here; 1, the default, is passed over: low on room, or another account's week with room resets sooner. Move a running one with /account <name>." \
   "$(echo "$out" | sed -n 2p | awk '{print $1, $2}')|$(echo "$out" | tail -1)"
 
 setup

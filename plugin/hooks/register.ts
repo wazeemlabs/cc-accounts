@@ -288,7 +288,7 @@ export const register: Register = on => {
       return {
         text: start === target.name
           ? `New sessions start on ${target.name}.`
-          : `${target.name} is the default; new sessions start on ${start} while it is low on room.`,
+          : `${target.name} is the default; new sessions start on ${start} while it is low on room or ${start}'s week with room resets sooner.`,
       }
     }
 

@@ -100,7 +100,8 @@ export function emailIn(configText: string): string | undefined {
 }
 
 // `use`: the account's last usage reading (`5h 42%, week 10%`), '' for none.
-// `start`: where new sessions start, the default unless it is low on room.
+// `start`: where new sessions start: the default, unless it is low on room or
+// another account's week with room resets sooner.
 export function formatList(
   rows: readonly { account: Account; email: string | undefined; use: string }[],
   current: string | undefined,
@@ -111,7 +112,7 @@ export function formatList(
     const marks = [
       account.name === current ? 'this session' : '',
       account.name === start ? 'new sessions' : '',
-      account.name === defaultName && defaultName !== start ? 'default, low on room' : '',
+      account.name === defaultName && defaultName !== start ? 'default, passed over' : '',
     ].filter(mark => mark !== '')
     const note = marks.length === 0 ? '' : `  ← ${marks.join(', ')}`
     return `${account.name.padEnd(8)} ${(email ?? '(not signed in)').padEnd(28)} ${(use || '-').padEnd(20)}${note}`

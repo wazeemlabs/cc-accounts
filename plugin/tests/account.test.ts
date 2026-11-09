@@ -134,7 +134,7 @@ describe('/account', () => {
     expect(w.released).toEqual([SUPERVISOR])
   })
 
-  test('marks where new sessions start, and the default when it is low on room', async ($, on) => {
+  test('marks where new sessions start, and the default when it is passed over', async ($, on) => {
     const w = world(on, { CLAUDE_ACCOUNT: '2' })
     w.files.set(`${ROOT}/default`, '1\n')
     w.files.set(
@@ -143,7 +143,7 @@ describe('/account', () => {
     )
     await $.session.start(START)
     const { text } = await $.command.run(run(''))
-    expect(text).toContain('1        one@example.com              5h 85%                ← default, low on room')
+    expect(text).toContain('1        one@example.com              5h 85%                ← default, passed over')
     expect(text).toContain('2        two@example.com              -                     ← this session, new sessions')
     expect(w.files.get(`${ROOT}/start`)).toBe('2\n')
   })
