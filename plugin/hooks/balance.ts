@@ -111,7 +111,8 @@ export function stopOf(failure: string | undefined, window: string | undefined):
 // account), or a terminal session a person is at. A `-p` run would come back
 // as an interactive one, and a process cca did not start never reopens.
 export async function balance($: EngineInterface, state: SwitchState, stopped: boolean): Promise<void> {
-  if (state.pending !== undefined || state.ending) return
+  if (state.ending) return
+  if (state.pending !== undefined) return stopped ? hurry($, state) : undefined
   if ((await $.env.get('CCA_BALANCE')) === 'off') return
   const ctx = await context($)
   if (ctx?.current === undefined) return
@@ -163,6 +164,27 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const waits = asked.kind === 'queued'
   if (waits) $.ui.status(`account ${from}, moving to ${target}`)
   $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
+}
+
+// A turn the account stopped while a move waits for the session's background
+// work: nothing can go on here, and the work may run for hours (2026-11-10: a
+// session holding gate waits stayed on a spent week through every message),
+// so the move goes now and stops the work, as a move the stop decided would.
+// The target stands: the person or the balancer chose it, and the
+// conversation is already recorded there. The move is not new, so it goes
+// with the balancer off too.
+async function hurry($: EngineInterface, state: SwitchState): Promise<void> {
+  const pending = state.pending
+  if (pending === undefined || pending.force) return
+  const ctx = await context($)
+  if (ctx?.current === undefined) return
+  const from = ctx.current.name
+  const now = await $.clock.now()
+  const stop = stopOf(await turnFailure($, ctx), windowAtLimit(await ownReading($, from), now))
+  if (stop === undefined) return
+  if ('error' in stop) await block($, ctx.root, from, scopeOf(stop.error, await sessionFamily($, state.answered)), stop.error, now)
+  state.pending = { ...pending, force: true, stop }
+  $.ui.log(`cc-accounts: ${from} stopped the last turn; moving this conversation to ${pending.target} now, stopping its background work.`)
 }
 
 // With nothing pressing on its account: move to an account whose week resets

@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.8.2 (2026-11-10)
+
+- A move waiting for a session's background work goes at once when the account then stops a turn. The balancer skipped every turn's end while a switch was pending, so a planned move queued behind background work never became a forced one. On 2026-11-10 a session holding gate waits queued a move off an account, then hit that account's weekly limit, and every message it received ended on the limit while the status line read "moving". Now a stopped turn forces the pending switch to the account it was waiting for, stopping the work and naming it in the follow-up, whether the balancer or the person asked for it. A turn that ends on an error not of the account leaves the move waiting.
+
 ## 0.8.1 (2026-11-10)
 
 - Sessions spread before an account's five-hour window stops them. 0.8.0 sent every move and new session to the account whose week resets first while its five-hour window was below the take line, however many sessions already worked on it, and counted idle sessions as load. On 2026-11-10 about twenty sessions ran on one account; its five-hour window went from 70% to 100% within single long turns, and since the balancer runs only at a turn's end, sessions such as a project's QC and a studio's director learned of the limit when it stopped their turn, with another account fresh from its reset beside it. Now an account has room only while its five-hour use plus 10 points per unit of working load stays below the bar, and an account with room comes before the week that resets first; an unmeasured account has no room known and stays a last resort. A session moves, planned, when its own account's use plus that count reaches 90%, to an account with room. A session idle for 30 minutes or more by its registry status counts as no load, and nothing makes room for an idle heavier session.

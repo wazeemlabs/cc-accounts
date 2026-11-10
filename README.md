@@ -59,7 +59,7 @@ You do not need to do anything for this. Every session saves its account's five-
 
 A session also moves with nothing pressing on its account, when another account's week resets at least six hours before its own and has room below the take line (70% of five hours, 97% of the week). So a week about to reset is spent before its room is lost, and the later weeks keep theirs. An account nobody has measured yet, whose reset is unknown, never draws a session this way. And a session moves when the sessions working on its account would fill its five-hour window, use plus 10 points each reaching 90%, to an account with room by the same count. A session checks only when a turn ends, and without this many sessions sent to one account fill its five-hour window during a long turn, which then stops on the limit.
 
-If the limit stops a turn before that happens, the session moves at once and the conversation reopens with a message telling it to carry on, so the work goes on with nobody typing. That message names any background work the move stopped.
+If the limit stops a turn before that happens, the session moves at once and the conversation reopens with a message telling it to carry on, so the work goes on with nobody typing. That message names any background work the move stopped. A move already waiting for background work, the balancer's or one you asked for with `/account`, also goes at once when the account stops a turn, to the account it was waiting to move to.
 
 New sessions start on the account a move would pick: the one with room whose week resets first. The default account wins among accounts whose weeks reset together, and when no account's reset is known yet. `/account` and `cca` show where new sessions start now.
 
