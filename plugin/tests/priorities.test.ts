@@ -9,9 +9,9 @@ import {
   projectName,
   weightOf,
 } from '../hooks/priorities'
-import type { LiveSession } from '../hooks/survey'
+import { activeOf, ACTIVE_MS, type LiveSession } from '../hooks/survey'
 
-const at = (sessionId: string, account: string, cwd: string): LiveSession => ({ sessionId, account, cwd, name: '' })
+const at = (sessionId: string, account: string, cwd: string): LiveSession => ({ sessionId, account, cwd, name: '', active: true })
 const WEIGHTS = new Map([['/p/app', 3], ['/p/app/docs', 0.5], ['/p/misc', 2]])
 
 describe('project weights', () => {
@@ -60,12 +60,27 @@ describe('project weights', () => {
     expect(loads(live, WEIGHTS)).toEqual(new Map([['a', 4], ['b', 0.5]]))
   })
 
+  test('a session works while busy, or idle less than half an hour, or with no status recorded', () => {
+    expect(activeOf('busy', 0, ACTIVE_MS * 10)).toBe(true)
+    expect(activeOf(undefined, undefined, 0)).toBe(true)
+    expect(activeOf('idle', 1000, 1000 + ACTIVE_MS - 1)).toBe(true)
+    expect(activeOf('idle', 1000, 1000 + ACTIVE_MS)).toBe(false)
+    expect(activeOf('idle', undefined, 0)).toBe(true)
+  })
+
+  test('an idle session weighs on no account', () => {
+    const live = [at('1', 'a', '/p/app'), { ...at('2', 'a', '/p/other'), active: false }]
+    expect(loads(live, WEIGHTS)).toEqual(new Map([['a', 3]]))
+  })
+
   test('finds the heaviest other session on the account that outweighs this one', () => {
     const live = [at('me', 'a', '/p/x'), at('2', 'a', '/p/misc'), at('3', 'a', '/p/app/src'), at('4', 'b', '/p/app')]
     expect(heavierOn(live, WEIGHTS, 'a', 'me', 1)).toEqual({ session: live[2], weight: 3, folder: '/p/app' })
     expect(heavierOn(live, WEIGHTS, 'a', 'me', 3)).toBe(undefined)
     expect(heavierOn(live, WEIGHTS, 'a', '3', 3)).toBe(undefined)
     expect(heavierOn(live, WEIGHTS, 'c', 'me', 1)).toBe(undefined)
+    // An idle heavier session is passed over.
+    expect(heavierOn([live[0]!, { ...live[2]!, active: false }], WEIGHTS, 'a', 'me', 1)).toBe(undefined)
   })
 
   test('a project is named by the last part of its folder', () => {

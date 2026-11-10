@@ -35,8 +35,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 // A session running now: its conversation, the account cca recorded for it,
-// the folder it started in, and the name its tab shows.
-export type LiveSession = { sessionId: string; account: string; cwd: string; name: string }
+// the folder it started in, the name its tab shows, and whether it is
+// working (`active`): busy now, or idle for less than ACTIVE_MS. An idle
+// session spends nothing on its account until a person writes to it.
+export type LiveSession = { sessionId: string; account: string; cwd: string; name: string; active: boolean }
+
+// How long after its last turn a session still counts as working: a person
+// answering, or a background task's report, starts its next turn.
+export const ACTIVE_MS = 30 * 60_000
 
 // The live sessions: Claude Code's session list (shared by every account),
 // each entry's conversation as cca recorded it, and one `ps` for which of
@@ -44,7 +50,8 @@ export type LiveSession = { sessionId: string; account: string; cwd: string; nam
 export async function liveSessions($: EngineInterface, ctx: Context): Promise<LiveSession[]> {
   const dir = `${ctx.shared}/sessions`
   if (!(await $.fs.exists(dir))) return []
-  const entries: { pid: number; sessionId: string; cwd: string; name: string }[] = []
+  const now = await $.clock.now()
+  const entries: { pid: number; sessionId: string; cwd: string; name: string; active: boolean }[] = []
   for (const entry of await $.fs.list(dir)) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
     let value: unknown
@@ -60,6 +67,7 @@ export async function liveSessions($: EngineInterface, ctx: Context): Promise<Li
         sessionId: value.sessionId,
         cwd: typeof value.cwd === 'string' ? value.cwd : '',
         name: typeof value.name === 'string' ? value.name : '',
+        active: activeOf(value.status, value.statusUpdatedAt, now),
       })
     }
   }
@@ -71,9 +79,17 @@ export async function liveSessions($: EngineInterface, ctx: Context): Promise<Li
     if (!alive.has(String(entry.pid))) continue
     const file = `${ctx.root}/by-session/${entry.sessionId}`
     if (!(await $.fs.exists(file))) continue
-    live.push({ sessionId: entry.sessionId, account: (await $.fs.read(file)).trim(), cwd: entry.cwd, name: entry.name })
+    live.push({ sessionId: entry.sessionId, account: (await $.fs.read(file)).trim(), cwd: entry.cwd, name: entry.name, active: entry.active })
   }
   return live
+}
+
+// Whether a registry entry's session is working: anything but a known idle
+// status counts, since an entry without one cannot be told apart from a busy
+// session; an idle one counts until ACTIVE_MS after it went idle.
+export function activeOf(status: unknown, since: unknown, now: number): boolean {
+  if (status !== 'idle') return true
+  return typeof since !== 'number' || now - since < ACTIVE_MS
 }
 
 // One account as every session sees it: who it is signed in as, how big its

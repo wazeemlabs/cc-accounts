@@ -7,6 +7,7 @@ import {
   followUpText,
   formatReading,
   fullWindow,
+  hasRoom,
   windowAtLimit,
   parseReading,
   percentNow,
@@ -14,6 +15,7 @@ import {
   readingOf,
   resetsSoon,
   soonerTarget,
+  spreadTarget,
   startAccount,
   tightWindow,
   weekEnds,
@@ -211,6 +213,43 @@ describe("room is spent before the week that holds it resets", () => {
     expect(soonerTarget(candidate('a', undefined), [candidate('b', undefined)], NOW)).toBe(undefined)
     // A session on an unmeasured account moves to one whose week is known to reset.
     expect(soonerTarget(candidate('a', undefined), [candidate('b', weekly('b', 0, 20))], NOW)).toBe('b')
+  })
+})
+
+describe('sessions spread before an account\'s five-hour window stops them', () => {
+  test('an account has room while its use and the sessions working on it stay below the bar', () => {
+    expect(hasRoom(candidate('a', weekly('a', 0, 20), 6), NOW, POLICY.take)).toBe(true)
+    expect(hasRoom(candidate('a', weekly('a', 0, 20), 7), NOW, POLICY.take)).toBe(false)
+    expect(hasRoom(candidate('a', weekly('a', 40, 20), 3), NOW, POLICY.take)).toBe(false)
+    // A bigger plan carries more sessions.
+    expect(hasRoom(candidate('a', weekly('a', 40, 20), 3, 2), NOW, POLICY.take)).toBe(true)
+  })
+
+  test('a move passes over the account whose week resets first when its sessions would fill its window', () => {
+    const crowded = candidate('b', weekly('b', 40, 20), 5)
+    const open = candidate('c', weekly('c', 10, 100))
+    expect(chooseTarget('a', [crowded, open], NOW, POLICY.take)).toBe('c')
+    expect(startAccount('b', [crowded, open], NOW)).toBe('c')
+    // With no account that has room, the week that resets first still wins.
+    expect(chooseTarget('a', [crowded, candidate('c', weekly('c', 10, 100), 7)], NOW, POLICY.take)).toBe('b')
+  })
+
+  test('a session does not move for an earlier reset to an account its sessions would fill', () => {
+    const here = candidate('a', weekly('a', 0, 100))
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 20), 4)], NOW)).toBe(undefined)
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 20), 3)], NOW)).toBe('b')
+  })
+
+  test('a session leaves an account its working sessions would fill for one with room', () => {
+    const here = candidate('a', weekly('a', 40, 20), 5)
+    expect(spreadTarget(here, [here, candidate('b', weekly('b', 10, 100), 2)], NOW)).toBe('b')
+    // An account that carries its load keeps its sessions.
+    expect(spreadTarget(candidate('a', weekly('a', 40, 20), 4), [candidate('b', weekly('b', 0, 100))], NOW)).toBe(undefined)
+    // With nowhere that has room, it stays: the move would only crowd another window.
+    expect(spreadTarget(here, [here, candidate('b', weekly('b', 10, 100), 6)], NOW)).toBe(undefined)
+    expect(spreadTarget(here, [here, candidate('b', weekly('b', 70, 100))], NOW)).toBe(undefined)
+    // Before its first reading a session stays.
+    expect(spreadTarget(candidate('a', undefined, 5), [candidate('b', weekly('b', 10, 100))], NOW)).toBe(undefined)
   })
 })
 

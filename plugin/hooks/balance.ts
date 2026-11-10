@@ -24,9 +24,11 @@ import {
   describeUse,
   describeWindows,
   fullWindow,
+  percentNow,
   POLICY,
   resetsSoon,
   soonerTarget,
+  spreadTarget,
   startAccount,
   tightWindow,
   weekEnds,
@@ -174,14 +176,23 @@ async function spendSooner($: EngineInterface, state: SwitchState, ctx: Context,
   if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
   const live = await liveSessions($, ctx)
   const options = await candidates($, ctx, await sessionFamily($, state.answered), live, await readPriorities($, ctx.root))
-  const target = soonerTarget({ name: from, reading, load: 0, units: 1 }, options, now)
+  // This session's own reading is fresher than its account's file.
+  const own = options.find(option => option.name === from)
+  const current = { name: from, reading, load: own?.load ?? 0, units: own?.units ?? 1 }
+  const sooner = soonerTarget(current, options, now)
+  const target = sooner ?? spreadTarget(current, options, now)
   if (target === undefined) return
-  const resets = new Date(weekEnds(options.find(option => option.name === target)?.reading, now)).toISOString().slice(0, 16).replace('T', ' ')
+  const why = sooner !== undefined
+    ? `${target}'s week resets at ${utcMinute(weekEnds(options.find(option => option.name === target)?.reading, now))} UTC, ` +
+      `well before ${from}'s, and has room it would lose`
+    : `the sessions working on ${from} would fill its 5-hour window, which is at ` +
+      `${percentNow(reading, 'five_hour', now)}%, and ${target} has room`
   const asked = await requestSwitch($, state, ctx, exit, { target, force: false, stop: undefined })
   const waits = asked.kind === 'queued'
   if (waits) $.ui.status(`account ${from}, moving to ${target}`)
-  $.ui.log(
-    `cc-accounts: ${target}'s week resets at ${resets} UTC, well before ${from}'s, and has room it would lose; ` +
-      `moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`,
-  )
+  $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
+}
+
+function utcMinute(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ')
 }

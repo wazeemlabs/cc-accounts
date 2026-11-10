@@ -110,17 +110,20 @@ export async function setPriority($: EngineInterface, root: string, folder: stri
   await writeAtomic($, priorityFile(root), formatPriorities(priorities))
 }
 
-// Each account's load: the summed weights of the live sessions on it.
+// Each account's load: the summed weights of the working sessions on it.
 export function loads(live: readonly LiveSession[], priorities: Priorities): Map<string, number> {
   const found = new Map<string, number>()
   for (const session of live) {
+    // An idle session spends nothing, so it weighs on no account's window.
+    if (!session.active) continue
     found.set(session.account, (found.get(session.account) ?? 0) + weightOf(priorities, session.cwd).weight)
   }
   return found
 }
 
-// The heaviest other session on `account` that outweighs `weight`, with the
-// folder that gave it its weight, or undefined when none does.
+// The heaviest other working session on `account` that outweighs `weight`,
+// with the folder that gave it its weight, or undefined when none does. An
+// idle one spends nothing, so nothing makes room for it.
 export function heavierOn(
   live: readonly LiveSession[],
   priorities: Priorities,
@@ -130,7 +133,7 @@ export function heavierOn(
 ): { session: LiveSession; weight: number; folder: string } | undefined {
   let found: { session: LiveSession; weight: number; folder: string } | undefined
   for (const session of live) {
-    if (session.account !== account || session.sessionId === self) continue
+    if (session.account !== account || session.sessionId === self || !session.active) continue
     const other = weightOf(priorities, session.cwd)
     if (other.weight > weight && (found === undefined || other.weight > found.weight)) {
       found = { session, weight: other.weight, folder: other.folder ?? session.cwd }

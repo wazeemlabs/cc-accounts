@@ -59,8 +59,9 @@ describe('/account', () => {
     )
     await $.session.start(START)
     const { text } = await $.command.run(run(''))
-    expect(text).toContain('1        one@example.com              -                     ← new sessions')
-    expect(text).toContain('2        two@example.com              5h 42%, week 7%       ← this session')
+    // Unmeasured, the default gives way to the measured account with room.
+    expect(text).toContain('1        one@example.com              -                     ← default, passed over')
+    expect(text).toContain('2        two@example.com              5h 42%, week 7%       ← this session, new sessions')
     expect(text).toContain('3        (not signed in)              -')
   })
 

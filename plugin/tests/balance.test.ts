@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { followUpText, parseReading } from '../hooks/usage'
 import {
   BY_SESSION,
+  HOME,
   type Cron,
   LATER,
   ROOT,
@@ -329,6 +330,45 @@ describe("a session spends the room of the week that resets first", () => {
     saved(w, '2', 40, 50, SOON)
     await turn($, w, [SHELL])
     expect(w.files.get(`${ROOT}/start`)).toBe('2\n')
+  })
+})
+
+describe('sessions spread before a five-hour window fills', () => {
+  test('a session leaves an account its working sessions would fill for one with room', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 40, 20)
+    saved(w, '2', 10, 20)
+    for (const pid of [101, 102, 103, 104, 105]) session(w, pid, '1')
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(request())
+    expect(w.logs.at(-1)).toBe(
+      'cc-accounts: the sessions working on 1 would fill its 5-hour window, which is at 40%, and 2 has room; ' +
+        'moving this conversation to 2.',
+    )
+  })
+
+  test('idle sessions do not crowd an account, and a crowded account with nowhere better keeps its sessions', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 40, 20)
+    saved(w, '2', 10, 20)
+    const long = w.clock.now() - 2 * 3_600_000
+    for (const pid of [101, 102, 103, 104, 105]) {
+      session(w, pid, '1')
+      w.files.set(`${HOME}/.claude-shared/sessions/${pid}.json`,
+        JSON.stringify({ pid, sessionId: `s-${pid}`, cwd: '/x', name: '', status: 'idle', statusUpdatedAt: long }))
+    }
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.has(SWITCH)).toBe(false)
+    // Working again, but account 2 is as crowded: no move.
+    for (const pid of [101, 102, 103, 104, 105]) session(w, pid, '1')
+    for (const pid of [201, 202, 203, 204, 205, 206]) session(w, pid, '2')
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.has(SWITCH)).toBe(false)
   })
 })
 

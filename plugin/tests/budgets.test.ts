@@ -37,7 +37,7 @@ function account(name: string, week: number | undefined, resetsAt = NOW + 2 * DA
   return { account: { name, dir: `/h/${name}` }, email: `${name}@x.com`, units: 1, sized: true, reading, ...extra }
 }
 
-const live = (sessionId: string, cwd: string): LiveSession => ({ sessionId, account: 'a', cwd, name: '' })
+const live = (sessionId: string, cwd: string): LiveSession => ({ sessionId, account: 'a', cwd, name: '', active: true })
 const spent = (cwd: string, tokens: number): Spend => ({ cwd, tokens })
 const cents = (value: number | undefined) => Math.round((value ?? NaN) * 100) / 100
 
