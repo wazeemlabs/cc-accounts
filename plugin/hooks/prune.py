@@ -15,8 +15,9 @@ reads whole when it opens the conversation. So this:
     Claude Code writes so a resumed request can be sent byte for byte while
     the prompt cache holds it, and never reads to rebuild the conversation:
     all of it once the transcript has been idle for IDLE_SECONDS, the
-    cache's life, and before that the rows no request since the last
-    boundary builds on;
+    cache's life, judged by its newest row's own time (a rewrite changes the
+    file's), and before that the rows no request since the last boundary
+    builds on;
   - replaces every image but the newest KEEP_IMAGES of a transcript with a
     line saying it was removed, in the conversation's rows, never in the
     request log, whose blobs are named by their hash;
@@ -27,8 +28,8 @@ reads whole when it opens the conversation. So this:
 
 --session prunes that conversation's transcripts (its own and its
 subagents'); --all every transcript of at least --min-bytes (by default
-MIN_SAVING, below which none can save enough) that changed since the state
-file last saw it under these rules. One line is printed per transcript shrunk.
+MIN_IDLE_SAVING, below which none can save enough) that changed since the
+state file last saw it under these rules. One line is printed per transcript shrunk.
 A transcript is replaced atomically, and rows Claude Code appends meanwhile
 are carried over, so a live session's file can be pruned. One prune runs at
 a time on the machine, under the lock.
@@ -41,6 +42,7 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 
 # The rows of the conversation itself.
 CONVERSATION = frozenset({'user', 'assistant', 'attachment', 'system', 'progress'})
@@ -49,20 +51,22 @@ CONVERSATION = frozenset({'user', 'assistant', 'attachment', 'system', 'progress
 KEEP_IMAGES = 5
 REMOVED = '[image removed by cc-accounts to save space]'
 # Below this saving a transcript is left as it is, so a live one is not
-# rewritten for a few rows.
+# rewritten for a few rows; an idle one is rewritten once, and the state
+# then passes it by, so a smaller saving is worth it.
 MIN_SAVING = 1_000_000
+MIN_IDLE_SAVING = 64_000
 # The prompt cache's life: a transcript idle this long has no request left
 # that its log could replay into a cache hit.
 IDLE_SECONDS = 3600
 # The rules the state file was written under: a state of other rules looks
 # at every transcript again.
-STATE_VERSION = 2
+STATE_VERSION = 3
 CHUNK = 1 << 20
 
 
 class Row:
     __slots__ = ('offset', 'length', 'kind', 'uuid', 'parent', 'boundary', 'images',
-                 'source', 'keep', 'names', 'name', 'fork')
+                 'source', 'keep', 'names', 'name', 'fork', 'at')
 
     def __init__(self, offset, length):
         self.offset = offset
@@ -83,6 +87,8 @@ class Row:
         self.name = None
         # A fork-context-ref's parent: (session id, the message it forked from).
         self.fork = None
+        # When Claude Code wrote the row, in seconds, where it says.
+        self.at = None
 
 
 def strings(value):
@@ -123,6 +129,17 @@ def without_images(value, budget):
     return value
 
 
+def seconds(stamp):
+    """An ISO 8601 time, as Claude Code writes `timestamp`, in seconds; None
+    when it is not one."""
+    if stamp is None:
+        return None
+    try:
+        return datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return None
+
+
 def row_of(offset, line):
     row = Row(offset, len(line))
     try:
@@ -134,6 +151,7 @@ def row_of(offset, line):
         return row
     text = lambda key: data.get(key) if isinstance(data.get(key), str) else None
     row.kind = data.get('type')
+    row.at = seconds(text('timestamp'))
     row.uuid = text('uuid')
     row.parent = text('parentUuid')
     if row.kind == 'system' and data.get('subtype') == 'compact_boundary' and not data.get('isSidechain'):
@@ -282,17 +300,19 @@ def copy_tail(source, out, offset):
 def prune(path, now=None):
     """Shrinks the transcript at `path`; (bytes before, bytes after), or
     None when there is not enough to drop. `now`, the time in seconds, says
-    whether it has been idle."""
+    whether it has been idle since its newest row, or since the file last
+    changed when no row says when it was written."""
     forked = forks_of(path)
     with open(path, 'rb') as source:
         status = os.fstat(source.fileno())
         size = status.st_size
-        idle = (time.time() if now is None else now) - status.st_mtime >= IDLE_SECONDS
         rows, whole = scan(source, size)
+        written = max((row.at for row in rows if row.at is not None), default=status.st_mtime)
+        idle = (time.time() if now is None else now) - written >= IDLE_SECONDS
         drop = dropped(rows, idle, forked)
         lines = slimmed(rows, drop, source)
         saving = sum(rows[index].length for index in drop) + sum(rows[index].length - len(line) for index, line in lines.items())
-        if saving < MIN_SAVING:
+        if saving < (MIN_IDLE_SAVING if idle else MIN_SAVING):
             return None
         temp = f'{path}.cca-prune-{os.getpid()}.tmp'
         try:
@@ -370,7 +390,7 @@ def main(argv=None):
     which = parser.add_mutually_exclusive_group(required=True)
     which.add_argument('--session')
     which.add_argument('--all', action='store_true')
-    parser.add_argument('--min-bytes', type=int, default=MIN_SAVING)
+    parser.add_argument('--min-bytes', type=int, default=MIN_IDLE_SAVING)
     args = parser.parse_args(argv)
     # A hot reload of the plugin ends its children: the temporary file goes
     # and the transcript stays as it was.

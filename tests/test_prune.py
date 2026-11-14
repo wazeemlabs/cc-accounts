@@ -152,6 +152,28 @@ class Compaction(Transcript):
         prune.prune(str(self.path), now=later)
         self.assertEqual(self.kinds(), ['a', 'b'])
 
+    def test_idle_is_judged_by_the_newest_rows_own_time_not_the_files(self):
+        stamped = lambda row, at: {**row, 'timestamp': at}
+        self.write([stamped(message('a', None), '2026-11-14T10:00:00.000Z'), blob('h1', BIG),
+                    stamped(request(0, ['h1']), '2026-11-14T10:00:01Z')])
+        newest = prune.seconds('2026-11-14T10:00:01Z')
+        # The file was just written, as a prune of it would leave it; its rows are old.
+        prune.prune(str(self.path), now=newest + prune.IDLE_SECONDS)
+        self.assertEqual(self.kinds(), ['a'])
+
+    def test_a_row_written_within_the_hour_keeps_the_transcript_active(self):
+        stamped = lambda row, at: {**row, 'timestamp': at}
+        self.write([stamped(message('a', None), '2026-11-14T10:00:00Z'), blob('h1', BIG), request(0, ['h1']),
+                    stamped(message('b', 'a'), '2026-11-14T10:59:00Z')])
+        self.assertIsNone(prune.prune(str(self.path), now=prune.seconds('2026-11-14T11:00:00Z')))
+
+    def test_an_idle_transcript_is_rewritten_for_a_smaller_saving(self):
+        log = blob('h1', 'x' * (prune.MIN_IDLE_SAVING + 1))
+        self.write([message('a', None), log, request(0, ['h1'])])
+        later = self.path.stat().st_mtime + prune.IDLE_SECONDS
+        self.assertIsNotNone(prune.prune(str(self.path), now=later))
+        self.assertEqual(self.kinds(), ['a'])
+
     def test_a_message_a_fork_started_from_stays_with_its_parents(self):
         self.write([message('a', None), message('b', 'a'), message('c', 'b', text=BIG), boundary('k')])
         fork = {'type': 'fork-context-ref', 'agentId': 'f1', 'parentSessionId': SESSION, 'parentLastUuid': 'b'}

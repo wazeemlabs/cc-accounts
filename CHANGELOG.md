@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.12.1 (2026-11-15)
+
+- A conversation is idle by its newest row's own time, not by the file's. 0.12.0 judged idleness by the file's mtime, and the first sweep had just rewritten 203 files, so 1.2 GB of request log in conversations idle for days counted as active and stayed. An idle conversation is also rewritten for a saving of 64 KB, not 1 MB: it is rewritten once and the state then passes it by, and the 1 MB floor had left 300 files and 117 MB alone. The 1 MB floor still holds for a conversation active within the hour.
+
 ## 0.12.0 (2026-11-15)
 
 - Pruning reaches every conversation that needs it. After 0.11.0's first sweep took 30 GB to 3.5 GB, 1.7 GB of what was left was the request log, and most of it in subagents' files, which never compact: a copy of each request, kept so Claude Code can resend it byte for byte while the prompt cache lasts, which its loader ignores when it rebuilds a conversation. A transcript idle for an hour, the cache's life, now loses its whole request log; one active within the hour still loses only what no request since its last compaction builds on. A message a fork started from (its `fork-context-ref`) is kept with its parents, since Claude Code reads it back to rebuild the fork. The sweep looks at transcripts from 1 MB, the least that can save the 1 MB a rewrite needs, instead of 10 MB, which had left 78 files and 189 MB alone. The state file records the rules' version, so a change of rules looks at every transcript again.
