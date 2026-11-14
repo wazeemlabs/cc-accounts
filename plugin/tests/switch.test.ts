@@ -260,3 +260,17 @@ describe('/account waits for the work a switch would stop', () => {
     expect(text).toContain('shell "npm test"')
   })
 })
+
+describe('a switch that fails partway', () => {
+  // 2026-11-15 review: the timer's first look at the agents sat outside its
+  // try, so a failure there was lost and the switch announced stayed undone.
+  test('a failure in the timer that carries it out is reported, with what to type again', async ($, on) => {
+    const w = world(on, { ...STREAM, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH })
+    await $.session.start(START)
+    w.slow.agentsFailAfter = 1
+    const { text } = await $.command.run(run('2'))
+    expect(text).toMatch(/^Switching to 2/)
+    await w.clock.advance(0)
+    expect(w.logs.filter(line => /^cc-accounts: the switch to 2 failed \(.+\); type \/account 2 again\.$/.test(line))).toHaveLength(1)
+  })
+})

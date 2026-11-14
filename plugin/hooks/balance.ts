@@ -26,7 +26,7 @@ import {
   fullWindow,
   percentNow,
   POLICY,
-  resetsSoon,
+  waitsForReset,
   soonerTarget,
   spreadTarget,
   startAccount,
@@ -136,7 +136,7 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   if (stop === undefined && full === undefined && heavier === undefined) return spendSooner($, state, ctx, reading, now)
   // `full ?? tight` is set whenever `stop` is not.
   const window = stop !== undefined && 'window' in stop ? stop.window : full ?? tight ?? 'five_hour'
-  if (stop === undefined && resetsSoon(reading, window, now)) {
+  if (stop === undefined && waitsForReset(reading, tight, now)) {
     $.ui.log(
       `cc-accounts: ${from}'s ${describeWindows(reading, now)}, but the ${windowName(window)} window resets within ` +
         `${POLICY.resetGraceMs / 60_000} minutes; staying.`,
@@ -149,7 +149,7 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   // record: they show it to every session, and when it resets.
   if (stop !== undefined && 'error' in stop) await block($, ctx.root, from, scopeOf(stop.error, family), stop.error, now)
   const options = await candidates($, ctx, family, live, priorities)
-  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave)
+  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave, undefined, mine.weight)
   const why = stop !== undefined && 'error' in stop
     ? `${from} failed the last turn (${stop.error})`
     : heavier !== undefined
@@ -186,13 +186,15 @@ async function stranded(
 ): Promise<void> {
   if (stop === undefined && full === undefined) return
   const window = stop !== undefined && 'window' in stop ? stop.window : full ?? 'five_hour'
-  if (stop === undefined && resetsSoon(reading, window, now)) return
+  if (stop === undefined && waitsForReset(reading, undefined, now)) return
   const failed = stop !== undefined && 'error' in stop ? stop.error : undefined
   const told = failed !== undefined ? `${from} ${failed}` : `${from} ${window} ${reading?.windows[window]?.resetsAt ?? ''}`
   if (state.stranded === told) return
   state.stranded = told
-  const options = await candidates($, ctx, await sessionFamily($, state.answered), await liveSessions($, ctx), await readPriorities($, ctx.root))
-  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave)
+  const priorities = await readPriorities($, ctx.root)
+  const options = await candidates($, ctx, await sessionFamily($, state.answered), await liveSessions($, ctx), priorities)
+  const arriving = weightOf(priorities, await $.session.root()).weight
+  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave, undefined, arriving)
   const desktop = await inDesktopApp($)
   const why = failed !== undefined ? `${from} failed the last turn (${failed})` : `${from}'s ${describeWindows(reading, now)}`
   const cause = desktop
@@ -240,12 +242,15 @@ async function spendSooner($: EngineInterface, state: SwitchState, ctx: Context,
   const exit = await exitOf($, await $.session.id())
   if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
   const live = await liveSessions($, ctx)
-  const options = await candidates($, ctx, await sessionFamily($, state.answered), live, await readPriorities($, ctx.root))
-  // This session's own reading is fresher than its account's file.
+  const priorities = await readPriorities($, ctx.root)
+  const options = await candidates($, ctx, await sessionFamily($, state.answered), live, priorities)
+  // This session's own reading is fresher than its account's file; before
+  // its first response it has none, and its account's saved one stands in.
   const own = options.find(option => option.name === from)
-  const current = { name: from, reading, load: own?.load ?? 0, units: own?.units ?? 1 }
-  const sooner = soonerTarget(current, options, now)
-  const target = sooner ?? spreadTarget(current, options, now)
+  const current = { name: from, reading: reading ?? own?.reading, load: own?.load ?? 0, units: own?.units ?? 1 }
+  const arriving = weightOf(priorities, await $.session.root()).weight
+  const sooner = soonerTarget(current, options, now, arriving)
+  const target = sooner ?? spreadTarget(current, options, now, arriving)
   if (target === undefined) return
   const why = sooner !== undefined
     ? `${target}'s week resets at ${utcMinute(weekEnds(options.find(option => option.name === target)?.reading, now))} UTC, ` +

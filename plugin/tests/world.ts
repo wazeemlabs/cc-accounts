@@ -155,9 +155,12 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   }))
   // How long the agent list takes to answer, in clock milliseconds: a wait
   // that lets another timer run meanwhile.
-  const slow = { agentsMs: 0 }
+  // `agentsFailAfter`: the agent list answers that many times, then fails.
+  const slow = { agentsMs: 0, agentsFailAfter: Infinity }
   on('agent.list', async () => {
     if (slow.agentsMs > 0) await clock.sleep(slow.agentsMs)
+    if (slow.agentsFailAfter <= 0) throw new Error('agent list unavailable')
+    slow.agentsFailAfter -= 1
     return { value: agents }
   })
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))

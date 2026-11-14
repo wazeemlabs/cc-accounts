@@ -213,7 +213,15 @@ async function runExit($: EngineInterface, state: SwitchState, pending: Pending,
 export async function carryOut($: EngineInterface, state: SwitchState): Promise<void> {
   if (state.pending === undefined || state.ending) return
   if (!state.pending.force) {
-    const wait = await waitingFor($, state)
+    const target = state.pending.target
+    let wait: Wait
+    try {
+      wait = await waitingFor($, state)
+    } catch (error) {
+      // The pending switch stays; the next turn's end tries it again.
+      $.ui.log(`cc-accounts: the switch to ${target} failed (${describeError(error)}); type /account ${target} again.`)
+      return
+    }
     if (wait.turn || wait.tasks.length > 0) return
   }
   // Claimed before anything else is awaited: another timer that got this far

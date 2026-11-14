@@ -156,6 +156,15 @@ export function fullWindow(reading: Reading | undefined, now: number): string | 
   return Object.keys(POLICY.leave).find(kind => percentNow(reading, kind, now) >= POLICY.leave[kind]!)
 }
 
+// Whether every window at or past its leave line, or `tight` when none is,
+// resets within the grace period: staying for one is no use while another
+// stays full.
+export function waitsForReset(reading: Reading | undefined, tight: string | undefined, now: number): boolean {
+  const full = Object.keys(POLICY.leave).filter(kind => percentNow(reading, kind, now) >= POLICY.leave[kind]!)
+  const kinds = full.length > 0 ? full : tight === undefined ? [] : [tight]
+  return kinds.length > 0 && kinds.every(kind => resetsSoon(reading, kind, now))
+}
+
 // Whether `kind` resets within the grace period, so a planned move off it
 // would cost more than it saves.
 export function resetsSoon(reading: Reading | undefined, kind: string, now: number): boolean {
@@ -198,9 +207,10 @@ export function weekEnds(reading: Reading | undefined, now: number): number {
 
 // What the account's five-hour window is headed for: its use now plus
 // `perSession` points for each unit of load working on it, by plan size.
-function projected(candidate: Candidate, now: number): number {
+// `arriving`: the weight of a session that would move there, counted too.
+function projected(candidate: Candidate, now: number, arriving = 0): number {
   const used = candidate.reading === undefined ? UNMEASURED_PERCENT : percentNow(candidate.reading, 'five_hour', now)
-  return used + (POLICY.perSession * candidate.load) / candidate.units
+  return used + (POLICY.perSession * (candidate.load + arriving)) / candidate.units
 }
 
 // Whether `candidate`'s five-hour window, counting the sessions already
@@ -208,8 +218,10 @@ function projected(candidate: Candidate, now: number): number {
 // takes no more while another has room: its week resetting first is no use
 // to a session its five-hour window stops. An account nobody has measured
 // shows no room: what it holds is unknown, and it stays a last resort.
-export function hasRoom(candidate: Candidate, now: number, bar: Readonly<Record<string, number>>): boolean {
-  return candidate.reading !== undefined && projected(candidate, now) < bar.five_hour!
+// `arriving` is the weight of a session that would move there: judged
+// without it, a session could arrive to a window it fills and be sent back.
+export function hasRoom(candidate: Candidate, now: number, bar: Readonly<Record<string, number>>, arriving = 0): boolean {
+  return candidate.reading !== undefined && projected(candidate, now, arriving) < bar.five_hour!
 }
 
 // The account to move to, or undefined when none has room below `bar`
@@ -218,23 +230,25 @@ export function hasRoom(candidate: Candidate, now: number, bar: Readonly<Record<
 // among them the one whose week resets first, its room being lost first;
 // among accounts whose weeks reset together, `preferred` if it is one of
 // them, else the one with the most five-hour room after counting the load
-// already on it.
+// already on it. `arriving`: the moving session's own weight, counted on
+// each candidate (0 for a new session, whose project cca does not know).
 export function chooseTarget(
   current: string,
   candidates: readonly Candidate[],
   now: number,
   bar: Readonly<Record<string, number>>,
   preferred?: string,
+  arriving = 0,
 ): string | undefined {
   let best: { name: string; roomy: boolean; ends: number; first: boolean; score: number } | undefined
   for (const candidate of candidates) {
     if (candidate.name === current || !fits(candidate, now, bar)) continue
     const option = {
       name: candidate.name,
-      roomy: hasRoom(candidate, now, bar),
+      roomy: hasRoom(candidate, now, bar, arriving),
       ends: weekEnds(candidate.reading, now),
       first: candidate.name === preferred,
-      score: projected(candidate, now),
+      score: projected(candidate, now, arriving),
     }
     if (best === undefined || better(option, best)) best = option
   }
@@ -260,12 +274,13 @@ export function startAccount(preferred: string | undefined, candidates: readonly
 
 // An account with room whose week resets at least POLICY.soonerMs before
 // the one the session is on, which it should move to so that room is spent
-// before it is lost; undefined when there is none.
-export function soonerTarget(current: Candidate, candidates: readonly Candidate[], now: number): string | undefined {
-  const target = chooseTarget(current.name, candidates, now, POLICY.take)
+// before it is lost; undefined when there is none. `arriving`: this
+// session's weight, which the target must carry too.
+export function soonerTarget(current: Candidate, candidates: readonly Candidate[], now: number, arriving = 1): string | undefined {
+  const target = chooseTarget(current.name, candidates, now, POLICY.take, undefined, arriving)
   const found = candidates.find(candidate => candidate.name === target)
   // Without room for this session the target's five-hour window would stop it.
-  if (found === undefined || !hasRoom(found, now, POLICY.take)) return undefined
+  if (found === undefined || !hasRoom(found, now, POLICY.take, arriving)) return undefined
   const ends = weekEnds(found.reading, now)
   // A week with no known reset loses nothing that moving would save.
   return Number.isFinite(ends) && ends + POLICY.soonerMs <= weekEnds(current.reading, now) ? target : undefined
@@ -276,12 +291,12 @@ export function soonerTarget(current: Candidate, candidates: readonly Candidate[
 // `current.load`) would fill its five-hour window: the check comes only at a
 // turn's end, and a window those sessions fill during one long turn stops
 // it. Undefined when its account can carry its load or no other has room.
-export function spreadTarget(current: Candidate, candidates: readonly Candidate[], now: number): string | undefined {
+export function spreadTarget(current: Candidate, candidates: readonly Candidate[], now: number, arriving = 1): string | undefined {
   // Before its first reading a session cannot know what its account holds.
   if (current.reading === undefined || projected(current, now) < POLICY.leave.five_hour!) return undefined
-  const target = chooseTarget(current.name, candidates, now, POLICY.take)
+  const target = chooseTarget(current.name, candidates, now, POLICY.take, undefined, arriving)
   const found = candidates.find(candidate => candidate.name === target)
-  return found !== undefined && hasRoom(found, now, POLICY.take) ? target : undefined
+  return found !== undefined && hasRoom(found, now, POLICY.take, arriving) ? target : undefined
 }
 
 // The windows in words, to follow an account's name and `'s` in a log line:

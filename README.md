@@ -83,7 +83,7 @@ Some projects matter more than others. Give one a weight, and its sessions get m
 A project without a weight counts as 1, and a folder inside a weighted one takes its weight. Two rules use the weights:
 
 - When a session picks an account to move to, each session already on an account counts by its weight. Sessions of lighter projects therefore keep off the accounts where heavier ones run, and those accounts' hours go to the heavier project.
-- When an account passes 75% of its five-hour window or 90% of its week, a session of a lighter project moves off if a heavier one shares the account. The rest of the account then goes to the heavier project. It only moves to an account with plenty of room; if there is none, it stays.
+- When an account passes 75% of its five-hour window or 95% of its week, a session of a lighter project moves off if a heavier one shares the account. The rest of the account then goes to the heavier project. It only moves to an account with plenty of room; if there is none, it stays.
 
 The weights are kept in `~/.claude-shared/accounts/priorities.json`, which every session and account reads.
 

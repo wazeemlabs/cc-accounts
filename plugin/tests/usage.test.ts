@@ -236,8 +236,28 @@ describe('sessions spread before an account\'s five-hour window stops them', () 
 
   test('a session does not move for an earlier reset to an account its sessions would fill', () => {
     const here = candidate('a', weekly('a', 0, 100))
-    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 20), 4)], NOW)).toBe(undefined)
-    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 20), 3)], NOW)).toBe('b')
+    // Three sessions there and this one arriving: 30 + 40 reaches the take line.
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 20), 3)], NOW)).toBe(undefined)
+    expect(soonerTarget(here, [here, candidate('b', weekly('b', 30, 20), 2)], NOW)).toBe('b')
+  })
+
+  // 2026-11-15 review: a priority-3 session moved to a sooner week at 55%
+  // (55 + 10 for the one session there, under 70), arrived to 95%, and the
+  // spread check sent it straight back, at every turn's end.
+  test('a mover counts its own weight on the account it would move to, so it never arrives to a window it fills', () => {
+    const here = candidate('a', weekly('a', 10, 100), 3)
+    const sooner = candidate('b', weekly('b', 55, 20), 1)
+    expect(soonerTarget(here, [here, sooner], NOW, 3)).toBe(undefined)
+    // At 45 a lighter session fits: 45 + 10 for the one there + 10 for itself.
+    const lighter = candidate('b', weekly('b', 45, 20), 1)
+    expect(soonerTarget(here, [here, lighter], NOW, 1)).toBe('b')
+    expect(soonerTarget(here, [here, lighter], NOW, 3)).toBe(undefined)
+    // A Pro plan is a fifth of a Max 5x: one arriving session is 50 points there.
+    const pro = candidate('b', weekly('b', 10, 20), 1, 0.2)
+    expect(soonerTarget(candidate('a', weekly('a', 10, 100), 1), [pro], NOW, 1)).toBe(undefined)
+    const crowded = candidate('a', weekly('a', 55, 20), 4)
+    expect(spreadTarget(crowded, [crowded, candidate('c', weekly('c', 10, 100))], NOW, 3)).toBe('c')
+    expect(spreadTarget(crowded, [crowded, candidate('c', weekly('c', 45, 100))], NOW, 3)).toBe(undefined)
   })
 
   test('a session leaves an account its working sessions would fill for one with room', () => {

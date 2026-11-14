@@ -4,6 +4,7 @@ import {
   BY_SESSION,
   ROOT,
   SELF,
+  SESSION,
   START,
   SUPERVISED,
   SWITCH,
@@ -20,6 +21,30 @@ import {
 
 const SIGINT = ['kill', '-INT', SELF]
 const HOUR = 3_600_000
+
+describe('what a session knows of its own account', () => {
+  // 2026-11-15 review: before its first response a session has no reading of
+  // its own, and every week looked sooner than its unknown one.
+  test('with no reading of its own yet, it goes by its account\'s saved one, and keeps to the week that resets first', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    saved(w, '1', 10, 20, '1970-01-03T00:00:00Z')
+    saved(w, '2', 10, 20, '1970-01-06T00:00:00Z')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.has(SWITCH)).toBe(false)
+    expect(w.killed).toEqual([])
+  })
+
+  test('a window resetting within minutes keeps it only when every full window does', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    limits(w, 92, 99.5, new Date(10 * 60_000).toISOString())
+    await turn($, w, [])
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)?.split('\n')[0]).toBe(`2 ${SESSION}`)
+  })
+})
 
 describe('a turn the account stopped moves, whatever the readings show', () => {
   test("a per-model limit the readings do not show moves the session at once and tells it to carry on", async ($, on) => {
