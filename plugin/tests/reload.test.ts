@@ -47,6 +47,13 @@ describe('what a reload keeps', () => {
     expect(w.killed).toEqual([])
   })
 
+  test('a load in a process that already pruned at its start does not prune every transcript again', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.state.set('cc-accounts.switching', saved())
+    await $.session.start(START)
+    expect(w.prunes.argv).toEqual([])
+  })
+
   test('a new process finds nothing saved and starts afresh', async ($, on) => {
     const w = world(on, SUPERVISED)
     w.files.set(RECORD, JSON.stringify({ tasks: [SHELL] }))

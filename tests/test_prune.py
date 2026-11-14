@@ -391,6 +391,32 @@ class Command(Transcript):
             self.assertEqual(prune.main(argv), 0)
         self.assertEqual(self.kinds(), ['a'])
 
+    def test_all_passes_by_an_active_transcript_unchanged_since_until_it_turns_idle(self):
+        stamped = lambda row: {**row, 'timestamp': '2026-11-14T10:00:00Z'}
+        self.write([stamped(message('a', None)), stamped(blob('h1', BIG)), stamped(request(0, ['h1']))])
+        written = rows_model.seconds('2026-11-14T10:00:00Z')
+        argv = ['--projects', str(self.projects), '--lock', str(self.projects.parent / 'prune.lock'),
+                '--state', str(self.projects.parent / 'state.json'), '--all']
+        with mock.patch.object(prune, 'prune', wraps=prune.prune) as looked:
+            with mock.patch.object(prune.time, 'time', return_value=written + 60):
+                self.assertEqual(prune.main(argv), 0)
+                self.assertEqual(prune.main(argv), 0)
+            # Read once while active (2026-11-15 review: every session start read it whole again).
+            self.assertEqual(looked.call_count, 1)
+            with mock.patch.object(prune.time, 'time', return_value=written + prune.IDLE_SECONDS):
+                self.assertEqual(prune.main(argv), 0)
+            self.assertEqual(looked.call_count, 2)
+        self.assertEqual(self.kinds(), ['a'])
+
+    def test_a_project_folder_linked_to_another_is_pruned_once(self):
+        self.write([message('a', None, text=BIG), boundary('k'), message('b', 'k', text=BIG)])
+        os.symlink(self.folder, self.projects / '-old-name')
+        argv = ['--projects', str(self.projects), '--lock', str(self.projects.parent / 'prune.lock'),
+                '--state', str(self.projects.parent / 'state.json'), '--all']
+        with mock.patch.object(prune, 'prune', wraps=prune.prune) as looked:
+            self.assertEqual(prune.main(argv), 0)
+        self.assertEqual(looked.call_count, 1)
+
     def test_all_looks_again_at_every_transcript_after_the_rules_change(self):
         self.write([message('a', None, text=BIG), boundary('k')])
         state = self.projects.parent / 'state.json'

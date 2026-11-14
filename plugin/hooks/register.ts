@@ -137,7 +137,7 @@ export const register: Register = on => {
     // A reload of the plugin in this process: what the last load knew stands,
     // a queued switch included, and the conversation stays recorded on its
     // target.
-    await restore($, state, await exitOf($, await $.session.id()))
+    const reloaded = await restore($, state, await exitOf($, await $.session.id()))
     if (ctx?.current !== undefined) {
       if (state.pending !== undefined) {
         $.ui.status(`account ${ctx.current.name}, moving to ${state.pending.target}`)
@@ -153,8 +153,10 @@ export const register: Register = on => {
       parked.refused = true
       parked.timer = $.clock.every(WAKE_MS, () => void check($, parked))
     }
-    // prune() reports its own failures and never rejects; the session does not wait for it.
-    if (ctx !== undefined) void prune($, ctx, { all: true })
+    // prune() reports its own failures and never rejects; the session does not
+    // wait for it. A reload already pruned at this process's first start: one
+    // update reloads every session, and each started a prune of every file.
+    if (ctx !== undefined && !reloaded) void prune($, ctx, { all: true })
     return result
   }).catch(async ($, e, next) => {
     $.ui.log(`cc-accounts: could not record this session's account (${describeError(next.error)}).`)

@@ -35,12 +35,14 @@ describe('transcripts are pruned', () => {
     await turn($, w, [])
     await w.prunes.started(2)
     expect(w.prunes.argv[1]!.slice(2)).toEqual([...common, '--session', SESSION])
-    // Once per compaction: the next turn's end starts none, and a session
-    // start's prune would be the third.
+    // Once per compaction: the next turn's end starts none, and the next
+    // compaction's is the third.
     await turn($, w, [])
-    await $.session.start(START)
+    await $.session.compact({ trigger: 'auto', messages: KEPT })
+    await turn($, w, [])
     await w.prunes.started(3)
-    expect(w.prunes.argv[2]!.slice(2)).toEqual([...common, '--all'])
+    expect(w.prunes.argv).toHaveLength(3)
+    expect(w.prunes.argv[2]!.slice(2)).toEqual([...common, '--session', SESSION])
   })
 
   test('a compaction skipped or only precomputed prunes nothing', async ($, on) => {
@@ -50,10 +52,11 @@ describe('transcripts are pruned', () => {
     await $.session.compact({ trigger: 'manual', messages: KEPT })
     await $.session.compact({ trigger: 'precompute', messages: KEPT })
     await turn($, w, [])
-    // The next prune started is a session start's, not one for a compaction.
-    await $.session.start(START)
+    // The next prune started is a real compaction's, not one for those.
+    await $.session.compact({ trigger: 'auto', messages: KEPT })
+    await turn($, w, [])
     await w.prunes.started(2)
-    expect(w.prunes.argv.map(argv => argv.at(-1))).toEqual(['--all', '--all'])
+    expect(w.prunes.argv.map(argv => argv.at(-1))).toEqual(['--all', SESSION])
   })
 
   test('each transcript shrunk goes to the debug log, a line cut across pieces counted once, and one line to the transcript', async ($, on) => {

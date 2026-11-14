@@ -198,10 +198,11 @@ def copy_tail(source, out, offset):
         offset += len(chunk)
 
 
-# What a prune found: whether the transcript was idle, and its (bytes
-# before, bytes after), or None when there was not enough to drop or another
-# writer changed the file meanwhile.
-Outcome = namedtuple('Outcome', 'idle sizes')
+# What a prune found: whether the transcript was idle, its (bytes before,
+# bytes after), or None when there was not enough to drop or another writer
+# changed the file meanwhile, and when it turns idle (seconds), for a run to
+# pass it by until then while it stays unchanged.
+Outcome = namedtuple('Outcome', 'idle sizes idle_at', defaults=(None,))
 
 # Bytes read at three places in the scanned part of a transcript, to tell
 # whether another writer rewrote it in place since.
@@ -245,11 +246,12 @@ def prune(path, now=None):
         read = samples(source.fileno(), whole)
         written = max((row.at for row in rows if row.at is not None), default=status.st_mtime)
         idle = (time.time() if now is None else now) - written >= IDLE_SECONDS
+        idle_at = written + IDLE_SECONDS
         drop = dropped(rows, idle, forked)
         lines = slimmed(rows, drop, source)
         saving = sum(rows[index].length for index in drop) + sum(rows[index].length - len(line) for index, line in lines.items())
         if saving < (MIN_IDLE_SAVING if idle else MIN_SAVING):
-            return Outcome(idle, None)
+            return Outcome(idle, None, idle_at)
         temp = f'{path}.cca-prune-{os.getpid()}.tmp'
         try:
             with open(temp, 'wb') as out:
@@ -280,7 +282,7 @@ def prune(path, now=None):
         # it before the replace wrote into the old file, still open here.
         with open(path, 'ab') as out:
             copy_tail(source, out, copied)
-    return Outcome(idle, (size, os.stat(path).st_size))
+    return Outcome(idle, (size, os.stat(path).st_size), idle_at)
 
 
 def transcripts(projects, session):
@@ -289,7 +291,12 @@ def transcripts(projects, session):
     name = '*' if session is None else glob.escape(session)
     root = glob.escape(projects)
     found = glob.glob(f'{root}/*/{name}.jsonl') + glob.glob(f'{root}/*/{name}/subagents/*.jsonl')
-    return sorted(path for path in found if os.path.isfile(path))
+    # A project folder linked to another (a renamed folder) lists the same
+    # files twice: each is pruned once, under the first name.
+    unique = {}
+    for path in sorted(path for path in found if os.path.isfile(path)):
+        unique.setdefault(os.path.realpath(path), path)
+    return sorted(unique.values())
 
 
 def stamp(path):
@@ -312,6 +319,14 @@ def read_state(path):
     if not isinstance(value, dict) or value.get('version') != STATE_VERSION or not isinstance(value.get('files'), dict):
         return {}
     return value['files']
+
+
+def passed_by(entry, now, clock):
+    """Whether a run passes a transcript by: unchanged since the state saw it,
+    idle then, or active then and not idle yet."""
+    if not isinstance(entry, list) or entry[:2] != now:
+        return False
+    return len(entry) == 2 or (len(entry) == 3 and isinstance(entry[2], (int, float)) and clock < entry[2])
 
 
 def write_state(path, files):
@@ -354,15 +369,19 @@ def main(argv=None):
         for path in transcripts(args.projects, args.session):
             try:
                 now = stamp(path)
-                if args.all and (now[0] < args.min_bytes or state.get(path) == now):
+                if args.all and (now[0] < args.min_bytes or passed_by(state.get(path), now, time.time())):
                     seen[path] = state.get(path, now)
                     continue
                 result = prune(path)
                 if result.sizes is not None:
                     print(f'{path}: {megabytes(result.sizes[0])} -> {megabytes(result.sizes[1])}', flush=True)
-                # One still active is looked at again: once idle, its request log goes.
                 if result.idle:
                     seen[path] = stamp(path)
+                elif result.idle_at is not None:
+                    # Active: passed by while unchanged, and looked at again
+                    # once idle, when its request log goes. Every session
+                    # start read each active transcript whole again.
+                    seen[path] = [*stamp(path), result.idle_at]
             except FileNotFoundError:
                 # Deleted since the listing.
                 continue
