@@ -2,7 +2,7 @@
 // cca's state directory and the environment cca set. Shared by /account and
 // the balancer.
 import type { EngineInterface } from 'claude-code'
-import { configFileOf, currentAccount, emailIn, parseTable, type Account } from './accounts'
+import { accountUuidIn, configFileOf, currentAccount, emailIn, parseTable, type Account, type HostLogin } from './accounts'
 import type { Exit } from './switching'
 
 export type Context = {
@@ -29,8 +29,30 @@ export async function context($: EngineInterface): Promise<Context | undefined> 
     await $.env.get('CLAUDE_ACCOUNT'),
     await $.env.get('CLAUDE_CONFIG_DIR'),
     home,
+    await hostLogin($, accounts, home),
   )
   return { home, root, shared, accounts, current }
+}
+
+// The login a host signed this session in with (the Claude desktop app names
+// its account in CLAUDE_CODE_ACCOUNT_UUID), with every account's own login id
+// to match it against; undefined when Claude Code signed itself in.
+async function hostLogin($: EngineInterface, accounts: readonly Account[], home: string): Promise<HostLogin | undefined> {
+  const accountUuid = await $.env.get('CLAUDE_CODE_ACCOUNT_UUID')
+  if (!accountUuid) return undefined
+  const logins = new Map<string, string>()
+  for (const account of accounts) {
+    const file = configFileOf(account, home)
+    const uuid = (await $.fs.exists(file)) ? accountUuidIn(await $.fs.read(file)) : undefined
+    if (uuid !== undefined) logins.set(account.name, uuid)
+  }
+  return { accountUuid, logins }
+}
+
+// Whether the Claude desktop app started this session: it runs Claude Code on
+// the account it is signed in to, and no switch can reopen it elsewhere.
+export async function inDesktopApp($: EngineInterface): Promise<boolean> {
+  return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-desktop'
 }
 
 export async function emailOf($: EngineInterface, account: Account, home: string): Promise<string | undefined> {

@@ -192,6 +192,14 @@ apply() {
   local dir; dir="$(dir_of "$1")"
   export CLAUDE_ACCOUNT="$1"
   if [[ "$dir" == "$HOME_DIR" ]]; then unset CLAUDE_CONFIG_DIR; else export CLAUDE_CONFIG_DIR="$dir"; fi
+  # A host that signs a session in itself, as the Claude desktop app does,
+  # leaves its login in the environment of every command that session runs,
+  # and Claude Code uses that token over the account's own login. A claude
+  # started from such a session runs on the account picked here instead.
+  unset CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_OAUTH_SCOPES \
+    CLAUDE_CODE_ACCOUNT_UUID CLAUDE_CODE_USER_EMAIL CLAUDE_CODE_ORGANIZATION_UUID \
+    CLAUDE_CODE_RATE_LIMIT_TIER CLAUDE_CODE_SUBSCRIPTION_TYPE \
+    CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH
   # Claude Code lets a memory write through by comparing the file's real path
   # with the memory folder's path as configured, and every account reaches
   # the conversations (where memory lives) through a link to the shared

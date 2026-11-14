@@ -49,14 +49,24 @@ export function parseAsk(args: string): Ask {
   return { kind: 'help' }
 }
 
-// The account this process runs on: cca names it in CLAUDE_ACCOUNT; a session
-// started without cca is matched by its config dir, ~/.claude when unset.
+// A login a host signed the session in with: the account id the host names
+// in CLAUDE_CODE_ACCOUNT_UUID, and each account's own login id, by name.
+export type HostLogin = { accountUuid: string; logins: ReadonlyMap<string, string> }
+
+// The account this process runs on. A host that signs the session in itself,
+// as the Claude desktop app does, hands Claude Code a token that it uses
+// instead of the config dir's login, so the account is the one whose login has
+// the id the host names, or none cca knows. Otherwise cca names it in
+// CLAUDE_ACCOUNT; a session started without cca is matched by its config dir,
+// ~/.claude when unset.
 export function currentAccount(
   accounts: readonly Account[],
   envAccount: string | undefined,
   configDir: string | undefined,
   home: string,
+  host?: HostLogin,
 ): Account | undefined {
+  if (host !== undefined) return accounts.find(account => host.logins.get(account.name) === host.accountUuid)
   const named = accounts.find(account => account.name === envAccount)
   if (named !== undefined) return named
   const dir = (configDir ?? `${home}/.claude`).replace(/\/+$/, '')
@@ -90,11 +100,20 @@ export function tierIn(configText: string): string | undefined {
 }
 
 export function emailIn(configText: string): string | undefined {
+  return loginField(configText, 'emailAddress')
+}
+
+// The id of the account a login record is signed in to.
+export function accountUuidIn(configText: string): string | undefined {
+  return loginField(configText, 'accountUuid')
+}
+
+function loginField(configText: string, field: 'emailAddress' | 'accountUuid'): string | undefined {
   try {
-    const email = JSON.parse(configText)?.oauthAccount?.emailAddress
-    return typeof email === 'string' && email !== '' ? email : undefined
+    const value = JSON.parse(configText)?.oauthAccount?.[field]
+    return typeof value === 'string' && value !== '' ? value : undefined
   } catch {
-    // A config file mid-write reads as not signed in; the next /account reads it again.
+    // A config file mid-write reads as not signed in; the next read sees it whole.
     return undefined
   }
 }

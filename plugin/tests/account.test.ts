@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { currentAccount, parseAsk, parseTable } from '../hooks/accounts'
+import { accountUuidIn, currentAccount, parseAsk, parseTable } from '../hooks/accounts'
 import { HOME, ROOT, SELF, SESSION, START, STREAM, SUPERVISED, SUPERVISOR, SWITCH, TERMINAL, run, world } from './world'
 
 describe('parsing', () => {
@@ -31,6 +31,30 @@ describe('parsing', () => {
     expect(currentAccount(accounts, undefined, `${HOME}/.claude-two/`, HOME)?.name).toBe('2')
     expect(currentAccount(accounts, undefined, undefined, HOME)?.name).toBe('1')
     expect(currentAccount(accounts, 'gone', '/elsewhere', HOME)).toBe(undefined)
+  })
+
+  // The Claude desktop app signs a session in with its own login and names it
+  // in CLAUDE_CODE_ACCOUNT_UUID, while the config dir stays ~/.claude: on
+  // 2026-11-15 every desktop session ran on one account and saved its 100%
+  // five-hour reading under ~/.claude's.
+  test('a session its host signs in runs on the account whose login has the id the host names, whatever its config dir', () => {
+    const accounts = parseTable(`1\t${HOME}/.claude\n2\t${HOME}/.claude-two\n`)
+    const logins = new Map([['1', 'uuid-one'], ['2', 'uuid-two']])
+    expect(currentAccount(accounts, undefined, undefined, HOME, { accountUuid: 'uuid-two', logins })?.name).toBe('2')
+    expect(currentAccount(accounts, '1', `${HOME}/.claude`, HOME, { accountUuid: 'uuid-two', logins })?.name).toBe('2')
+  })
+
+  test('a host login no account holds is an account cca does not know', () => {
+    const accounts = parseTable(`1\t${HOME}/.claude\n2\t${HOME}/.claude-two\n`)
+    const logins = new Map([['1', 'uuid-one']])
+    expect(currentAccount(accounts, undefined, undefined, HOME, { accountUuid: 'uuid-other', logins })).toBe(undefined)
+  })
+
+  test('reads the account id from a login record, and none from one mid-write or signed out', () => {
+    expect(accountUuidIn('{"oauthAccount":{"accountUuid":"uuid-one","emailAddress":"one@example.com"}}')).toBe('uuid-one')
+    expect(accountUuidIn('{"oauthAccount":{"accountUuid":""}}')).toBe(undefined)
+    expect(accountUuidIn('{"oauthAccount":')).toBe(undefined)
+    expect(accountUuidIn('{}')).toBe(undefined)
   })
 })
 

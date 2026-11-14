@@ -26,6 +26,10 @@ export const STREAM = { CLAUDE_ACCOUNT: '1', CCA_MODE: 'stream', CCA_PID: SELF }
 export const SUPERVISOR = '123'
 export const SUPERVISED = { ...STREAM, CLAUDE_ACCOUNT_SWITCH_FILE: SWITCH, CCA_STREAM_PID: SUPERVISOR }
 export const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
+// The Claude desktop app starts Claude Code itself, not through cca, and signs
+// the session in with its own login, here account 2's, leaving the config dir
+// unset (~/.claude, account 1's).
+export const DESKTOP = { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_ACCOUNT_UUID: 'uuid-two' }
 
 export const run = (args: string) => ({
   command: 'account',
@@ -42,8 +46,8 @@ export const SCOUT: Task = { id: 'a1', type: 'subagent', description: 'scout' }
 export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const files = new Map<string, string>([
     [`${ROOT}/accounts.tsv`, `1\t${HOME}/.claude\n2\t${HOME}/.claude-two\n3\t${HOME}/.claude-three\n`],
-    [`${HOME}/.claude.json`, '{"oauthAccount":{"emailAddress":"one@example.com"}}'],
-    [`${HOME}/.claude-two/.claude.json`, '{"oauthAccount":{"emailAddress":"two@example.com"}}'],
+    [`${HOME}/.claude.json`, '{"oauthAccount":{"emailAddress":"one@example.com","accountUuid":"uuid-one"}}'],
+    [`${HOME}/.claude-two/.claude.json`, '{"oauthAccount":{"emailAddress":"two@example.com","accountUuid":"uuid-two"}}'],
   ])
   const ran: string[] = []
   const statuses: (string | undefined)[] = []

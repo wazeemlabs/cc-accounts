@@ -13,7 +13,7 @@
 // lighter session moves off to leave the rest to a heavier one.
 // CCA_BALANCE=off stops the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
-import { context, defaultName, exitOf, startFile, writeAtomic, type Context } from './context'
+import { context, defaultName, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
 import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { accountStates, liveSessions, ownReading, writeReading, type LiveSession } from './survey'
@@ -124,7 +124,8 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const tight = tightWindow(reading, now)
   if (stop === undefined && full === undefined && tight === undefined) return spendSooner($, state, ctx, reading, now)
   const exit = await exitOf($, await $.session.id())
-  if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
+  if (exit === undefined) return stranded($, state, ctx, from, reading, stop, full, now)
+  if (exit.kind === 'terminal' && !state.interactive) return
   const live = await liveSessions($, ctx)
   const priorities = await readPriorities($, ctx.root)
   // Below the leave line, only a session with a heavier one beside it moves.
@@ -164,6 +165,48 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const waits = asked.kind === 'queued'
   if (waits) $.ui.status(`account ${from}, moving to ${target}`)
   $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
+}
+
+// A session that would leave its account but that nothing would reopen
+// elsewhere: one the Claude desktop app started, which runs it on the account
+// the app is signed in to, or one cca did not start. It stays, and says so
+// once per full window, with the account to go on on and how. It records no
+// failure: the login that failed may be the host's, not the account's in cca.
+// Making room for a heavier session is a courtesy, so a tight window alone
+// says nothing.
+async function stranded(
+  $: EngineInterface,
+  state: SwitchState,
+  ctx: Context,
+  from: string,
+  reading: Reading | undefined,
+  stop: Stop | undefined,
+  full: string | undefined,
+  now: number,
+): Promise<void> {
+  if (stop === undefined && full === undefined) return
+  const window = stop !== undefined && 'window' in stop ? stop.window : full ?? 'five_hour'
+  if (stop === undefined && resetsSoon(reading, window, now)) return
+  const failed = stop !== undefined && 'error' in stop ? stop.error : undefined
+  const told = failed !== undefined ? `${from} ${failed}` : `${from} ${window} ${reading?.windows[window]?.resetsAt ?? ''}`
+  if (state.stranded === told) return
+  state.stranded = told
+  const options = await candidates($, ctx, await sessionFamily($, state.answered), await liveSessions($, ctx), await readPriorities($, ctx.root))
+  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave)
+  const desktop = await inDesktopApp($)
+  const why = failed !== undefined ? `${from} failed the last turn (${failed})` : `${from}'s ${describeWindows(reading, now)}`
+  const cause = desktop
+    ? 'the Claude desktop app runs it on the account the app is signed in to'
+    : 'cca did not start it, so nothing would reopen it on another account'
+  const command = `\`cca ${target} --resume ${await $.session.id()}\``
+  const next = target === undefined
+    ? 'No other account has room either.'
+    : desktop
+      ? `${target} has room: close this conversation here, then reopen it in VS Code and type /account ${target}, or run ${command} in a terminal.`
+      : `${target} has room: go on with this conversation in a terminal with ${command}.`
+  $.ui.log(`cc-accounts: ${why}, and this session cannot move: ${cause}. ${next}`)
+  const use = describeUse(reading, now)
+  $.ui.status(`account ${from}${use === '' ? '' : ` · ${use}`} · cannot move${target === undefined ? '' : `; ${target} has room`}`)
 }
 
 // A turn the account stopped while a move waits for the session's background

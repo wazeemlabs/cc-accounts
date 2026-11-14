@@ -459,16 +459,6 @@ describe('how the move reopens the conversation', () => {
     expect(w.killed).toEqual([SIGINT])
   })
 
-  test('a session cca did not start, which nothing would reopen, stays', async ($, on) => {
-    const w = world(on, { CLAUDE_ACCOUNT: '1' })
-    await $.session.start(START)
-    limits(w, 95)
-    await turn($, w, [])
-    await w.clock.advance(0)
-    expect(w.files.get(BY_SESSION)).toBe('1\n')
-    expect(w.killed).toEqual([])
-  })
-
   test('a terminal -p run stays, so a script never comes back as an interactive session', async ($, on) => {
     const w = world(on, TERMINAL)
     await $.session.start({ ...START, surface: null, isInteractive: false })

@@ -41,6 +41,9 @@ export type SwitchState = {
   cutTurn: boolean
   // The model that last answered a main-loop turn in this process.
   answered: string | undefined
+  // The full window or failure a session that cannot move last told of, so
+  // each is told once (balance.ts, stranded).
+  stranded: string | undefined
 }
 
 export function newState(): SwitchState {
@@ -53,6 +56,7 @@ export function newState(): SwitchState {
     ending: false,
     cutTurn: false,
     answered: undefined,
+    stranded: undefined,
   }
 }
 

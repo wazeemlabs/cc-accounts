@@ -226,6 +226,22 @@ CLAUDE_ACCOUNT=2 "$CCA" run -p x
 check "an inherited CLAUDE_ACCOUNT (claude run inside a session) keeps that account" \
   "dir=$HOME/.claude-two account=2 args=-p x" "$(cat "$LOG")"
 
+# A claude run from a Claude desktop session's shell inherits the login the
+# app signed that session in with, and Claude Code would use its token over
+# the account's own login.
+setup
+CLAUDE_CODE_OAUTH_TOKEN=host-token CLAUDE_CODE_ACCOUNT_UUID=host-uuid CLAUDE_CODE_USER_EMAIL=host@example.com \
+  CLAUDE_CODE_ENTRYPOINT=claude-desktop "$CCA" 2 -p x
+check "a run inside a desktop session drops the app's login, so it runs on the account cca picked" \
+  "dir=$HOME/.claude-two account=2 args=-p x|token=unset uuid=unset email=unset entry=claude-desktop" \
+  "$(cat "$LOG")|$(cat "$LOG.login")"
+
+setup
+rm "$CCA_ROOT/accounts.tsv"
+CLAUDE_CODE_OAUTH_TOKEN=own-token "$CCA" run -p x
+check "with no accounts registered a login token in the environment is left alone" "token=own-token" \
+  "$(cut -d' ' -f1 "$LOG.login")"
+
 setup
 rm "$CCA_ROOT/accounts.tsv"
 CLAUDE_CONFIG_DIR=/keep "$CCA" run -p x

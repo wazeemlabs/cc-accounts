@@ -2,6 +2,12 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.13.1 (2026-11-15)
+
+- A Claude desktop session counts on the account the app signed it in to. The desktop app starts Claude Code itself and hands it its own login, naming the account in `CLAUDE_CODE_ACCOUNT_UUID`, while the config dir stays `~/.claude`. The plugin named the account by the config dir, so on 2026-11-15 every desktop session saved another account's 100% five-hour reading under `~/.claude`'s, and the sessions in VS Code kept off an account they could have used. The plugin now matches the host's account id against each account's login record; a login no account holds saves no reading.
+- A session nothing can move says so. The balancer passed over a session cca did not start without a word, so a desktop session sat at its limit with no hint of the accounts that had room. It now stays and says once per full window why it cannot move, which account has room, and how to go on there: in VS Code with `/account`, or with `cca <account> --resume <id>`. `/account` in the desktop app says the same instead of promising the conversation opens on the other account.
+- A claude started from a desktop session runs on the account cca picks. Such a session leaves the app's login token in the environment of the commands it runs, and Claude Code uses that token over the account's own login; cca now drops the host's login variables when it starts Claude Code on an account.
+
 ## 0.13.0 (2026-11-15)
 
 - A parked session goes on by itself once its project is within its allowance again. A refused session went idle, told to stop, and nothing started it again: it stayed parked after the allowance caught up, the day turned, or a budget was raised, until a person wrote to it. Now a session whose tool call was refused leaves a record in `parked/`, checks every minute, and is told to carry on when its project may spend again; every other session's turn end and `/account budget` or `priority` wake it too, at once for a change made with `/account`, and reach a session whose plugin was reloaded. A session is woken once, whoever notices first. The parked message tells the model it will be told when it may go on.

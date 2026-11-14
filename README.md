@@ -67,6 +67,7 @@ New sessions start on the account a move would pick: the one with room whose wee
 - `/account usage` shows, for every account, how much of its five-hour window and its week is free and when each resets. It also shows the sessions on each account and the projects they belong to. At the bottom are the totals over the accounts that can serve a session, in Max 5x plans (a Max 20x counts four). The figures that matter: what is free now, and what is free before sessions start moving off.
 - An account no session has used yet counts as unused until one reports.
 - When no other account has room, the session stays and says so in its log.
+- The Claude desktop app starts Claude Code itself and signs every session in with the account the app is signed in to, so cc-accounts cannot move a desktop session. It counts the session on that account, and when the account fills up the session says so in its status line and log, with the account that has room and how to go on there: reopen the conversation in VS Code and type `/account <name>`, or run `cca <name> --resume <id>` in a terminal. To move every desktop session at once, sign the desktop app in to another account.
 - `CCA_BALANCE=off` turns the moves off. Readings are still saved.
 
 ### Projects that matter more

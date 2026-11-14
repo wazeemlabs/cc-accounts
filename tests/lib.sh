@@ -46,6 +46,7 @@ echo "dir=${CLAUDE_CONFIG_DIR-unset} account=${CLAUDE_ACCOUNT-} args=$*${stdin:+
 echo "mode=${CCA_MODE-} parent=$([[ "${CCA_PID-}" == "$PPID" ]] && echo yes || echo no) self=$([[ "${CCA_PID-}" == "$$" ]] && echo yes || echo no) root=${CCA_ROOT-}" >> "$LOG.pid"
 echo "${CLAUDE_CODE_REMOTE_MEMORY_DIR-unset}" >> "$LOG.memory"
 echo "switch=${CLAUDE_ACCOUNT_SWITCH_FILE:+set} child=${CCA_STREAM_CHILD-unset}" >> "$LOG.switchfile"
+echo "token=${CLAUDE_CODE_OAUTH_TOKEN-unset} uuid=${CLAUDE_CODE_ACCOUNT_UUID-unset} email=${CLAUDE_CODE_USER_EMAIL-unset} entry=${CLAUDE_CODE_ENTRYPOINT-unset}" >> "$LOG.login"
 if [[ -n "${FAKE_SWITCH:-}" && ! -e "$LOG.switched" ]]; then
   touch "$LOG.switched"; echo "$FAKE_SWITCH" > "$CLAUDE_ACCOUNT_SWITCH_FILE"; exit 0
 fi
