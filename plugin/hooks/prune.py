@@ -9,8 +9,14 @@ subagent's 495 MB nearly all images), which an editor or the desktop app
 reads whole when it opens the conversation. So this:
 
   - drops the conversation rows before the last boundary that the boundary
-    does not preserve, and the request log's rows (api-request, its blobs
-    and shapes) that no request since the boundary builds on;
+    does not preserve, or that a later row or a fork of the conversation
+    still names;
+  - drops the request log (api-request, its blobs and shapes), a record
+    Claude Code writes so a resumed request can be sent byte for byte while
+    the prompt cache holds it, and never reads to rebuild the conversation:
+    all of it once the transcript has been idle for IDLE_SECONDS, the
+    cache's life, and before that the rows no request since the last
+    boundary builds on;
   - replaces every image but the newest KEEP_IMAGES of a transcript with a
     line saying it was removed, in the conversation's rows, never in the
     request log, whose blobs are named by their hash;
@@ -20,8 +26,9 @@ reads whole when it opens the conversation. So this:
   prune.py --projects DIR --lock FILE --state FILE --all [--min-bytes N]
 
 --session prunes that conversation's transcripts (its own and its
-subagents'); --all every transcript of at least --min-bytes that changed
-since the state file last saw it. One line is printed per transcript shrunk.
+subagents'); --all every transcript of at least --min-bytes (by default
+MIN_SAVING, below which none can save enough) that changed since the state
+file last saw it under these rules. One line is printed per transcript shrunk.
 A transcript is replaced atomically, and rows Claude Code appends meanwhile
 are carried over, so a live session's file can be pruned. One prune runs at
 a time on the machine, under the lock.
@@ -33,6 +40,7 @@ import json
 import os
 import signal
 import sys
+import time
 
 # The rows of the conversation itself.
 CONVERSATION = frozenset({'user', 'assistant', 'attachment', 'system', 'progress'})
@@ -43,12 +51,18 @@ REMOVED = '[image removed by cc-accounts to save space]'
 # Below this saving a transcript is left as it is, so a live one is not
 # rewritten for a few rows.
 MIN_SAVING = 1_000_000
+# The prompt cache's life: a transcript idle this long has no request left
+# that its log could replay into a cache hit.
+IDLE_SECONDS = 3600
+# The rules the state file was written under: a state of other rules looks
+# at every transcript again.
+STATE_VERSION = 2
 CHUNK = 1 << 20
 
 
 class Row:
     __slots__ = ('offset', 'length', 'kind', 'uuid', 'parent', 'boundary', 'images',
-                 'source', 'keep', 'names', 'name')
+                 'source', 'keep', 'names', 'name', 'fork')
 
     def __init__(self, offset, length):
         self.offset = offset
@@ -67,6 +81,8 @@ class Row:
         self.names = ()
         # An api-request-blob's or api-request-shape's hash.
         self.name = None
+        # A fork-context-ref's parent: (session id, the message it forked from).
+        self.fork = None
 
 
 def strings(value):
@@ -134,6 +150,8 @@ def row_of(offset, line):
         row.name = text('hash')
     elif row.kind == 'api-request-shape':
         row.name = text('shapeHash')
+    elif row.kind == 'fork-context-ref' and text('parentSessionId') and text('parentLastUuid'):
+        row.fork = (text('parentSessionId'), text('parentLastUuid'))
     return row
 
 
@@ -166,39 +184,70 @@ def chain_start(rows, requests):
     return start
 
 
-def dropped(rows):
-    """The indexes of the rows to drop, all before the last compact boundary:
-    the conversation's, but for what the boundary preserved and any row a
-    later row still names as its parent, and the request log's that no
-    request since builds on."""
+REQUEST_LOG = frozenset({'api-request', 'api-request-blob', 'api-request-shape'})
+
+
+def dropped(rows, idle=False, forked=frozenset()):
+    """The indexes of the rows to drop. The conversation's before the last
+    compact boundary, but for what the boundary preserved and the rows a row
+    after it names as its parent, or a fork names as the message it forked
+    from, with their parents. The request log's: all of it when `idle`, else
+    the rows before the boundary that no request since builds on."""
     last = None
     for index, row in enumerate(rows):
         if row.boundary is not None:
             last = index
-    if last is None:
-        return set()
-    at = {row.uuid: index for index, row in enumerate(rows) if row.uuid is not None}
-    preserved = {text for text in strings(rows[last].boundary) if text in at}
-    drop = {
-        index for index, row in enumerate(rows[:last])
-        if row.kind in CONVERSATION and row.uuid is not None and row.uuid not in preserved
-    }
-    # The boundary's own parent is empty: it starts the chain. A row after it
-    # that names a dropped row as its parent keeps that row, and its parents.
-    for row in rows[last + 1:]:
-        parent = row.parent
-        while parent in at and at[parent] in drop:
-            index = at[parent]
-            drop.discard(index)
-            parent = rows[index].parent
-    requests = [index for index, row in enumerate(rows) if row.kind == 'api-request']
-    start = chain_start(rows, requests)
-    named = set().union(*(rows[index].names for index in requests if index >= start or index > last))
-    for index, row in enumerate(rows[:last]):
-        if (row.kind == 'api-request' and index < start) or (
-                row.kind in ('api-request-blob', 'api-request-shape') and row.name not in named):
-            drop.add(index)
+    drop = set()
+    if last is not None:
+        at = {row.uuid: index for index, row in enumerate(rows) if row.uuid is not None}
+        preserved = {text for text in strings(rows[last].boundary) if text in at}
+        drop = {
+            index for index, row in enumerate(rows[:last])
+            if row.kind in CONVERSATION and row.uuid is not None and row.uuid not in preserved
+        }
+
+        def keep(uuid):
+            while uuid in at and at[uuid] in drop:
+                index = at[uuid]
+                drop.discard(index)
+                uuid = rows[index].parent
+
+        # The boundary's own parent is empty: it starts the chain.
+        for row in rows[last + 1:]:
+            keep(row.parent)
+        for uuid in forked:
+            keep(uuid)
+    if idle:
+        drop.update(index for index, row in enumerate(rows) if row.kind in REQUEST_LOG)
+    elif last is not None:
+        requests = [index for index, row in enumerate(rows) if row.kind == 'api-request']
+        start = chain_start(rows, requests)
+        named = set().union(*(rows[index].names for index in requests if index >= start or index > last))
+        for index, row in enumerate(rows[:last]):
+            if (row.kind == 'api-request' and index < start) or (
+                    row.kind in ('api-request-blob', 'api-request-shape') and row.name not in named):
+                drop.add(index)
     return drop
+
+
+def forks_of(path):
+    """The messages of the conversation at `path` that its forks started
+    from: a fork's fork-context-ref, in the conversation's own transcript or
+    its subagents', names its parent session and message."""
+    folder, name = os.path.split(path)
+    session = name[:-len('.jsonl')]
+    found = set()
+    for transcript in [path] + glob.glob(f'{glob.escape(os.path.join(folder, session))}/subagents/*.jsonl'):
+        try:
+            with open(transcript, 'rb') as handle:
+                for offset, line in enumerate(handle):
+                    if b'"fork-context-ref"' in line:
+                        row = row_of(offset, line)
+                        if row.fork is not None and row.fork[0] == session:
+                            found.add(row.fork[1])
+        except FileNotFoundError:
+            continue
+    return frozenset(found)
 
 
 def slimmed(rows, drop, source):
@@ -230,13 +279,17 @@ def copy_tail(source, out, offset):
         offset += len(chunk)
 
 
-def prune(path):
+def prune(path, now=None):
     """Shrinks the transcript at `path`; (bytes before, bytes after), or
-    None when there is not enough to drop."""
+    None when there is not enough to drop. `now`, the time in seconds, says
+    whether it has been idle."""
+    forked = forks_of(path)
     with open(path, 'rb') as source:
-        size = os.fstat(source.fileno()).st_size
+        status = os.fstat(source.fileno())
+        size = status.st_size
+        idle = (time.time() if now is None else now) - status.st_mtime >= IDLE_SECONDS
         rows, whole = scan(source, size)
-        drop = dropped(rows)
+        drop = dropped(rows, idle, forked)
         lines = slimmed(rows, drop, source)
         saving = sum(rows[index].length for index in drop) + sum(rows[index].length - len(line) for index, line in lines.items())
         if saving < MIN_SAVING:
@@ -281,6 +334,8 @@ def stamp(path):
 
 
 def read_state(path):
+    """Each transcript's size and mtime when last looked at under these
+    rules; nothing for a state of other rules."""
     try:
         with open(path) as handle:
             value = json.load(handle)
@@ -290,13 +345,15 @@ def read_state(path):
         print(f'cc-accounts: {path} is not a prune state file ({error}); every transcript is looked at again',
               file=sys.stderr)
         return {}
-    return value if isinstance(value, dict) else {}
+    if not isinstance(value, dict) or value.get('version') != STATE_VERSION or not isinstance(value.get('files'), dict):
+        return {}
+    return value['files']
 
 
-def write_state(path, state):
+def write_state(path, files):
     temp = f'{path}.{os.getpid()}.tmp'
     with open(temp, 'w') as handle:
-        json.dump(state, handle, sort_keys=True)
+        json.dump({'version': STATE_VERSION, 'files': files}, handle, sort_keys=True)
         handle.write('\n')
     os.replace(temp, path)
 
@@ -313,7 +370,7 @@ def main(argv=None):
     which = parser.add_mutually_exclusive_group(required=True)
     which.add_argument('--session')
     which.add_argument('--all', action='store_true')
-    parser.add_argument('--min-bytes', type=int, default=10_000_000)
+    parser.add_argument('--min-bytes', type=int, default=MIN_SAVING)
     args = parser.parse_args(argv)
     # A hot reload of the plugin ends its children: the temporary file goes
     # and the transcript stays as it was.

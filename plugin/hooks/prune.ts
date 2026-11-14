@@ -1,5 +1,6 @@
 // Keeps transcripts small (hooks/prune.py): each drops the conversation from
-// before its last compaction, and every image but its newest few. A session
+// before its last compaction, its request log once idle, and every image
+// but its newest few. A session
 // prunes, at its start, every transcript that changed since the last look,
 // and after it compacts, its own. The prune runs as a child of the session,
 // which never waits for it; one runs at a time on the machine, under a lock.
@@ -46,7 +47,7 @@ export async function prune($: EngineInterface, ctx: Context, target: PruneTarge
       }
     }
     const { code, signal } = await child.result
-    if (shrunk > 0) $.ui.log(`cc-accounts: pruned ${shrunk} transcript${shrunk === 1 ? '' : 's'} to their last compaction and newest images; the debug log lists them.`)
+    if (shrunk > 0) $.ui.log(`cc-accounts: pruned ${shrunk} transcript${shrunk === 1 ? '' : 's'} to save space; the debug log lists them.`)
     if (code !== 0) {
       const why = errors.trim() || (signal === null ? `exit ${code}` : `ended by ${signal}`)
       $.ui.log(`cc-accounts: could not prune transcripts (${why}).`)

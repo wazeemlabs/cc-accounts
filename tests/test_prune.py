@@ -143,6 +143,29 @@ class Compaction(Transcript):
         # In file order the side query's reset would end the walk; in the sdk's own order it goes back to h1.
         self.assertIn('h1', self.kinds())
 
+    def test_an_idle_transcript_loses_its_whole_request_log_and_keeps_its_conversation(self):
+        self.write([message('a', None), blob('h1', BIG), request(0, ['h1']),
+                    {'type': 'api-request-shape', 'shapeHash': 's1'}, message('b', 'a')])
+        later = self.path.stat().st_mtime + prune.IDLE_SECONDS
+        # Within the cache's life it stays: there is no compaction to cut at.
+        self.assertIsNone(prune.prune(str(self.path), now=later - 1))
+        prune.prune(str(self.path), now=later)
+        self.assertEqual(self.kinds(), ['a', 'b'])
+
+    def test_a_message_a_fork_started_from_stays_with_its_parents(self):
+        self.write([message('a', None), message('b', 'a'), message('c', 'b', text=BIG), boundary('k')])
+        fork = {'type': 'fork-context-ref', 'agentId': 'f1', 'parentSessionId': SESSION, 'parentLastUuid': 'b'}
+        self.write([fork], self.folder / SESSION / 'subagents' / 'agent-f1.jsonl')
+        prune.prune(str(self.path))
+        self.assertEqual(self.kinds(), ['a', 'b', 'k'])
+
+    def test_a_fork_of_another_session_protects_nothing_here(self):
+        self.write([message('a', None, text=BIG), boundary('k')])
+        fork = {'type': 'fork-context-ref', 'parentSessionId': 'other', 'parentLastUuid': 'a'}
+        self.write([fork], self.folder / SESSION / 'subagents' / 'agent-f1.jsonl')
+        prune.prune(str(self.path))
+        self.assertEqual(self.kinds(), ['k'])
+
     def test_without_a_compaction_the_conversation_stays(self):
         self.write([message('a', None, text=BIG), message('b', 'a')])
         self.assertIsNone(prune.prune(str(self.path)))
@@ -271,9 +294,25 @@ class Command(Transcript):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(sorted(line.split(':')[0] for line in done.stdout.splitlines()), sorted([str(self.path), str(subagent)]))
         state = json.loads((self.projects.parent / 'state.json').read_text())
-        self.assertEqual(set(state), {str(self.path), str(small), str(subagent)})
+        self.assertEqual(state['version'], prune.STATE_VERSION)
+        self.assertEqual(set(state['files']), {str(self.path), str(small), str(subagent)})
         again = self.cli('--all', '--min-bytes', '100')
         self.assertEqual((again.returncode, again.stdout), (0, ''))
+
+    def test_all_looks_again_at_every_transcript_after_the_rules_change(self):
+        self.write([message('a', None, text=BIG), boundary('k')])
+        state = self.projects.parent / 'state.json'
+        # A state from the first rules, which listed this file unchanged.
+        state.write_text(json.dumps({str(self.path): [self.path.stat().st_size, self.path.stat().st_mtime_ns]}))
+        done = self.cli('--all')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.kinds(), ['k'])
+
+    def test_all_looks_by_default_at_transcripts_from_the_size_that_can_save_enough(self):
+        self.write([message('a', None, text=BIG), boundary('k')])
+        self.assertLess(self.path.stat().st_size, 10_000_000)
+        done = self.cli('--all')
+        self.assertEqual((done.returncode, len(done.stdout.splitlines())), (0, 1), done.stderr)
 
     def test_all_leaves_a_transcript_below_the_size_it_looks_at(self):
         self.write([message('a', None, text=BIG), boundary('k')])

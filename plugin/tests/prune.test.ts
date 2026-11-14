@@ -4,7 +4,7 @@ import { HOME, ROOT, SESSION, START, SUPERVISED, cost, turn, world } from './wor
 const PROJECTS = `${HOME}/.claude-shared/projects`
 const common = ['--projects', PROJECTS, '--lock', `${ROOT}/prune.lock`, '--state', `${ROOT}/prune-state.json`]
 const summary = (count: number) =>
-  `cc-accounts: pruned ${count} transcript${count === 1 ? '' : 's'} to their last compaction and newest images; the debug log lists them.`
+  `cc-accounts: pruned ${count} transcript${count === 1 ? '' : 's'} to save space; the debug log lists them.`
 
 // What a compaction leaves: at least one message.
 const KEPT = [{ role: 'user' as const, text: 'the summary', toolUses: [] }]
