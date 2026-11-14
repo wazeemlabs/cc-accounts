@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.10.0 (2026-11-15)
+
+- An update to the plugin reaches running sessions by itself. Claude Code reloads a plugin whose folder changes only where it watches the folder, and a headless session, which is how the desktop app and SDK clients run it, does not watch by default. On 2026-11-15 a desktop session kept running 0.9.0's code after 0.9.1 was installed, and was parked by the bug 0.9.1 fixed until `/reload-plugins`. `cca init` now sets `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` beside `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, and `install.sh` adds it on an update where the plugin is loaded and it is not set; a value the person set is kept, and `cca uninstall` removes only the `1` it set. Then a session loads a changed plugin once its turn ends. A session started before the setting reads it at its next start.
+
 ## 0.9.1 (2026-11-15)
 
 - A session counts in, and is parked by, the folder it works in, not the one it started in. The Claude desktop app starts a session in a standby folder under `~/.claude/spares` and then moves it to the folder the person picked, but the plugin kept `session.start`'s folder for the session's life. Each desktop session was then a project of its own with no budget, so its spend fell outside its real project's budget, and once the budgets set took the whole supply it was parked after its first turn. On 2026-11-15 a session working in a budgeted project with room was parked as `spare-pxm3AD`. The plugin now reads `$.session.root()`, which follows the move, wherever it needs the session's folder: its spend record, parking, its weight, and `/account budget` or `priority` with no folder named.

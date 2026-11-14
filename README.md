@@ -145,6 +145,8 @@ To update, run the install command again without a name:
 curl -fsSL https://raw.githubusercontent.com/wazeemlabs/cc-accounts/main/install.sh | bash
 ```
 
+Running sessions load the updated plugin once their turn ends: `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` in `~/.claude/settings.json`, which install sets, has Claude Code watch the plugin's folder, including in the desktop app, which does not by default. A session that started before the setting was there reads it at its next start; until then, `/reload-plugins` loads the update.
+
 To uninstall:
 
 ```sh

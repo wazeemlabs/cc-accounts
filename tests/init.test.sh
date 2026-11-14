@@ -44,8 +44,8 @@ check "init writes the default share list" "settings.json CLAUDE.md agents comma
 check "init adds the shell block after the rc file's own lines" \
   "export EDITOR=vim|# >>> cc-accounts >>>|export PATH=\"$REPO/bin:\$PATH\"|claude() { cca run \"\$@\"; }" \
   "$(grep -v '^# Run\|^# it last' "$HOME/.zshrc" | grep -v '^$' | grep -v '<<<' | paste -sd'|' -)"
-check "init loads the plugin through settings.json and keeps its other settings" \
-  "{'A': '1', 'CLAUDE_CODE_PLUGIN_DIRS': '$REPO/plugin'} opus" \
+check "init loads the plugin through settings.json, watched for updates, and keeps its other settings" \
+  "{'A': '1', 'CLAUDE_CODE_PLUGIN_DIRS': '$REPO/plugin', 'CLAUDE_CODE_PLUGIN_DIR_WATCH': '1'} opus" \
   "$(json "$HOME/.claude/settings.json" "d['env'], d['model']")"
 check "init keeps settings.json's indent" '  "env": {' "$(sed -n 2p "$HOME/.claude/settings.json")"
 check "init points VS Code's extension at cca" "$REPO/bin/cca on" \
@@ -69,7 +69,7 @@ check "add links the share list's items that ~/.claude has, and only those" \
 
 out="$("$CCA" uninstall 2>&1)"
 check "uninstall removes the shell block and keeps the rest of the rc file" "export EDITOR=vim" "$(cat "$HOME/.zshrc")"
-check "uninstall removes the plugin from settings.json and keeps the rest" "{'A': '1'} opus" \
+check "uninstall removes the plugin and its watch from settings.json and keeps the rest" "{'A': '1'} opus" \
   "$(json "$HOME/.claude/settings.json" "d['env'], d['model']")"
 check "uninstall removes the VS Code wrapper" "False" \
   "$(json "$EDITORS/Code/User/settings.json" "'claudeCode.claudeProcessWrapper' in d")"
@@ -160,8 +160,27 @@ fresh
 check "install.sh run from a clone uses it in place and runs init" \
   "0 $REPO/bin" "$status $(grep -o "PATH=\"[^:]*" "$HOME/.zshrc" | cut -d'"' -f2)"
 "$REPO/install.sh" > "$WORK/out" 2>&1; status=$?
-check "install.sh again without a name reports an update" "0 Updated. Your accounts and settings are unchanged." \
+check "install.sh again without a name reports an update" "0 Updated. Your accounts are unchanged." \
   "$status $(tail -1 "$WORK/out")"
+check "and leaves settings.json as it was" "0" "$(grep -c 'settings.json' "$WORK/out")"
+json_set() { # file, python statement over `d`
+  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); $2; json.dump(d, open(sys.argv[1], 'w'), indent=2)" "$1"
+}
+json_set "$HOME/.claude/settings.json" "del d['env']['CLAUDE_CODE_PLUGIN_DIR_WATCH']"
+"$REPO/install.sh" > "$WORK/out" 2>&1; status=$?
+check "an update gives an install made before the watch the watch" "0 1 {'A': '1', 'CLAUDE_CODE_PLUGIN_DIRS': '$REPO/plugin', 'CLAUDE_CODE_PLUGIN_DIR_WATCH': '1'}" \
+  "$status $(grep -c 'reloads the plugin in running sessions' "$WORK/out") $(json "$HOME/.claude/settings.json" "d['env']")"
+json_set "$HOME/.claude/settings.json" "d['env']['CLAUDE_CODE_PLUGIN_DIR_WATCH'] = '0'"
+"$REPO/install.sh" >/dev/null 2>&1
+check "an update keeps a watch the person turned off" "0" \
+  "$(json "$HOME/.claude/settings.json" "d['env']['CLAUDE_CODE_PLUGIN_DIR_WATCH']")"
+"$CCA" uninstall >/dev/null 2>&1
+check "uninstall leaves a watch the person set" "{'A': '1', 'CLAUDE_CODE_PLUGIN_DIR_WATCH': '0'}" \
+  "$(json "$HOME/.claude/settings.json" "d['env']")"
+json_set "$HOME/.claude/settings.json" "del d['env']['CLAUDE_CODE_PLUGIN_DIR_WATCH']"
+"$REPO/install.sh" >/dev/null 2>&1
+check "an update after uninstall adds nothing: the plugin is not loaded" "{'A': '1'}" \
+  "$(json "$HOME/.claude/settings.json" "d['env']")"
 
 fresh
 mkdir -p "$WORK/winbin"

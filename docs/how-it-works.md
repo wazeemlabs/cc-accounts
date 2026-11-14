@@ -107,7 +107,7 @@ User MCP servers live in `~/.claude-shared/mcp.json`, in the `{"mcpServers": {..
 
 ## The plugin
 
-`plugin/` is a Claude Code plugin, loaded in every session through `CLAUDE_CODE_PLUGIN_DIRS` in the env block of `~/.claude/settings.json` (which every account shares). It registers `/account`, shows the account and its usage in the status line, records each conversation's account when a session starts, follows the session's turns and background work so that a switch can wait for them, saves its account's usage, and moves the conversation off an account that is nearly spent. It reads cca's state directory from `CCA_ROOT` and the shared directory from `CCA_SHARED`, which cca sets, or `~/.claude-shared/accounts` and `~/.claude-shared`.
+`plugin/` is a Claude Code plugin, loaded in every session through `CLAUDE_CODE_PLUGIN_DIRS` in the env block of `~/.claude/settings.json` (which every account shares). `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` beside it makes Claude Code watch the plugin's folder in every session: a terminal session watches it by default, but a headless one (the desktop app, an SDK client) does not, and without the watch an update reached such a session only through `/reload-plugins` or a restart. With it, a session reloads the changed plugin once its turn ends, running `session.start` again, so the plugin's state is rebuilt. `cca init` sets it, keeping a value already there; `install.sh` sets it on an update where the plugin is loaded and it is not set; `cca uninstall` removes it when it is `1` and no other plugin dir is left. It registers `/account`, shows the account and its usage in the status line, records each conversation's account when a session starts, follows the session's turns and background work so that a switch can wait for them, saves its account's usage, and moves the conversation off an account that is nearly spent. It reads cca's state directory from `CCA_ROOT` and the shared directory from `CCA_SHARED`, which cca sets, or `~/.claude-shared/accounts` and `~/.claude-shared`.
 
 ## Files cca writes
 
@@ -131,7 +131,7 @@ User MCP servers live in `~/.claude-shared/mcp.json`, in the `{"mcpServers": {..
 | `~/.claude-shared/mcp.json` | The user MCP servers every session loads. |
 | `~/.claude-shared/accounts/sync-state.json` | Per account, digests of its trust and MCP items as cca last saw them. |
 | Your shell's startup file (`.zshrc`, `.bashrc` or fish's `config.fish`) | A block between `# >>> cc-accounts >>>` and `# <<< cc-accounts <<<`. |
-| `~/.claude/settings.json` | `CLAUDE_CODE_PLUGIN_DIRS` in its `env` block. |
+| `~/.claude/settings.json` | `CLAUDE_CODE_PLUGIN_DIRS` and `CLAUDE_CODE_PLUGIN_DIR_WATCH` in its `env` block. |
 | Editor settings | `claudeCode.claudeProcessWrapper`, in each desktop editor's user settings and each remote editor server's machine settings (`~/.vscode-server/data/Machine/settings.json` and the like). |
 | Each account's `.claude.json` | Trust flags and per-project MCP settings, user MCP servers moved out, as above, and the preferences below. |
 

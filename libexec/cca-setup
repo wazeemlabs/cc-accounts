@@ -3,13 +3,16 @@
 
   cca-setup install   --rc RC --shell SHELL --bin DIR --settings FILE --plugin DIR --wrapper PATH
   cca-setup uninstall --rc RC --settings FILE --plugin DIR --wrapper PATH
+  cca-setup refresh   --settings FILE --plugin DIR
   cca-setup check     --settings FILE
   cca-setup running   SESSIONS_DIR
 
 install adds, and uninstall removes:
   - a marked block in the shell rc file: cca on PATH, and `claude` run through it;
   - the plugin dir in CLAUDE_CODE_PLUGIN_DIRS, in the env block of Claude Code's
-    settings.json, which loads the /account plugin in every session;
+    settings.json, which loads the /account plugin in every session, and
+    CLAUDE_CODE_PLUGIN_DIR_WATCH=1 beside it, which reloads the plugin in
+    running sessions when an update changes it (a value already set is kept);
   - claudeCode.claudeProcessWrapper in each VS Code family editor's settings
     on this machine, so the extension starts Claude Code through cca. The
     setting is machine-scoped: a desktop editor reads it from its user
@@ -17,6 +20,8 @@ install adds, and uninstall removes:
     settings on the remote, so both are written where the editor is set up.
     A settings file with comments is not rewritten; the line to add is
     printed instead.
+refresh, run by install.sh on an update, adds CLAUDE_CODE_PLUGIN_DIR_WATCH where
+the plugin is loaded and it is not set, so installs made before it get it.
 check fails, before anything changes, on a settings.json install could not edit.
 running prints the pids of live Claude Code sessions from its session list.
 
@@ -32,6 +37,11 @@ import sys
 BEGIN = '# >>> cc-accounts >>>'
 END = '# <<< cc-accounts <<<'
 PLUGIN_ENV = 'CLAUDE_CODE_PLUGIN_DIRS'
+# Claude Code reloads a plugin whose folder changes only where it watches the
+# folder: a terminal session does by default, a headless one (the desktop app,
+# an SDK client) does not, so an update reached a desktop session only after
+# /reload-plugins or a restart (2026-11-15). On, it loads once the turn ends.
+WATCH_ENV = 'CLAUDE_CODE_PLUGIN_DIR_WATCH'
 WRAPPER_KEY = 'claudeCode.claudeProcessWrapper'
 EDITORS = ('Code', 'Code - Insiders', 'Cursor', 'Windsurf', 'VSCodium')
 # The server a remote window runs on this machine, per editor.
@@ -138,16 +148,47 @@ def load_json(path):
         raise SystemExit(f'cca: {path} is not valid JSON ({error}); fix it and run again')
 
 
+def plugin_dirs(env):
+    return [d for d in env.get(PLUGIN_ENV, '').split(os.pathsep) if d]
+
+
+def save_settings(path, data, text, changes):
+    if not changes:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_atomic(path, dump_like(data, text))
+    for change in changes:
+        say(f'{path}: {change}')
+
+
+def watch_change(env):
+    if WATCH_ENV in env:
+        return []
+    env[WATCH_ENV] = '1'
+    return [f'{WATCH_ENV} reloads the plugin in running sessions when it is updated']
+
+
 def settings_install(path, plugin):
     data, text = load_json(path)
     env = data.setdefault('env', {})
-    dirs = [d for d in env.get(PLUGIN_ENV, '').split(os.pathsep) if d]
-    if plugin in dirs:
+    dirs = plugin_dirs(env)
+    changes = []
+    if plugin not in dirs:
+        env[PLUGIN_ENV] = os.pathsep.join(dirs + [plugin])
+        changes.append(f'{PLUGIN_ENV} loads the /account plugin')
+    save_settings(path, data, text, changes + watch_change(env))
+
+
+# An update leaves the person's choices alone: it adds only the watch, and
+# only where the plugin is still loaded.
+def settings_refresh(path, plugin):
+    if not os.path.exists(path):
         return
-    env[PLUGIN_ENV] = os.pathsep.join(dirs + [plugin])
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    write_atomic(path, dump_like(data, text))
-    say(f'{path}: {PLUGIN_ENV} loads the /account plugin')
+    data, text = load_json(path)
+    env = data.get('env') or {}
+    if plugin not in plugin_dirs(env):
+        return
+    save_settings(path, data, text, watch_change(env))
 
 
 def settings_uninstall(path, plugin):
@@ -155,7 +196,7 @@ def settings_uninstall(path, plugin):
         return
     data, text = load_json(path)
     env = data.get('env') or {}
-    dirs = [d for d in env.get(PLUGIN_ENV, '').split(os.pathsep) if d]
+    dirs = plugin_dirs(env)
     if plugin not in dirs:
         return
     rest = [d for d in dirs if d != plugin]
@@ -163,6 +204,9 @@ def settings_uninstall(path, plugin):
         env[PLUGIN_ENV] = os.pathsep.join(rest)
     else:
         del env[PLUGIN_ENV]
+        # The watch install set; one the person set to anything else is theirs.
+        if env.get(WATCH_ENV) == '1':
+            del env[WATCH_ENV]
     if not env and 'env' in data:
         del data['env']
     write_atomic(path, dump_like(data, text))
@@ -248,6 +292,9 @@ def main(argv=None):
         sub.add_argument('--settings', required=True)
         sub.add_argument('--plugin', required=True)
         sub.add_argument('--wrapper', required=True)
+    refresh = commands.add_parser('refresh')
+    refresh.add_argument('--settings', required=True)
+    refresh.add_argument('--plugin', required=True)
     check = commands.add_parser('check')
     check.add_argument('--settings', required=True)
     runs = commands.add_parser('running')
@@ -257,6 +304,10 @@ def main(argv=None):
 
     if args.command == 'check':
         load_json(args.settings)
+        return
+
+    if args.command == 'refresh':
+        settings_refresh(args.settings, args.plugin)
         return
 
     if args.command == 'running':

@@ -60,7 +60,11 @@ if [[ $# -gt 0 ]]; then
   exec "$DEST/bin/cca" init "$@"
 fi
 if [[ -f "${CCA_ROOT:-$HOME/.claude-shared/accounts}/accounts.tsv" ]]; then
-  echo "Updated. Your accounts and settings are unchanged."
+  # A release pinned with CCA_REF from before 0.10.0 has no refresh.
+  if grep -q '^def settings_refresh' "$DEST/libexec/cca-setup"; then
+    "$DEST/libexec/cca-setup" refresh --settings "$HOME/.claude/settings.json" --plugin "$(cd "$DEST" && pwd -P)/plugin"
+  fi
+  echo "Updated. Your accounts are unchanged."
 else
   echo "Next: $DEST/bin/cca init <name>, naming the account you are signed in to now."
 fi
