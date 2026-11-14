@@ -382,20 +382,21 @@ export const register: Register = on => {
       : ''
 
     const exit = await exitOf($, sessionId)
+    // The desktop app signs the session in itself, so reopening it there keeps
+    // it on the app's account; only cca can open it on another. Nothing is
+    // recorded: the session goes on running, and counting, where it is.
+    if (exit === undefined && (await inDesktopApp($))) {
+      return {
+        text:
+          `The Claude desktop app runs this session on the account the app is signed in to, ${current ?? 'which cca does not hold'}, ` +
+          `and reopening it there keeps it on ${current ?? 'that account'}. To go on with it on ${target.name}, close it here and ` +
+          `reopen it in VS Code, or run \`cca ${target.name} --resume ${sessionId}\` in a terminal.${signIn}`,
+      }
+    }
     const asked = await requestSwitch($, state, ctx, exit, { target: target.name, force: ask.force })
     // Started without cca: the process cannot change its own login, so the
     // choice waits for the conversation's next open.
     if (asked.kind === 'recorded') {
-      // The desktop app signs the session in itself, so reopening it there
-      // keeps it on the app's account; only cca can open it on another.
-      if (await inDesktopApp($)) {
-        return {
-          text:
-            `The Claude desktop app runs this session on the account the app is signed in to, ${current ?? 'which cca does not hold'}, ` +
-            `and reopening it there keeps it on ${current ?? 'that account'}. To go on with it on ${target.name}, close it here and ` +
-            `reopen it in VS Code, or run \`cca ${target.name} --resume ${sessionId}\` in a terminal.${signIn}`,
-        }
-      }
       return {
         text:
           `This conversation opens on ${target.name} from now on.${signIn}\n` +

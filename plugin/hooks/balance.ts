@@ -90,7 +90,7 @@ export async function noteMeasure($: EngineInterface, state: SwitchState): Promi
   await writeReading($, ctx.root, reading)
   if (state.pending === undefined && !state.ending) {
     const use = describeUse(reading, await $.clock.now())
-    $.ui.status(use === '' ? `account ${ctx.current.name}` : `account ${ctx.current.name} · ${use}`)
+    $.ui.status(`account ${ctx.current.name}${use === '' ? '' : ` · ${use}`}${state.strandedNote ?? ''}`)
   }
 }
 
@@ -122,6 +122,11 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const stop = stopped ? stopOf(await turnFailure($, ctx), windowAtLimit(reading, now)) : undefined
   const full = fullWindow(reading, now)
   const tight = tightWindow(reading, now)
+  // Room again: what a session that cannot move told of is over.
+  if (stop === undefined && full === undefined) {
+    state.stranded = undefined
+    state.strandedNote = undefined
+  }
   if (stop === undefined && full === undefined && tight === undefined) return spendSooner($, state, ctx, reading, now)
   const exit = await exitOf($, await $.session.id())
   if (exit === undefined) return stranded($, state, ctx, from, reading, stop, full, now)
@@ -207,8 +212,9 @@ async function stranded(
       ? `${target} has room: close this conversation here, then reopen it in VS Code and type /account ${target}, or run ${command} in a terminal.`
       : `${target} has room: go on with this conversation in a terminal with ${command}.`
   $.ui.log(`cc-accounts: ${why}, and this session cannot move: ${cause}. ${next}`)
+  state.strandedNote = ` · cannot move${target === undefined ? '' : `; ${target} has room`}`
   const use = describeUse(reading, now)
-  $.ui.status(`account ${from}${use === '' ? '' : ` · ${use}`} · cannot move${target === undefined ? '' : `; ${target} has room`}`)
+  $.ui.status(`account ${from}${use === '' ? '' : ` · ${use}`}${state.strandedNote}`)
 }
 
 // A turn the account stopped while a move waits for the session's background

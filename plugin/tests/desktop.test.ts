@@ -108,8 +108,40 @@ describe('a session nothing can move says so and where to go on', () => {
       'The Claude desktop app runs this session on the account the app is signed in to, 2, and reopening it there keeps it on 2. ' +
         `To go on with it on 1, close it here and reopen it in VS Code, or run \`cca 1 --resume ${SESSION}\` in a terminal.`,
     )
-    expect(w.files.get(BY_SESSION)).toBe('1\n')
+    // It keeps running on the app's account, so it stays counted there.
+    expect(w.files.get(BY_SESSION)).toBe('2\n')
     await w.clock.advance(0)
     expect([w.ran, w.killed]).toEqual([[], []])
+  })
+
+  test('its status line keeps saying it cannot move through later readings while the window stays full', async ($, on) => {
+    const w = world(on, DESKTOP)
+    await $.session.start(START)
+    limits(w, 95)
+    await turn($, w, [])
+    limits(w, 96)
+    await $.session.measure(measure(w))
+    expect(w.statuses.at(-1)).toBe('account 2 · 5h 96%, week 0% · cannot move; 1 has room')
+  })
+
+  test('once its account has room again the note goes, and a later full window is told again', async ($, on) => {
+    const w = world(on, DESKTOP)
+    await $.session.start(START)
+    limits(w, 95)
+    await turn($, w, [])
+    limits(w, 40)
+    await turn($, w, [])
+    await $.session.measure(measure(w))
+    expect(w.statuses.at(-1)).toBe('account 2 · 5h 40%, week 0%')
+    limits(w, 95)
+    await turn($, w, [])
+    expect(w.logs.filter(line => line.includes('cannot move')).length).toBe(2)
+  })
+
+  test('a claude cca started from a desktop session is not taken for the desktop app', async ($, on) => {
+    const w = world(on, { ...DESKTOP, CLAUDE_CODE_ACCOUNT_UUID: '', CLAUDE_ACCOUNT: '1', CCA_MODE: 'terminal', CCA_PID: '77' })
+    await $.session.start(START)
+    const { text } = await $.command.run(run('2'))
+    expect(text).toContain('This conversation opens on 2 from now on.')
   })
 })

@@ -50,9 +50,11 @@ async function hostLogin($: EngineInterface, accounts: readonly Account[], home:
 }
 
 // Whether the Claude desktop app started this session: it runs Claude Code on
-// the account it is signed in to, and no switch can reopen it elsewhere.
+// the account it is signed in to, and no switch can reopen it elsewhere. A
+// claude cca starts from a desktop session's shell inherits the entrypoint,
+// but cca names its mode.
 export async function inDesktopApp($: EngineInterface): Promise<boolean> {
-  return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-desktop'
+  return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-desktop' && (await $.env.get('CCA_MODE')) === undefined
 }
 
 export async function emailOf($: EngineInterface, account: Account, home: string): Promise<string | undefined> {
