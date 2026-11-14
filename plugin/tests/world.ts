@@ -88,6 +88,17 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     files.set(e.path, e.text)
     return { value: undefined }
   })
+  // The session's $.state, as the host holds it across reloads of the
+  // plugin: a test seeds it to stand as what an earlier load saved.
+  const state = new Map<string, unknown>()
+  on('state.get', async (_$, e) => {
+    const key = `${e.plugin}.${e.key}`
+    return { value: { value: state.get(key) as never, version: state.has(key) ? 1 : 0 } }
+  })
+  on('state.set', async (_$, e) => {
+    state.set(`${e.plugin}.${e.key}`, JSON.parse(JSON.stringify(e.value)))
+    return { value: { isSet: true, version: 1 } }
+  })
   on('session.id', async () => ({ value: SESSION }))
   on('session.usage', async () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [...limits] } as never }))
   // The session's folder: where it started, until a test moves it, as the
@@ -250,7 +261,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     return { value: undefined }
   })
   return {
-    files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript, settings,
+    files, ran, statuses, logs, clock, killed, agents, state, results, denied, limits, running, writes, released, slow, transcript, settings,
     folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery,
   }
 }

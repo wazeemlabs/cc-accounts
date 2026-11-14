@@ -158,6 +158,20 @@ describe('a parked session is woken once its project is within its budget again'
     expect(w.sent.map(message => message.text)).toEqual([wakeText('/elsewhere')])
   })
 
+  // 2026-11-15 review: a reload cancels the module's timers, and nothing
+  // started the minute check again, so a session with every other one idle
+  // never woke.
+  test('a load that finds this session refused starts its minute check again', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(budgetFile(ROOT), weights({ '/work': 1 }))
+    w.files.set(`${spendDir(ROOT, '1970-01-01')}/${SESSION}.json`, `${JSON.stringify({ cwd: '/work', tokens: 2_000_000 })}\n`)
+    w.files.set(parkedFile(ROOT, SESSION), `${JSON.stringify({ folder: '/work' })}\n`)
+    await $.session.start(START)
+    w.files.set(budgetFile(ROOT), weights({ '/work': 100 }))
+    await w.clock.advance(WAKE_MS)
+    expect(w.submitted).toEqual([wakeText('/work')])
+  })
+
   test('the record of a session that has ended is removed, and nothing is sent', async ($, on) => {
     const w = world(on, SUPERVISED)
     parkedElsewhere(w, 100)

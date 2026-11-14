@@ -6,5 +6,6 @@
   "homepage": "https://github.com/wazeemlabs/cc-accounts",
   "repository": "https://github.com/wazeemlabs/cc-accounts",
   "license": "MIT",
-  "keywords": ["accounts", "claude-code", "vscode"]
+  "keywords": ["accounts", "claude-code", "vscode"],
+  "types": "./types/index.d.ts"
 }

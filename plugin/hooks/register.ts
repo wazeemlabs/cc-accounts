@@ -13,9 +13,10 @@ import {
   setPriority,
   weightOf,
 } from './priorities'
-import { forgetRefused, noteRefused, parkedNow, WAKE_MS, wakeParked } from './parking'
+import { forgetRefused, noteRefused, parkedFile, parkedNow, WAKE_MS, wakeParked } from './parking'
 import { prune } from './prune'
 import { formatReport, gatherReport, totals, totalsLine } from './report'
+import { restore, save } from './saved'
 import { readReading } from './survey'
 import {
   afterOf,
@@ -133,9 +134,24 @@ export const register: Register = on => {
     const ctx = await context($)
     state.root = ctx?.root
     state.interactive = e.isInteractive
+    // A reload of the plugin in this process: what the last load knew stands,
+    // a queued switch included, and the conversation stays recorded on its
+    // target.
+    await restore($, state, await exitOf($, await $.session.id()))
     if (ctx?.current !== undefined) {
-      $.ui.status(`account ${ctx.current.name}`)
-      await record($, ctx, await $.session.id(), ctx.current.name)
+      if (state.pending !== undefined) {
+        $.ui.status(`account ${ctx.current.name}, moving to ${state.pending.target}`)
+        await $.clock.after(0, () => carryOut($, state))
+      } else {
+        $.ui.status(`account ${ctx.current.name}`)
+        await record($, ctx, await $.session.id(), ctx.current.name)
+      }
+    }
+    // A refused session whose minute check a reload cancelled (or a new
+    // process on a refused conversation): its check starts again.
+    if (ctx !== undefined && parked.timer === undefined && (await $.fs.exists(parkedFile(ctx.root, await $.session.id())))) {
+      parked.refused = true
+      parked.timer = $.clock.every(WAKE_MS, () => void check($, parked))
     }
     // prune() reports its own failures and never rejects; the session does not wait for it.
     if (ctx !== undefined) void prune($, ctx, { all: true })
@@ -150,6 +166,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       state.turns += 1
+      await save($, state)
       if (state.root !== undefined) await $.fs.write(recordFile(state.root, await $.session.id()), turnMark(e.turnId))
       // A person or a wake started it again: nothing is left to wake it for,
       // and a refusal in this turn writes the record again.
@@ -208,6 +225,7 @@ export const register: Register = on => {
         void prune($, ctx, { session: await $.session.id() })
       }
     }
+    await save($, state)
     if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
     return result
   }).catch(async ($, e, next) => {
@@ -261,7 +279,10 @@ export const register: Register = on => {
     const answer = await next(e)
     if (answer.result !== undefined) {
       const task = taskStarted(e.tool, e as unknown as Record<string, unknown>, answer.result)
-      if (task !== undefined) state.tasks.set(task.id, task)
+      if (task !== undefined) {
+        state.tasks.set(task.id, task)
+        await save($, state)
+      }
     }
     return answer
   }).catch(async ($, e, next) => {
@@ -373,6 +394,7 @@ export const register: Register = on => {
       if (state.pending === undefined) return { text: `This session already runs on ${target.name}.` }
       const dropped = state.pending.target
       state.pending = undefined
+      await save($, state)
       await record($, ctx, sessionId, target.name)
       $.ui.status(`account ${target.name}`)
       return { text: `Cancelled the switch to ${dropped}: this session stays on ${target.name}.` }
@@ -394,6 +416,7 @@ export const register: Register = on => {
       }
     }
     const asked = await requestSwitch($, state, ctx, exit, { target: target.name, force: ask.force })
+    await save($, state)
     // Started without cca: the process cannot change its own login, so the
     // choice waits for the conversation's next open.
     if (asked.kind === 'recorded') {

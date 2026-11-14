@@ -6,6 +6,7 @@ import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
 import { followUpText, type Move, type Stop } from './usage'
 import { describeError, record, run, type Context } from './context'
+import { save } from './saved'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
 // waits on the process, reads the switch file and resumes the conversation
@@ -26,8 +27,9 @@ export type Pending = { target: string; force: boolean; exit: Exit; from: string
 // What a switch waits for: the turn in flight and the background work.
 export type Wait = { turn: boolean; tasks: Task[] }
 
-// One process's state: Claude Code loads the module once per process, and
-// /account only ever ends its own process.
+// One process's state: /account only ever ends its own process. A hot reload
+// of the plugin loads the module again in the same process, so what must
+// outlive one is saved in $.state (saved.ts).
 export type SwitchState = {
   root: string | undefined
   // Whether a person is at the prompt (session.start): false for `-p` and the SDK.
@@ -235,6 +237,7 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
   state.pending = undefined
   state.ending = true
   state.cutTurn = false
+  await save($, state)
   const { exit, target, from, stop } = pending
   try {
     // What the reopened conversation is told, as things stand now: the work a
