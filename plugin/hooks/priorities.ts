@@ -1,6 +1,7 @@
 // How much each project matters, as the person set it with /account priority.
 // priorities.json maps a folder to its weight. A session's project is the
-// folder it started in: it takes the weight of that folder or of the nearest
+// folder it works in ($.session.root(), which follows the desktop app moving
+// a session out of the standby folder it started in): it takes the weight of that folder or of the nearest
 // folder above it that has one, else 1. Weights steer the balancer
 // (usage.ts): a session counts by its weight on the account it runs on, so
 // sessions that matter less keep off accounts where heavier ones run, and
@@ -67,7 +68,7 @@ export function formatPriorities(priorities: Priorities): string {
   return `${JSON.stringify(Object.fromEntries(sorted), null, 2)}\n`
 }
 
-// The weight a session started in `cwd` takes, and the folder that set it
+// The weight a session working in `cwd` takes, and the folder that set it
 // (undefined for the default).
 export function weightOf(priorities: Priorities, cwd: string): { weight: number; folder: string | undefined } {
   const folder = nearestFolder(priorities, cwd)

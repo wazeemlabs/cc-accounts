@@ -86,7 +86,14 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   on('session.id', async () => ({ value: SESSION }))
   on('session.usage', async () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [...limits] } as never }))
-  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  // The session's folder: where it started, until a test moves it, as the
+  // desktop app moves a session it started in a standby folder.
+  const where = { root: '/' }
+  on('session.root', async () => ({ value: where.root }))
+  on('session.start', async (_$, e) => {
+    where.root = e.cwd
+    return { cwd: e.cwd }
+  })
   on('session.measure', async (_$, e) => ({ changed: e.changed }))
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
   on('command.run', { command: 'exit' }, async (_$, e) => {
@@ -179,7 +186,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   return {
     files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript, settings,
-    folder, failWrites,
+    folder, failWrites, where,
   }
 }
 

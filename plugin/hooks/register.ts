@@ -65,12 +65,10 @@ type Parked = { project: ProjectBudget | undefined }
 async function park(
   $: EngineInterface,
   ctx: Context,
-  cwd: string | undefined,
   parked: Parked,
   now: number,
 ): Promise<Awaited<ReturnType<typeof parkedNow>>> {
-  if (cwd === undefined) return undefined
-  const found = await parkedNow($, ctx, cwd, now)
+  const found = await parkedNow($, ctx, await $.session.root(), now)
   const was = parked.project
   parked.project = found?.project
   if (found !== undefined && was === undefined) {
@@ -97,7 +95,6 @@ export const register: Register = on => {
     const ctx = await context($)
     state.root = ctx?.root
     state.interactive = e.isInteractive
-    state.cwd = e.cwd
     if (ctx?.current !== undefined) {
       $.ui.status(`account ${ctx.current.name}`)
       await record($, ctx, await $.session.id(), ctx.current.name)
@@ -128,8 +125,8 @@ export const register: Register = on => {
     // A subagent's turns cost the account too, and count against the budget.
     if (e.agentId !== undefined) {
       const ctx = await context($)
-      if (ctx !== undefined && e.usage !== undefined && state.cwd !== undefined) {
-        await recordSpend($, ctx.root, await $.session.id(), state.cwd, await $.clock.now(), weightedTokens(e.usage))
+      if (ctx !== undefined && e.usage !== undefined) {
+        await recordSpend($, ctx.root, await $.session.id(), await $.session.root(), await $.clock.now(), weightedTokens(e.usage))
       }
       return result
     }
@@ -148,10 +145,10 @@ export const register: Register = on => {
     if (ctx !== undefined) {
       try {
         const now = await $.clock.now()
-        if (e.usage !== undefined && state.cwd !== undefined) {
-          await recordSpend($, ctx.root, await $.session.id(), state.cwd, now, weightedTokens(e.usage))
+        if (e.usage !== undefined) {
+          await recordSpend($, ctx.root, await $.session.id(), await $.session.root(), now, weightedTokens(e.usage))
         }
-        await park($, ctx, state.cwd, parked, now)
+        await park($, ctx, parked, now)
       } catch (error) {
         // Reported; the turn's cost is uncounted and the session goes on unparked until the next turn's end.
         $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
@@ -186,7 +183,7 @@ export const register: Register = on => {
     if (parked.project !== undefined) {
       const ctx = await context($)
       const now = await $.clock.now()
-      const found = ctx === undefined ? undefined : await park($, ctx, state.cwd, parked, now)
+      const found = ctx === undefined ? undefined : await park($, ctx, parked, now)
       if (found !== undefined) return { deny: parkedText(found.project, found.plan, now) }
     }
     const answer = await next(e)
@@ -203,6 +200,7 @@ export const register: Register = on => {
   on('command.run', { command: 'account' }, async ($, e) => {
     const ctx = await context($)
     if (ctx === undefined) return { text: 'No accounts set up: run `cca init <name>` in a terminal.' }
+    const here = await $.session.root()
     const ask = parseAsk(e.args)
     if (ask.kind === 'help') return { text: USAGE }
 
@@ -217,27 +215,25 @@ export const register: Register = on => {
       )
       const preferred = await defaultName($, ctx)
       const start = await startOrDefault($, ctx, preferred)
-      const found = totals(await gatherReport($, ctx, preferred, start, state.cwd))
+      const found = totals(await gatherReport($, ctx, preferred, start, here))
       const list = formatList(rows, ctx.current?.name, preferred, start)
       return { text: `${list}\n${totalsLine(found)} /account usage shows when it comes back and where each project runs.` }
     }
 
     if (ask.kind === 'report') {
       const preferred = await defaultName($, ctx)
-      return { text: formatReport(await gatherReport($, ctx, preferred, await startOrDefault($, ctx, preferred), state.cwd)) }
+      return { text: formatReport(await gatherReport($, ctx, preferred, await startOrDefault($, ctx, preferred), here)) }
     }
 
     if (ask.kind === 'priority') {
       const priorities = await readPriorities($, ctx.root)
       if (ask.weight === undefined) {
-        const mine = state.cwd === undefined ? undefined : weightOf(priorities, state.cwd)
+        const mine = weightOf(priorities, here)
         const set = [...priorities.entries()].sort(([, a], [, b]) => b - a)
         return {
           text: [
-            mine === undefined || state.cwd === undefined
-              ? 'This session started in no known folder.'
-              : `This project, ${projectName(mine.folder ?? state.cwd)}, counts at ${mine.weight}` +
-                (mine.folder === undefined ? ', the default.' : ` (set for ${mine.folder}).`),
+            `This project, ${projectName(mine.folder ?? here)}, counts at ${mine.weight}` +
+              (mine.folder === undefined ? ', the default.' : ` (set for ${mine.folder}).`),
             ...(set.length === 0 ? [] : ['Weights set:', ...set.map(([folder, weight]) => `  ${String(weight).padEnd(5)}${folder}`)]),
             `Every other project counts at ${DEFAULT_WEIGHT}. A session counts by its weight on the account it runs on, ` +
               'so lighter sessions keep off the accounts heavier ones use and make room for them when one runs low.',
@@ -246,7 +242,7 @@ export const register: Register = on => {
       }
       const weight = parseWeight(ask.weight)
       if (weight === undefined) return { text: `A weight is a number above 0 and at most ${MAX_WEIGHT}, such as 3 or 0.5.` }
-      const folder = ask.folder === undefined ? state.cwd : normalizeFolder(ask.folder, ctx.home)
+      const folder = ask.folder === undefined ? here : normalizeFolder(ask.folder, ctx.home)
       if (folder === undefined) return { text: 'Name the folder as a full path, or ~/ and the rest of it.' }
       await setPriority($, ctx.root, folder, weight)
       return {
@@ -263,12 +259,12 @@ export const register: Register = on => {
           return { text: 'No budgets set: every project may spend what the accounts have. Set one with /account budget <points a day> [folder].' }
         }
         const now = await $.clock.now()
-        const project = state.cwd === undefined ? undefined : projectOf(budgets, await readPriorities($, ctx.root), state.cwd)
+        const project = projectOf(budgets, await readPriorities($, ctx.root), here)
         return { text: budgetLines(await currentPlan($, ctx, now), project, now).join('\n') }
       }
       const points = ask.points === '0' ? 0 : parseBudget(ask.points)
       if (points === undefined) return { text: `A budget is a number of points a day above 0 and at most ${MAX_BUDGET}, such as 35; 0 removes it.` }
-      const folder = ask.folder === undefined ? state.cwd : normalizeFolder(ask.folder, ctx.home)
+      const folder = ask.folder === undefined ? here : normalizeFolder(ask.folder, ctx.home)
       if (folder === undefined) return { text: 'Name the folder as a full path, or ~/ and the rest of it.' }
       await setBudget($, ctx.root, folder, points)
       return {

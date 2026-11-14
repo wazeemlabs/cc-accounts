@@ -128,7 +128,7 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   const live = await liveSessions($, ctx)
   const priorities = await readPriorities($, ctx.root)
   // Below the leave line, only a session with a heavier one beside it moves.
-  const mine = weightOf(priorities, state.cwd ?? '')
+  const mine = weightOf(priorities, await $.session.root())
   const heavier = stop === undefined && full === undefined
     ? heavierOn(live, priorities, from, await $.session.id(), mine.weight)
     : undefined

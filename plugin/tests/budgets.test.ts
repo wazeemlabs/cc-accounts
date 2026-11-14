@@ -365,6 +365,20 @@ describe('a session over its budget is parked between turns', () => {
     expect('deny' in refused && refused.deny?.startsWith('cc-accounts: scratch-workspaces has spent 1.4 of the 5 points')).toBe(true)
   })
 
+  test('a session moved out of the folder it started in counts and is parked by the folder it works in', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    // /work has room; the standby folder the app started the session in has no budget and so no share.
+    w.files.set(budgetFile(ROOT), weights({ '/work': 100 }))
+    await $.session.start({ ...START, cwd: `${HOME}/.claude/spares/spare-abc123` })
+    w.where.root = '/work'
+    await turn($, w, [], [], cost('claude-opus-5-5', 400_000))
+    expect(w.files.get(`${spendDir(ROOT, '1970-01-01')}/${SESSION}.json`)).toBe('{"cwd":"/work","tokens":2000000}\n')
+    expect(await $.tool.call(read('Read'))).toEqual({ result: undefined, text: '' })
+    expect(w.logs.some(line => line.includes('parked'))).toBe(false)
+    // /account budget with no folder names the folder it works in.
+    expect((await $.command.run(run('budget 7'))).text).toContain('work (/work) may spend 7 points a day')
+  })
+
   test('/account budget changes the folderless default, and 0 brings it back', async ($, on) => {
     const w = world(on, SUPERVISED)
     w.files.set(budgetFile(ROOT), weights({ '/work': 10 }))

@@ -2,7 +2,7 @@
 // them, for the balancer's decisions and /account usage: each account's last
 // rate-limit reading (usage/<account>.json, written by whichever of its
 // sessions measured last), its login and plan size, and the live sessions,
-// each with the folder it started in.
+// each with the folder it works in.
 import type { EngineInterface } from 'claude-code'
 import { configFileOf, emailIn, tierIn, unitsOfTier, type Account } from './accounts'
 import { run, writeAtomic, type Context } from './context'
@@ -35,7 +35,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 // A session running now: its conversation, the account cca recorded for it,
-// the folder it started in, the name its tab shows, and whether it is
+// the folder it works in, the name its tab shows, and whether it is
 // working (`active`): busy now, or idle for less than ACTIVE_MS. An idle
 // session spends nothing on its account until a person writes to it.
 export type LiveSession = { sessionId: string; account: string; cwd: string; name: string; active: boolean }

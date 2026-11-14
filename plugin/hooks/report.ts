@@ -147,7 +147,7 @@ export async function gatherReport(
   ctx: Context,
   defaultName: string | undefined,
   startName: string | undefined,
-  cwd: string | undefined,
+  cwd: string,
 ): Promise<ReportInput> {
   const now = await $.clock.now()
   const states = await accountStates($, ctx)
@@ -163,7 +163,7 @@ export async function gatherReport(
     startName,
     ...(budgets.size === 0 ? {} : {
       plan: await currentPlan($, ctx, now),
-      project: cwd === undefined ? undefined : projectOf(budgets, priorities, cwd),
+      project: projectOf(budgets, priorities, cwd),
     }),
   }
 }

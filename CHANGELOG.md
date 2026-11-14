@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.9.1 (2026-11-15)
+
+- A session counts in, and is parked by, the folder it works in, not the one it started in. The Claude desktop app starts a session in a standby folder under `~/.claude/spares` and then moves it to the folder the person picked, but the plugin kept `session.start`'s folder for the session's life. Each desktop session was then a project of its own with no budget, so its spend fell outside its real project's budget, and once the budgets set took the whole supply it was parked after its first turn. On 2026-11-15 a session working in a budgeted project with room was parked as `spare-pxm3AD`. The plugin now reads `$.session.root()`, which follows the move, wherever it needs the session's folder: its spend record, parking, its weight, and `/account budget` or `priority` with no folder named.
+
 ## 0.9.0 (2026-11-15)
 
 - Sessions opened in the Claude desktop app without a folder get an allowance. Each starts in a scratch folder of its own under `~/Library/Application Support/Claude/scratch-workspaces`, so each was a project with no budget, sharing what the budgets leave. Once the budgets set add up to more than the accounts supply, that share is nothing, and on 2026-11-14 such a session was parked from its first turn. Now, while any budget is set, all of them count as one project, that folder, with a default budget of 5 points a day. `/account budget <points> "~/Library/Application Support/Claude/scratch-workspaces"` changes it, and 0 brings the default back. The budgets table marks the row "default for sessions with no folder". With no budget set, nothing is parked, as before.

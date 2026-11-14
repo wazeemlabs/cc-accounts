@@ -74,7 +74,7 @@ New sessions start on the account a move would pick: the one with room whose wee
 Some projects matter more than others. Give one a weight, and its sessions get more of the room:
 
 ```
-/account priority 3              this project (the folder the session started in) counts as 3
+/account priority 3              this project (the folder the session works in) counts as 3
 /account priority 0.5 ~/scratch  a folder you care less about counts as half
 /account priority                show the weights set
 ```
