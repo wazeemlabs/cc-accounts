@@ -95,6 +95,33 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     return { cwd: e.cwd }
   })
   on('session.measure', async (_$, e) => ({ changed: e.changed }))
+  // A transcript prune: every child's argv, what it prints, how it ends, a
+  // promise per child that settles once it has, and `started(n)`, which
+  // settles once n children have started.
+  const starts: { count: number; found: () => void }[] = []
+  const prunes = {
+    argv: [] as string[][],
+    chunks: [] as { stream: 'stdout' | 'stderr'; text: string }[],
+    code: 0 as number | null,
+    ended: [] as Promise<void>[],
+    started: (count: number) =>
+      prunes.argv.length >= count ? Promise.resolve() : new Promise<void>(found => { starts.push({ count, found }) }),
+  }
+  on('process.spawn', async function* (_$, e) {
+    prunes.argv.push([...e.argv])
+    for (const start of starts.filter(start => prunes.argv.length >= start.count)) {
+      starts.splice(starts.indexOf(start), 1)
+      start.found()
+    }
+    let end = () => {}
+    prunes.ended.push(new Promise<void>(resolve => { end = resolve }))
+    try {
+      for (const chunk of prunes.chunks) yield chunk
+      return { value: { code: prunes.code, signal: null } }
+    } finally {
+      end()
+    }
+  })
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
   on('command.run', { command: 'exit' }, async (_$, e) => {
     ran.push(e.command)
@@ -176,8 +203,20 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     signals += 1
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  // Lines for the debug log alone are kept apart from the transcript's, and
+  // a test can wait for `count` lines, in either, that work it did not await
+  // will log.
+  const debug: string[] = []
+  const waiting: { wanted: (line: string) => boolean; count: number; found: () => void }[] = []
+  const seen = (wanted: (line: string) => boolean) => [...logs, ...debug].filter(wanted).length
+  const logged = (wanted: (line: string) => boolean, count = 1) =>
+    seen(wanted) >= count ? Promise.resolve() : new Promise<void>(found => { waiting.push({ wanted, count, found }) })
   on('ui.log', async (_$, e) => {
-    logs.push(e.text)
+    ;(e.to === 'debug' ? debug : logs).push(e.text)
+    for (const waiter of waiting.filter(waiter => seen(waiter.wanted) >= waiter.count)) {
+      waiting.splice(waiting.indexOf(waiter), 1)
+      waiter.found()
+    }
     return { value: undefined }
   })
   on('ui.status', async (_$, e) => {
@@ -186,7 +225,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   return {
     files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript, settings,
-    folder, failWrites, where,
+    folder, failWrites, where, prunes, debug, logged,
   }
 }
 

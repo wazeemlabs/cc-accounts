@@ -13,6 +13,7 @@ import {
   setPriority,
   weightOf,
 } from './priorities'
+import { prune } from './prune'
 import { formatReport, gatherReport, totals, totalsLine } from './report'
 import { readReading } from './survey'
 import {
@@ -84,6 +85,9 @@ async function park(
 export const register: Register = on => {
   const state = newState()
   const parked: Parked = { project: undefined }
+  // A compaction since the last main-loop turn's end, this session's or one
+  // of its subagents' (whose transcripts a session's prune covers too).
+  const pruning = { compacted: false }
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -99,6 +103,8 @@ export const register: Register = on => {
       $.ui.status(`account ${ctx.current.name}`)
       await record($, ctx, await $.session.id(), ctx.current.name)
     }
+    // prune() reports its own failures and never rejects; the session does not wait for it.
+    if (ctx !== undefined) void prune($, ctx, { all: true })
     return result
   }).catch(async ($, e, next) => {
     $.ui.log(`cc-accounts: could not record this session's account (${describeError(next.error)}).`)
@@ -154,12 +160,25 @@ export const register: Register = on => {
         $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
       }
       await startOrDefault($, ctx, undefined)
+      if (pruning.compacted) {
+        pruning.compacted = false
+        // As at the start: prune() reports its own failures and never rejects.
+        void prune($, ctx, { session: await $.session.id() })
+      }
     }
     if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
     return result
   }).catch(async ($, e, next) => {
     $.ui.log(`cc-accounts: could not finish this turn's checks (${describeError(next.error)}).`)
     return next(e)
+  })
+
+  // The transcript is pruned once the turn the compaction ran in has ended.
+  // A precomputed one is only kept for later and changes nothing yet.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.trigger !== 'precompute' && !('skip' in result)) pruning.compacted = true
+    return result
   })
 
   // The account's rate-limit windows moved: every session can now see them.

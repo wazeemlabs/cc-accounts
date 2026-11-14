@@ -122,6 +122,8 @@ Claude Code keeps one login per config folder, and each folder keeps its own con
 - your MCP servers. The user ones live in one file, `~/.claude-shared/mcp.json`, which every session cca starts loads; edit it to add, change or remove a server. One you add with `claude mcp add --scope user` on any account is moved into it at the next start. A project's local servers and your answers about its `.mcp.json` servers are synced: a change on one account reaches the others when they next start. `CCA_MCP_SYNC=off` stops cca moving and syncing them; the file is still loaded.
 - the preferences VS Code's Claude in Chrome and memory dialogs save, which Claude Code keeps per account: a change in either dialog is applied to every account.
 
+It also keeps the conversations small. Claude Code resumes a compacted conversation from its last compaction, but keeps everything before it in the file, and screenshots pile up in conversations and their subagents' files; on one machine they came to 30 GB, a single conversation to 2.3 GB, which an editor or the desktop app reads whole to open it. So each session prunes, when it starts, every conversation file that changed since the last look, and its own after it compacts: what came before the last compaction goes, apart from the messages the compaction kept, and every image but the newest five of a file becomes a line saying it was removed. Titles, file history and the request log Claude Code builds on stay. It runs beside the session, which does not wait for it; `CCA_PRUNE=off` stops it. Rewinding to a point before the last compaction is no longer possible once it has run.
+
 Plugins follow the shared `settings.json`: each account installs the plugins it enables when it starts. Each account keeps its own login and its claude.ai connectors.
 
 How it works, and every file it writes: [docs/how-it-works.md](docs/how-it-works.md).
@@ -189,7 +191,7 @@ Your accounts and conversations stay where they are.
 | `/account priority [<weight> [<folder>]]` | In Claude Code: show the project weights, or set this project's (or a folder's). |
 | `/account budget [<points a day> [<folder>]]` | In Claude Code: show every project's budget and spend today, or set this project's (or a folder's); 0 removes it. |
 
-Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_BUDGET=off` stops sessions being parked over budget, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
+Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_BUDGET=off` stops sessions being parked over budget, `CCA_PRUNE=off` stops conversations being pruned to their last compaction and newest images, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
 
 ## Use only your own accounts
 
