@@ -103,6 +103,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     argv: [] as string[][],
     chunks: [] as { stream: 'stdout' | 'stderr'; text: string }[],
     code: 0 as number | null,
+    signal: null as string | null,
     ended: [] as Promise<void>[],
     started: (count: number) =>
       prunes.argv.length >= count ? Promise.resolve() : new Promise<void>(found => { starts.push({ count, found }) }),
@@ -117,7 +118,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     prunes.ended.push(new Promise<void>(resolve => { end = resolve }))
     try {
       for (const chunk of prunes.chunks) yield chunk
-      return { value: { code: prunes.code, signal: null } }
+      return { value: { code: prunes.code, signal: prunes.signal } }
     } finally {
       end()
     }

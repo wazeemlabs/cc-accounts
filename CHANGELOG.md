@@ -2,6 +2,12 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.12.2 (2026-11-15)
+
+- The copy a tool's result keeps of an image goes with the image. A Read of an image stores it twice, in the message and again in `toolUseResult.file.base64`, which the API never sees; the prune replaced the first and left the second, 273 MB in 1,029 rows after 0.12.1's sweep. Once a row shows none of its images, its copy loses them too (a Read result's `base64` emptied, as Claude Code's own slim mode writes it), and a copy no longer counts among the newest five, which a tool result's own image blocks had made fewer.
+- A transcript looked at while still active is looked at again. The state recorded every transcript it saw, so one seen within its hour of activity and never changed after kept its request log for good; it now records a transcript only once it was idle when looked at.
+- A prune stopped by SIGTERM, as a reload of the plugin stops it, goes to the debug log instead of being reported as a failure, and the state file's temporary copy is removed if writing it fails.
+
 ## 0.12.1 (2026-11-15)
 
 - A conversation is idle by its newest row's own time, not by the file's. 0.12.0 judged idleness by the file's mtime, and the first sweep had just rewritten 203 files, so 1.2 GB of request log in conversations idle for days counted as active and stayed. An idle conversation is also rewritten for a saving of 64 KB, not 1 MB: it is rewritten once and the state then passes it by, and the 1 MB floor had left 300 files and 117 MB alone. The 1 MB floor still holds for a conversation active within the hour.

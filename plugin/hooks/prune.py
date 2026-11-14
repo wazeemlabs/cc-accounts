@@ -20,7 +20,10 @@ reads whole when it opens the conversation. So this:
     builds on;
   - replaces every image but the newest KEEP_IMAGES of a transcript with a
     line saying it was removed, in the conversation's rows, never in the
-    request log, whose blobs are named by their hash;
+    request log, whose blobs are named by their hash; a row's toolUseResult,
+    the tool's own copy of what it returned, loses its images with the
+    row's last one (a Read result's base64 emptied, as Claude Code's own
+    slim mode leaves it), and does not count among the newest;
   - keeps every other row (titles, file history) as it was.
 
   prune.py --projects DIR --lock FILE --state FILE --session ID
@@ -29,7 +32,7 @@ reads whole when it opens the conversation. So this:
 --session prunes that conversation's transcripts (its own and its
 subagents'); --all every transcript of at least --min-bytes (by default
 MIN_IDLE_SAVING, below which none can save enough) that changed since the
-state file last saw it under these rules. One line is printed per transcript shrunk.
+state file last saw it, idle, under these rules. One line is printed per transcript shrunk.
 A transcript is replaced atomically, and rows Claude Code appends meanwhile
 are carried over, so a live session's file can be pruned. One prune runs at
 a time on the machine, under the lock.
@@ -42,6 +45,7 @@ import os
 import signal
 import sys
 import time
+from collections import namedtuple
 from datetime import datetime
 
 # The rows of the conversation itself.
@@ -60,12 +64,12 @@ MIN_IDLE_SAVING = 64_000
 IDLE_SECONDS = 3600
 # The rules the state file was written under: a state of other rules looks
 # at every transcript again.
-STATE_VERSION = 3
+STATE_VERSION = 4
 CHUNK = 1 << 20
 
 
 class Row:
-    __slots__ = ('offset', 'length', 'kind', 'uuid', 'parent', 'boundary', 'images',
+    __slots__ = ('offset', 'length', 'kind', 'uuid', 'parent', 'boundary', 'images', 'copies',
                  'source', 'keep', 'names', 'name', 'fork', 'at')
 
     def __init__(self, offset, length):
@@ -76,8 +80,10 @@ class Row:
         self.parent = None
         # The compaction's metadata, on a main-loop compact boundary only.
         self.boundary = None
-        # Base64 images in a conversation row.
+        # Base64 images in a conversation row, and whether its toolUseResult
+        # holds a copy of one.
         self.images = 0
+        self.copies = False
         # An api-request: its query source, how many messages of the request
         # before it it starts with, and the blob and shape hashes it names.
         self.source = None
@@ -115,6 +121,12 @@ def count_images(value):
     if isinstance(value, list):
         return sum(count_images(item) for item in value)
     return 0
+
+
+def is_read_copy(value):
+    """A Read tool's toolUseResult for an image, still holding its data."""
+    return (isinstance(value, dict) and value.get('type') == 'image' and isinstance(value.get('file'), dict)
+            and isinstance(value['file'].get('base64'), str) and value['file']['base64'] != '')
 
 
 def without_images(value, budget):
@@ -158,7 +170,9 @@ def row_of(offset, line):
         metadata = data.get('compactMetadata')
         row.boundary = metadata if isinstance(metadata, dict) else {}
     if row.kind in CONVERSATION:
-        row.images = count_images(data)
+        copy = data.get('toolUseResult')
+        row.images = count_images({key: item for key, item in data.items() if key != 'toolUseResult'})
+        row.copies = is_read_copy(copy) or count_images(copy) > 0
     elif row.kind == 'api-request':
         row.source = text('querySource')
         row.keep = data.get('keep') if isinstance(data.get('keep'), int) else 0
@@ -268,20 +282,34 @@ def forks_of(path):
     return frozenset(found)
 
 
+def without_copy(copy):
+    """A toolUseResult without its images."""
+    if is_read_copy(copy):
+        return {**copy, 'file': {**copy['file'], 'base64': ''}}
+    return without_images(copy, [float('inf')])
+
+
 def slimmed(rows, drop, source):
     """The kept conversation rows that carry an image older than the newest
-    KEEP_IMAGES, rewritten without those: index to the new line."""
-    kept = [index for index, row in enumerate(rows) if row.images and index not in drop]
+    KEEP_IMAGES, or a toolUseResult copy of an image the row no longer
+    shows, rewritten without those: index to the new line."""
+    kept = [index for index, row in enumerate(rows) if (row.images or row.copies) and index not in drop]
     older = sum(rows[index].images for index in kept) - KEEP_IMAGES
     lines = {}
     for index in kept:
-        if older <= 0:
-            break
         row = rows[index]
+        replaced = min(max(older, 0), row.images)
+        older -= replaced
+        if replaced == 0 and not (row.copies and row.images == 0):
+            continue
         source.seek(row.offset)
-        budget = [min(older, row.images)]
-        older -= budget[0]
-        value = without_images(json.loads(source.read(row.length)), budget)
+        value = json.loads(source.read(row.length))
+        # The budget is the message's: the copy, wherever the row puts it, is not counted.
+        budget = [replaced]
+        value = {key: item if key == 'toolUseResult' else without_images(item, budget) for key, item in value.items()}
+        if row.copies and replaced == row.images:
+            # The message shows none of its images now: the copy goes too.
+            value['toolUseResult'] = without_copy(value['toolUseResult'])
         # Escaped to ASCII: a lone surrogate, which JSON allows, has no UTF-8 form.
         lines[index] = (json.dumps(value, separators=(',', ':')) + '\n').encode()
     return lines
@@ -297,11 +325,15 @@ def copy_tail(source, out, offset):
         offset += len(chunk)
 
 
+# What a prune found: whether the transcript was idle, and its (bytes
+# before, bytes after), or None when there was not enough to drop.
+Outcome = namedtuple('Outcome', 'idle sizes')
+
+
 def prune(path, now=None):
-    """Shrinks the transcript at `path`; (bytes before, bytes after), or
-    None when there is not enough to drop. `now`, the time in seconds, says
-    whether it has been idle since its newest row, or since the file last
-    changed when no row says when it was written."""
+    """Shrinks the transcript at `path`, as an Outcome. `now`, the time in
+    seconds, says whether it has been idle since its newest row, or since
+    the file last changed when no row says when it was written."""
     forked = forks_of(path)
     with open(path, 'rb') as source:
         status = os.fstat(source.fileno())
@@ -313,7 +345,7 @@ def prune(path, now=None):
         lines = slimmed(rows, drop, source)
         saving = sum(rows[index].length for index in drop) + sum(rows[index].length - len(line) for index, line in lines.items())
         if saving < (MIN_IDLE_SAVING if idle else MIN_SAVING):
-            return None
+            return Outcome(idle, None)
         temp = f'{path}.cca-prune-{os.getpid()}.tmp'
         try:
             with open(temp, 'wb') as out:
@@ -336,7 +368,7 @@ def prune(path, now=None):
         # it before the replace wrote into the old file, still open here.
         with open(path, 'ab') as out:
             copy_tail(source, out, copied)
-    return size, os.stat(path).st_size
+    return Outcome(idle, (size, os.stat(path).st_size))
 
 
 def transcripts(projects, session):
@@ -372,10 +404,15 @@ def read_state(path):
 
 def write_state(path, files):
     temp = f'{path}.{os.getpid()}.tmp'
-    with open(temp, 'w') as handle:
-        json.dump({'version': STATE_VERSION, 'files': files}, handle, sort_keys=True)
-        handle.write('\n')
-    os.replace(temp, path)
+    try:
+        with open(temp, 'w') as handle:
+            json.dump({'version': STATE_VERSION, 'files': files}, handle, sort_keys=True)
+            handle.write('\n')
+        os.replace(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.remove(temp)
+        raise
 
 
 def megabytes(count):
@@ -409,9 +446,11 @@ def main(argv=None):
                     seen[path] = state.get(path, now)
                     continue
                 result = prune(path)
-                if result is not None:
-                    print(f'{path}: {megabytes(result[0])} -> {megabytes(result[1])}', flush=True)
-                seen[path] = stamp(path)
+                if result.sizes is not None:
+                    print(f'{path}: {megabytes(result.sizes[0])} -> {megabytes(result.sizes[1])}', flush=True)
+                # One still active is looked at again: once idle, its request log goes.
+                if result.idle:
+                    seen[path] = stamp(path)
             except FileNotFoundError:
                 # Deleted since the listing.
                 continue

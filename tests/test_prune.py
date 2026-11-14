@@ -44,6 +44,16 @@ def screenshot(uuid, parent, data):
             'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': f't-{uuid}', 'content': [image(data)]}]}}
 
 
+def read_image(uuid, parent, data, shown=True):
+    """A Read tool's result for an image: the image in the message, and a
+    copy in toolUseResult, as Claude Code writes it."""
+    row = screenshot(uuid, parent, data)
+    if not shown:
+        row['message']['content'][0]['content'] = [{'type': 'text', 'text': prune.REMOVED}]
+    row['toolUseResult'] = {'type': 'image', 'file': {'base64': data, 'type': 'image/png', 'originalSize': len(data)}}
+    return row
+
+
 def request(keep, tail, shape='s1'):
     return {'type': 'api-request', 'querySource': 'sdk', 'keep': keep, 'tail': tail, 'shapeHash': shape}
 
@@ -94,7 +104,7 @@ class Compaction(Transcript):
             boundary('c2', preserved=['e']), message('f', 'c2'),
             {'type': 'last-prompt', 'leafUuid': 'f'},
         ])
-        before, after = prune.prune(str(self.path))
+        before, after = prune.prune(str(self.path)).sizes
         self.assertEqual(self.kinds(), ['custom-title', 'file-history-snapshot', 'e', 'c2', 'f', 'last-prompt'])
         self.assertEqual(after, self.path.stat().st_size)
         self.assertGreater(before, after)
@@ -108,7 +118,7 @@ class Compaction(Transcript):
 
     def test_a_subagents_own_compaction_inside_the_conversation_is_not_the_conversations(self):
         self.write([message('a', None, text=BIG), boundary('side', side=True), message('b', 'a')])
-        self.assertIsNone(prune.prune(str(self.path)))
+        self.assertIsNone(prune.prune(str(self.path)).sizes)
         self.assertEqual(self.kinds(), ['a', 'side', 'b'])
 
     def test_keeps_the_request_chain_the_conversation_builds_on_and_the_blobs_and_shapes_it_names(self):
@@ -148,7 +158,7 @@ class Compaction(Transcript):
                     {'type': 'api-request-shape', 'shapeHash': 's1'}, message('b', 'a')])
         later = self.path.stat().st_mtime + prune.IDLE_SECONDS
         # Within the cache's life it stays: there is no compaction to cut at.
-        self.assertIsNone(prune.prune(str(self.path), now=later - 1))
+        self.assertIsNone(prune.prune(str(self.path), now=later - 1).sizes)
         prune.prune(str(self.path), now=later)
         self.assertEqual(self.kinds(), ['a', 'b'])
 
@@ -165,13 +175,13 @@ class Compaction(Transcript):
         stamped = lambda row, at: {**row, 'timestamp': at}
         self.write([stamped(message('a', None), '2026-11-14T10:00:00Z'), blob('h1', BIG), request(0, ['h1']),
                     stamped(message('b', 'a'), '2026-11-14T10:59:00Z')])
-        self.assertIsNone(prune.prune(str(self.path), now=prune.seconds('2026-11-14T11:00:00Z')))
+        self.assertIsNone(prune.prune(str(self.path), now=prune.seconds('2026-11-14T11:00:00Z')).sizes)
 
     def test_an_idle_transcript_is_rewritten_for_a_smaller_saving(self):
         log = blob('h1', 'x' * (prune.MIN_IDLE_SAVING + 1))
         self.write([message('a', None), log, request(0, ['h1'])])
         later = self.path.stat().st_mtime + prune.IDLE_SECONDS
-        self.assertIsNotNone(prune.prune(str(self.path), now=later))
+        self.assertIsNotNone(prune.prune(str(self.path), now=later).sizes)
         self.assertEqual(self.kinds(), ['a'])
 
     def test_a_message_a_fork_started_from_stays_with_its_parents(self):
@@ -190,7 +200,7 @@ class Compaction(Transcript):
 
     def test_without_a_compaction_the_conversation_stays(self):
         self.write([message('a', None, text=BIG), message('b', 'a')])
-        self.assertIsNone(prune.prune(str(self.path)))
+        self.assertIsNone(prune.prune(str(self.path)).sizes)
 
 
 class Images(Transcript):
@@ -226,7 +236,7 @@ class Images(Transcript):
         odd = screenshot('odd', None, data)
         odd['message']['content'].append({'type': 'text', 'text': '\ud83d'})
         self.write([odd] + [screenshot(f'i{n}', None, data) for n in range(7)])
-        self.assertIsNotNone(prune.prune(str(self.path)))
+        self.assertIsNotNone(prune.prune(str(self.path)).sizes)
         self.assertEqual(self.rows()[0]['message']['content'][1]['text'], '\ud83d')
         self.assertEqual(self.rows()[0]['message']['content'][0]['content'][0]['text'], prune.REMOVED)
 
@@ -239,11 +249,51 @@ class Images(Transcript):
         self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in self.rows()[1:]))
 
 
+    def test_a_read_results_copy_of_a_replaced_image_is_emptied_as_claude_code_slims_it(self):
+        data = 'A' * 600_000
+        self.write([read_image(f'i{n}', None, data) for n in range(8)])
+        prune.prune(str(self.path))
+        rows = self.rows()
+        self.assertEqual([row['toolUseResult']['file']['base64'] for row in rows[:3]], [''] * 3)
+        self.assertEqual([row['toolUseResult']['file']['base64'] for row in rows[3:]], [data] * 5)
+        self.assertEqual(rows[0]['toolUseResult']['file']['originalSize'], len(data))
+        self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in rows[3:]))
+
+    def test_a_copy_written_before_the_message_takes_none_of_the_messages_budget(self):
+        data = 'A' * 600_000
+        self.write([{'toolUseResult': [image(data)], **screenshot(f'i{n}', None, data)} for n in range(6)])
+        prune.prune(str(self.path))
+        rows = self.rows()
+        self.assertEqual(rows[0]['message']['content'][0]['content'][0], {'type': 'text', 'text': prune.REMOVED})
+        self.assertEqual(rows[0]['toolUseResult'], [{'type': 'text', 'text': prune.REMOVED}])
+        self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in rows[1:]))
+
+    def test_a_copy_an_earlier_prune_left_is_emptied_and_does_not_count_among_the_newest(self):
+        data = 'A' * 600_000
+        self.write([read_image('old', None, BIG, shown=False)] + [read_image(f'i{n}', None, data) for n in range(5)])
+        self.assertIsNotNone(prune.prune(str(self.path)).sizes)
+        rows = self.rows()
+        self.assertEqual(rows[0]['toolUseResult']['file']['base64'], '')
+        self.assertEqual([row['toolUseResult']['file']['base64'] for row in rows[1:]], [data] * 5)
+
+    def test_a_tool_results_own_image_blocks_count_with_its_message_and_go_with_it(self):
+        data = 'A' * 600_000
+        rows = [screenshot(f'i{n}', None, data) for n in range(6)]
+        for row in rows:
+            row['toolUseResult'] = [image(data)]
+        self.write(rows)
+        prune.prune(str(self.path))
+        rows = self.rows()
+        self.assertEqual(rows[0]['toolUseResult'], [{'type': 'text', 'text': prune.REMOVED}])
+        self.assertTrue(all(prune.is_image(row['toolUseResult'][0]) for row in rows[1:]))
+        self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in rows[1:]))
+
+
 class Rewrite(Transcript):
     def test_a_saving_below_the_floor_leaves_the_file_as_it_was(self):
         self.write([message('a', None), boundary('k'), message('b', 'k')])
         before = (self.path.read_bytes(), self.path.stat().st_mtime_ns)
-        self.assertIsNone(prune.prune(str(self.path)))
+        self.assertIsNone(prune.prune(str(self.path)).sizes)
         self.assertEqual((self.path.read_bytes(), self.path.stat().st_mtime_ns), before)
 
     def test_keeps_the_files_mode(self):
@@ -312,6 +362,9 @@ class Command(Transcript):
         small = self.write([message('a', None), boundary('k')], self.folder / 'small.jsonl')
         subagent = self.write([screenshot(f'i{n}', None, 'A' * 600_000) for n in range(9)],
                               self.folder / SESSION / 'subagents' / 'agent-a1.jsonl')
+        # Idle: an active transcript is looked at again until it is.
+        for path in (self.path, small, subagent):
+            os.utime(path, (0, 0))
         done = self.cli('--all', '--min-bytes', '100')
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(sorted(line.split(':')[0] for line in done.stdout.splitlines()), sorted([str(self.path), str(subagent)]))
@@ -320,6 +373,21 @@ class Command(Transcript):
         self.assertEqual(set(state['files']), {str(self.path), str(small), str(subagent)})
         again = self.cli('--all', '--min-bytes', '100')
         self.assertEqual((again.returncode, again.stdout), (0, ''))
+
+
+    def test_all_looks_again_at_a_transcript_it_last_saw_active(self):
+        stamped = lambda row: {**row, 'timestamp': '2026-11-14T10:00:00Z'}
+        self.write([stamped(message('a', None)), stamped(blob('h1', BIG)), stamped(request(0, ['h1']))])
+        written = prune.seconds('2026-11-14T10:00:00Z')
+        argv = ['--projects', str(self.projects), '--lock', str(self.projects.parent / 'prune.lock'),
+                '--state', str(self.projects.parent / 'state.json'), '--all']
+        with mock.patch.object(prune.time, 'time', return_value=written + 60):
+            self.assertEqual(prune.main(argv), 0)
+        self.assertEqual(len(self.rows()), 3)
+        # Unchanged since, and now idle: its request log goes.
+        with mock.patch.object(prune.time, 'time', return_value=written + prune.IDLE_SECONDS):
+            self.assertEqual(prune.main(argv), 0)
+        self.assertEqual(self.kinds(), ['a'])
 
     def test_all_looks_again_at_every_transcript_after_the_rules_change(self):
         self.write([message('a', None, text=BIG), boundary('k')])

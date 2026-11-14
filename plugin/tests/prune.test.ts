@@ -85,6 +85,17 @@ describe('transcripts are pruned', () => {
     expect(w.logs.at(-1)).toBe('cc-accounts: could not prune transcripts (exit 2).')
   })
 
+  for (const [how, code, signal] of [['its handler exits 143', 143, null], ['it dies of the signal', null, 'SIGTERM']] as const) {
+    test(`a prune stopped by SIGTERM, as a reload of the plugin stops it, is no failure when ${how}: the debug log says so`, async ($, on) => {
+      const w = world(on, SUPERVISED)
+      w.prunes.code = code
+      w.prunes.signal = signal
+      await $.session.start(START)
+      await w.logged(line => line === 'cc-accounts: a transcript prune was stopped; the next session start carries on.')
+      expect(w.logs.some(line => line.includes('could not prune'))).toBe(false)
+    })
+  }
+
   test('CCA_PRUNE=off prunes nothing', async ($, on) => {
     const w = world(on, { ...SUPERVISED, CCA_PRUNE: 'off' })
     on('session.compact', async (_$, e) => ({ messages: e.messages }))

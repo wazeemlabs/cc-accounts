@@ -48,7 +48,11 @@ export async function prune($: EngineInterface, ctx: Context, target: PruneTarge
     }
     const { code, signal } = await child.result
     if (shrunk > 0) $.ui.log(`cc-accounts: pruned ${shrunk} transcript${shrunk === 1 ? '' : 's'} to save space; the debug log lists them.`)
-    if (code !== 0) {
+    // Ended by SIGTERM, as a reload of the plugin ends it: the transcript it
+    // worked on stays whole, and the next sweep finds what it left.
+    if (code === 143 || signal === 'SIGTERM') {
+      $.ui.log('cc-accounts: a transcript prune was stopped; the next session start carries on.', { to: 'debug' })
+    } else if (code !== 0) {
       const why = errors.trim() || (signal === null ? `exit ${code}` : `ended by ${signal}`)
       $.ui.log(`cc-accounts: could not prune transcripts (${why}).`)
     }
