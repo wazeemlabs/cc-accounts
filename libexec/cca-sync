@@ -296,7 +296,9 @@ def write_config(path, config):
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(json.dumps(config, indent=2, ensure_ascii=False))
+            # Escaped to ASCII, as JavaScript reads it back: a string Claude
+            # Code cut mid-emoji holds a lone surrogate, which has no UTF-8 form.
+            f.write(json.dumps(config, indent=2, ensure_ascii=True))
             f.flush()
             os.fsync(f.fileno())
         os.chmod(temp, mode)
@@ -329,7 +331,7 @@ def save_servers(path, servers):
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(json.dumps({'mcpServers': servers}, indent=2, ensure_ascii=False) + '\n')
+            f.write(json.dumps({'mcpServers': servers}, indent=2, ensure_ascii=True) + '\n')
             f.flush()
             os.fsync(f.fileno())
         os.chmod(temp, mode)

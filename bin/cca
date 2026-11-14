@@ -200,6 +200,13 @@ apply() {
     CLAUDE_CODE_ACCOUNT_UUID CLAUDE_CODE_USER_EMAIL CLAUDE_CODE_ORGANIZATION_UUID \
     CLAUDE_CODE_RATE_LIMIT_TIER CLAUDE_CODE_SUBSCRIPTION_TYPE \
     CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH
+  # Claude Code keeps an inherited entrypoint, so such a claude also ran as a
+  # desktop session (the session list, desktop-only limits); Claude Code drops
+  # the app's entrypoints from the sessions it starts itself. The editor's,
+  # which cca-stream's child inherits, stays.
+  case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+    claude-desktop|claude-desktop-3p) unset CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_DESKTOP_APP_VERSION ;;
+  esac
   # Claude Code lets a memory write through by comparing the file's real path
   # with the memory folder's path as configured, and every account reaches
   # the conversations (where memory lives) through a link to the shared

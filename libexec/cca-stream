@@ -98,17 +98,24 @@ def read_lines(fd):
     """The lines read from `fd`, the last one even without a newline. Read
     with os.read, not a buffered file: a thread blocked in a buffered read
     holds its lock, and the interpreter aborts at exit when it finds it held."""
-    pending = b''
+    # Only the new chunk is searched for a newline, and a line is copied once,
+    # when it is whole: a 50 MB message (a pasted image) took 9 s when every
+    # chunk copied and split all that came before it.
+    pending = bytearray()
     while True:
         chunk = os.read(fd, 65536)
         if chunk == b'':
             break
-        pending += chunk
-        *lines, pending = pending.split(b'\n')
-        for line in lines:
+        end = chunk.rfind(b'\n')
+        if end == -1:
+            pending += chunk
+            continue
+        pending += chunk[:end + 1]
+        for line in bytes(pending).split(b'\n')[:-1]:
             yield line + b'\n'
+        pending = bytearray(chunk[end + 1:])
     if pending:
-        yield pending
+        yield bytes(pending)
 
 
 class Supervisor:
@@ -173,6 +180,7 @@ class Supervisor:
     def pump_stdin(self):
         for line in read_lines(sys.stdin.fileno()):
             self.open.from_panel(line)
+            self.unread.from_panel(line)
             with self.lock:
                 self.setup.note(line)
                 if self.holding():
@@ -197,6 +205,7 @@ class Supervisor:
                 if child is not self.output_child:
                     continue
                 self.unread.echoed(line)
+                self.unread.from_child(line)
                 self.open.from_child(line)
                 self.out.write(line)
                 self.out.flush()
@@ -261,14 +270,11 @@ class Supervisor:
         signal.signal(signal.SIGUSR1, self.release)
         self.remove_switch()
         child = self.start(self.args)
+        reader = self.read_from(child)
         self.attach(child, [])
         threading.Thread(target=self.pump_stdin, daemon=True).start()
         threading.Thread(target=self.pump_releases, daemon=True).start()
         while True:
-            with self.out_lock:
-                self.output_child = child
-            reader = threading.Thread(target=self.pump_stdout, args=(child,), daemon=True)
-            reader.start()
             status = child.wait()
             # A process the child left behind may hold its stdout open; what
             # it prints after the child's exit is not worth hanging for, and
@@ -293,7 +299,12 @@ class Supervisor:
             # plugin's follow-up, then the messages the old child never took,
             # ahead of what the panel sent meanwhile.
             unanswered, again = self.settle()
-            before = [*self.setup.replay(unanswered), *again]
+            # Read before anything is written to it: a child that answers as
+            # it reads would otherwise fill its output pipe and stop reading,
+            # with this blocked writing to it. After settle(), so the notes
+            # that close what the old child left open reach the panel first.
+            reader = self.read_from(child)
+            before = [*self.setup.replay(unanswered, self.held_ids()), *again]
             if follow_up:
                 before.append(protocol.user_message(follow_up, conversation))
             before.extend(self.unread.take())
@@ -301,6 +312,21 @@ class Supervisor:
             # Asked to stop while there was no child to pass it to.
             if self.stopping:
                 child.terminate()
+
+    def read_from(self, child):
+        """Passes `child`'s output to the panel from now on."""
+        with self.out_lock:
+            self.output_child = child
+        reader = threading.Thread(target=self.pump_stdout, args=(child,), daemon=True)
+        reader.start()
+        return reader
+
+    def held_ids(self):
+        """The ids of the panel's requests held for the new child, which reach
+        it under their own id and are not replayed as well."""
+        with self.lock:
+            return {found[1] for found in map(protocol.parse_control, self.held)
+                    if found is not None and found[0] == 'control_request'}
 
     def remove_switch(self):
         try:

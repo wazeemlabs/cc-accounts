@@ -232,9 +232,13 @@ check "an inherited CLAUDE_ACCOUNT (claude run inside a session) keeps that acco
 setup
 CLAUDE_CODE_OAUTH_TOKEN=host-token CLAUDE_CODE_ACCOUNT_UUID=host-uuid CLAUDE_CODE_USER_EMAIL=host@example.com \
   CLAUDE_CODE_ENTRYPOINT=claude-desktop "$CCA" 2 -p x
-check "a run inside a desktop session drops the app's login, so it runs on the account cca picked" \
-  "dir=$HOME/.claude-two account=2 args=-p x|token=unset uuid=unset email=unset entry=claude-desktop" \
+check "a run inside a desktop session drops the app's login and entrypoint, so it runs as a session of its own on the account cca picked" \
+  "dir=$HOME/.claude-two account=2 args=-p x|token=unset uuid=unset email=unset entry=unset" \
   "$(cat "$LOG")|$(cat "$LOG.login")"
+
+setup
+CLAUDE_CODE_ENTRYPOINT=claude-vscode "$CCA" 2 -p x
+check "the editor's entrypoint is kept" "entry=claude-vscode" "$(cut -d' ' -f4 "$LOG.login")"
 
 setup
 rm "$CCA_ROOT/accounts.tsv"

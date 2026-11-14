@@ -105,6 +105,17 @@ class Trust(Accounts):
         self.assertNotIn('/b', config['projects'])
         self.assertEqual((config['numStartups'], config['oauthAccount']), (7, {'emailAddress': 'b@example.com'}))
 
+    def test_a_config_holding_a_lone_surrogate_escape_is_written_back_as_it_was(self):
+        # Claude Code saves a string cut mid-emoji as "\ud83d", which has no UTF-8 form.
+        self.write(self.home, lastPrompt='hi \ud83d')
+        self.write(self.a, {'/a': {'hasTrustDialogAccepted': True}})
+        self.write(self.b, lastPrompt='\ud83d end')
+        self.sync(self.b)
+        self.assertEqual(self.read(self.b)['lastPrompt'], '\ud83d end')
+        self.assertEqual(self.read(self.home)['lastPrompt'], 'hi \ud83d')
+        self.assertIs(self.read(self.home)['projects']['/a']['hasTrustDialogAccepted'], True)
+        self.assertTrue(self.state.exists())
+
     def test_the_home_config_keeps_the_union_too(self):
         self.write(self.home)
         self.write(self.a, {'/a': {'hasTrustDialogAccepted': True}})

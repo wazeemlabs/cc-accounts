@@ -99,6 +99,24 @@ class Unread:
             with self.lock:
                 self.lines.pop(found, None)
 
+    def from_panel(self, line):
+        """The panel withdrew a queued message (cancel_async_message): never
+        echoed, it is not one to send a new child."""
+        found = parse_control(line)
+        if found is not None and found[0] == 'control_request' and found[2].get('subtype') == 'cancel_async_message':
+            self.forget(found[2].get('message_uuid') if isinstance(found[2].get('message_uuid'), str) else None)
+
+    def from_child(self, line):
+        """An interrupt that also cancelled queued messages lists them in its
+        answer."""
+        found = parse_control(line)
+        if found is None or found[0] != 'control_response' or not isinstance(found[2].get('response'), dict):
+            return
+        cancelled = found[2]['response'].get('cancelled')
+        if isinstance(cancelled, list):
+            for message in cancelled:
+                self.forget(message if isinstance(message, str) else None)
+
     def take(self):
         """The unread lines, in the order sent, forgotten here."""
         with self.lock:
@@ -127,7 +145,7 @@ class Setup:
     def holds(self, request_id):
         return any(held == request_id for held, _request in self.requests.values())
 
-    def replay(self, unanswered=frozenset()):
+    def replay(self, unanswered=frozenset(), held=frozenset()):
         """The recorded requests as lines, initialize first: under a fresh id,
         whose answer is dropped, or under the panel's own when the old child
         never answered it, so the panel gets the new child's answer."""
@@ -135,6 +153,9 @@ class Setup:
         lines = []
         for subtype in order:
             request_id, request = self.requests[subtype]
+            # Held for the new child, it reaches it under its own id.
+            if request_id in held:
+                continue
             if request_id not in unanswered:
                 self.replays += 1
                 request_id = f'{REPLAY_PREFIX}{self.replays}'
