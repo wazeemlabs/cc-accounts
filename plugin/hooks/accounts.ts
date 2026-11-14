@@ -28,6 +28,13 @@ export function parseTable(text: string): Account[] {
     })
 }
 
+// A folder typed in one pair of quotes, as a shell would take it (the README
+// quotes one with spaces), is the folder inside them.
+function unquoted(text: string): string {
+  const quote = text[0]
+  return text.length >= 2 && (quote === '"' || quote === "'") && text.endsWith(quote) ? text.slice(1, -1) : text
+}
+
 export function parseAsk(args: string): Ask {
   const trimmed = args.trim()
   const words = trimmed.split(/\s+/).filter(word => word !== '')
@@ -35,7 +42,7 @@ export function parseAsk(args: string): Ask {
   if (first === undefined) return { kind: 'list' }
   // A folder may hold spaces: everything after the weight is the folder.
   if (first === 'priority' || first === 'budget') {
-    const folder = second === undefined ? undefined : trimmed.slice(trimmed.indexOf(second) + second.length).trim()
+    const folder = second === undefined ? undefined : unquoted(trimmed.slice(trimmed.indexOf(second) + second.length).trim())
     const rest = folder === '' ? undefined : folder
     return first === 'priority' ? { kind: 'priority', weight: second, folder: rest } : { kind: 'budget', points: second, folder: rest }
   }

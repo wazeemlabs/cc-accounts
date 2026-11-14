@@ -49,17 +49,28 @@ type RunningEntry = { pid: number; sessionId: string; cwd: string; name: string;
 // The sessions whose processes still run: Claude Code's session list
 // (shared by every account), and one `ps` for which of their processes run.
 export async function runningSessions($: EngineInterface, ctx: Context): Promise<RunningEntry[]> {
+  return (await sessionList($, ctx)).running
+}
+
+// The running sessions, and whether a running process's entry could not be
+// read: Claude Code rewrites an entry in place, so a read can catch it empty
+// or half written, and that session cannot be told ended.
+export async function sessionList($: EngineInterface, ctx: Context): Promise<{ running: RunningEntry[]; unread: boolean }> {
   const dir = `${ctx.shared}/sessions`
-  if (!(await $.fs.exists(dir))) return []
+  if (!(await $.fs.exists(dir))) return { running: [], unread: false }
   const now = await $.clock.now()
   const entries: RunningEntry[] = []
+  const unreadPids: string[] = []
   for (const entry of await $.fs.list(dir)) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
     let value: unknown
     try {
       value = JSON.parse(await $.fs.read(`${dir}/${entry.name}`))
     } catch {
-      // An entry caught mid-write or gone since the listing: one session fewer counted.
+      // An entry caught mid-write or gone since the listing: one session fewer
+      // counted, and its pid, which names the file, checked below.
+      const pid = /^([0-9]+)\.json$/.exec(entry.name)?.[1]
+      if (pid !== undefined) unreadPids.push(pid)
       continue
     }
     if (isObject(value) && typeof value.pid === 'number' && typeof value.sessionId === 'string') {
@@ -72,10 +83,11 @@ export async function runningSessions($: EngineInterface, ctx: Context): Promise
       })
     }
   }
-  if (entries.length === 0) return []
-  const { stdout } = await run($, ['ps', '-o', 'pid=', '-p', entries.map(entry => entry.pid).join(',')])
+  const pids = [...entries.map(entry => String(entry.pid)), ...unreadPids]
+  if (pids.length === 0) return { running: [], unread: false }
+  const { stdout } = await run($, ['ps', '-o', 'pid=', '-p', pids.join(',')])
   const alive = new Set(stdout.split('\n').map(line => line.trim()).filter(line => line !== ''))
-  return entries.filter(entry => alive.has(String(entry.pid)))
+  return { running: entries.filter(entry => alive.has(String(entry.pid))), unread: unreadPids.some(pid => alive.has(pid)) }
 }
 
 // The live sessions cca recorded, each with the account it runs on.

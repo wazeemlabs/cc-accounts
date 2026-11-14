@@ -230,6 +230,18 @@ describe('budgets', () => {
 const weights = (value: Record<string, number>) => `${JSON.stringify(value)}\n`
 const read = (tool: string) => ({ tool, file_path: '/x' }) as never
 
+describe("a session's record of the day", () => {
+  test('keeps its tokens by the folder they were spent in, and reads the one-folder records earlier versions wrote', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    const file = `${spendDir(ROOT, '1970-01-01')}/${SESSION}.json`
+    w.files.set(file, '{"cwd":"/work","tokens":10}\n')
+    await $.session.start(START)
+    w.where.root = '/other'
+    await turn($, w, [], [], cost('claude-opus-5-5', 1))
+    expect(JSON.parse(w.files.get(file) ?? '{}')).toEqual({ folders: { '/work': 10, '/other': 5 } })
+  })
+})
+
 // This session started in /work (START.cwd); the world's clock starts at 0, the first UTC day.
 describe('a session over its budget is parked between turns', () => {
   test("a turn's cost is added to the session's spend for the day", async ($, on) => {
@@ -237,14 +249,14 @@ describe('a session over its budget is parked between turns', () => {
     await $.session.start(START)
     await turn($, w, [], [], cost('claude-opus-5-5', 1000))
     const file = `${spendDir(ROOT, '1970-01-01')}/${SESSION}.json`
-    expect(w.files.get(file)).toBe('{"cwd":"/work","tokens":5000}\n')
+    expect(w.files.get(file)).toBe('{"folders":{"/work":5000}}\n')
     await turn($, w, [], [], cost('claude-fable-5-1', 100))
-    expect(w.files.get(file)).toBe('{"cwd":"/work","tokens":6000}\n')
+    expect(w.files.get(file)).toBe('{"folders":{"/work":6000}}\n')
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'a1', reason: 'answer', agentId: 'a', usage: cost('claude-opus-5-5', 200) })
-    expect(w.files.get(file)).toBe('{"cwd":"/work","tokens":7000}\n')
+    expect(w.files.get(file)).toBe('{"folders":{"/work":7000}}\n')
     await w.clock.advance(DAY)
     await turn($, w, [], [], cost('claude-opus-5-5', 1))
-    expect(w.files.get(`${spendDir(ROOT, '1970-01-02')}/${SESSION}.json`)).toBe('{"cwd":"/work","tokens":5}\n')
+    expect(w.files.get(`${spendDir(ROOT, '1970-01-02')}/${SESSION}.json`)).toBe('{"folders":{"/work":5}}\n')
   })
 
   test('a reading of the week is added to the day\'s calibration', async ($, on) => {
@@ -279,7 +291,7 @@ describe('a session over its budget is parked between turns', () => {
     const client = (account: string, output: number): string =>
       `${JSON.stringify({ cwd: '/work', account, usage: { 'claude-opus-5-5': { input_tokens: 0, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })}\n`
     w.files.set(calibrationFile(ROOT, '1970-01-01', '1'), '{"last":30,"consumed":10}\n')
-    w.files.set(`${day}/${SESSION}.json`, '{"cwd":"/work","tokens":70000000}\n')
+    w.files.set(`${day}/${SESSION}.json`, '{"folders":{"/work":70000000}}\n')
     // 7 M weighted on account 1, which sessions measured; 50 M on account 2, which nothing measured.
     w.files.set(`${day}/client-1-abc.json`, client('1', 1_400_000))
     w.files.set(`${day}/client-2-abc.json`, client('2', 10_000_000))
@@ -372,7 +384,7 @@ describe('a session over its budget is parked between turns', () => {
     await $.session.start({ ...START, cwd: `${HOME}/.claude/spares/spare-abc123` })
     w.where.root = '/work'
     await turn($, w, [], [], cost('claude-opus-5-5', 400_000))
-    expect(w.files.get(`${spendDir(ROOT, '1970-01-01')}/${SESSION}.json`)).toBe('{"cwd":"/work","tokens":2000000}\n')
+    expect(w.files.get(`${spendDir(ROOT, '1970-01-01')}/${SESSION}.json`)).toBe('{"folders":{"/work":2000000}}\n')
     expect(await $.tool.call(read('Read'))).toEqual({ result: undefined, text: '' })
     expect(w.logs.some(line => line.includes('parked'))).toBe(false)
     // /account budget with no folder names the folder it works in.

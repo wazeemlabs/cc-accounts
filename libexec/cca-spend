@@ -60,10 +60,17 @@ def readable(path):
     except ValueError:
         print(f'cca spend: {path} was not a spend record; starting it again', file=sys.stderr)
         return None
-    if not isinstance(value, dict) or not isinstance(value.get('usage'), dict):
+    if not isinstance(value, dict) or not isinstance(value.get('usage'), dict) or not all(
+            whole_counts(counts) for counts in value['usage'].values()):
         print(f'cca spend: {path} was not a spend record; starting it again', file=sys.stderr)
         return None
     return value
+
+
+def whole_counts(counts):
+    """Whether one model's entry holds a whole, non-negative count of each kind."""
+    return isinstance(counts, dict) and all(
+        type(counts.get(kind)) is int and counts[kind] >= 0 for kind in KINDS)
 
 
 def record(root, account, project, model, counts, at_ms):
@@ -98,7 +105,9 @@ def model_id(text):
 def project_folder(text):
     if not os.path.isabs(text):
         raise argparse.ArgumentTypeError(f'the project is an absolute folder, not {text!r}')
-    return os.path.normpath(text)
+    # normpath keeps a leading `//` (POSIX leaves its meaning to the system),
+    # which would name no folder a session works in.
+    return '/' + os.path.normpath(text).lstrip('/')
 
 
 def main(argv):

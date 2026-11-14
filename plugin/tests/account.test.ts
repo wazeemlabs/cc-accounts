@@ -23,6 +23,9 @@ describe('parsing', () => {
     expect(parseAsk('priority')).toEqual({ kind: 'priority', weight: undefined, folder: undefined })
     expect(parseAsk('priority 3')).toEqual({ kind: 'priority', weight: '3', folder: undefined })
     expect(parseAsk('priority 0.5  ~/Documents/My Project ')).toEqual({ kind: 'priority', weight: '0.5', folder: '~/Documents/My Project' })
+    expect(parseAsk('budget 2 "~/Library/Application Support"')).toEqual({ kind: 'budget', points: '2', folder: '~/Library/Application Support' })
+    expect(parseAsk("priority 2 '/a b'")).toEqual({ kind: 'priority', weight: '2', folder: '/a b' })
+    expect(parseAsk('budget 2 "/a b')).toEqual({ kind: 'budget', points: '2', folder: '"/a b' })
   })
 
   test('names the current account by CLAUDE_ACCOUNT, else by config dir, ~/.claude when unset', () => {

@@ -13,7 +13,7 @@
 import type { EngineInterface } from 'claude-code'
 import { describeError, writeAtomic } from './context'
 import { familyOf } from './failures'
-import { nearestFolder, projectName, readPriorities, weightOf, type Priorities } from './priorities'
+import { nearestFolder, normalizeFolder, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { accountStates, liveSessions, type AccountState, type LiveSession } from './survey'
 import type { Context } from './context'
 import { percentNow, POLICY, type Reading } from './usage'
@@ -112,7 +112,8 @@ export function parseBudgets(text: string): Map<string, number> | undefined {
   const budgets = new Map<string, number>()
   for (const [folder, points] of Object.entries(value)) {
     if (!folder.startsWith('/') || typeof points !== 'number' || !(points > 0 && points <= MAX_BUDGET)) return undefined
-    budgets.set(folder, points)
+    // A key edited by hand (`/work/`) is the folder a session's reads as.
+    budgets.set(normalizeFolder(folder, '')!, points)
   }
   return budgets
 }
@@ -215,8 +216,33 @@ export function parseSpend(text: string): Spend | undefined {
   return { cwd: value.cwd, tokens, account: value.account }
 }
 
-// Adds a turn's cost to this session's record of the day. Only this session
-// writes its file, so there is no one to race.
+// A session's record of the day, by the folder each token was spent in: a
+// session that moves (a /cd, a worktree, the desktop app's move out of its
+// standby folder) took the whole day's spend to its new project when the
+// record held one folder (2026-11-15 review). Reads the one-folder records
+// earlier versions wrote. Undefined for anything else (a client's record).
+export function sessionFolders(text: string): Map<string, number> | undefined {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (!isObject(value)) return undefined
+  if (isObject(value.folders)) {
+    const folders = new Map<string, number>()
+    for (const [folder, tokens] of Object.entries(value.folders)) {
+      if (!folder.startsWith('/') || typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens < 0) return undefined
+      folders.set(folder, tokens)
+    }
+    return folders
+  }
+  return typeof value.cwd === 'string' && typeof value.tokens === 'number' ? new Map([[value.cwd, value.tokens]]) : undefined
+}
+
+// Adds a turn's cost to this session's record of the day, under the folder
+// it works in now. Only this session writes its file, so there is no one to
+// race.
 export async function recordSpend(
   $: EngineInterface,
   root: string,
@@ -226,25 +252,35 @@ export async function recordSpend(
   tokens: number,
 ): Promise<void> {
   const file = `${spendDir(root, dayOf(at))}/${sessionId}.json`
-  const before = (await $.fs.exists(file)) ? parseSpend(await $.fs.read(file)) : undefined
-  await writeAtomic($, file, `${JSON.stringify({ cwd, tokens: (before?.tokens ?? 0) + tokens })}\n`)
+  const folders = ((await $.fs.exists(file)) ? sessionFolders(await $.fs.read(file)) : undefined) ?? new Map<string, number>()
+  folders.set(cwd, (folders.get(cwd) ?? 0) + tokens)
+  await writeAtomic($, file, `${JSON.stringify({ folders: Object.fromEntries(folders) })}\n`)
 }
 
-// Every session's spend on `day`, keyed by session id.
+// Every session's and client's spend on `day`: a session's one entry for
+// each folder it spent in.
 export async function readSpend($: EngineInterface, root: string, day: string): Promise<Map<string, Spend>> {
   const dir = spendDir(root, day)
   const found = new Map<string, Spend>()
   if (!(await $.fs.exists(dir))) return found
   for (const entry of await $.fs.list(dir)) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    let spend: Spend | undefined
+    let text: string
     try {
-      spend = parseSpend(await $.fs.read(`${dir}/${entry.name}`))
+      text = await $.fs.read(`${dir}/${entry.name}`)
     } catch {
-      // Gone since the listing, or caught mid-write: one turn's cost uncounted until the next.
+      // Gone since the listing: one turn's cost uncounted until the next.
       continue
     }
-    if (spend !== undefined) found.set(entry.name.slice(0, -'.json'.length), spend)
+    const id = entry.name.slice(0, -'.json'.length)
+    const folders = sessionFolders(text)
+    if (folders !== undefined) {
+      for (const [cwd, tokens] of folders) found.set(`${id}\t${cwd}`, { cwd, tokens })
+      continue
+    }
+    // A client's record, or one caught mid-write: that turn's cost uncounted until the next.
+    const spend = parseSpend(text)
+    if (spend !== undefined) found.set(id, spend)
   }
   return found
 }
@@ -283,6 +319,9 @@ export function calibrated(before: Calibration | undefined, percent: number, res
   const recordedReset = before.resetsAt === undefined ? NaN : Date.parse(before.resetsAt)
   const readingReset = resetsAt === undefined ? NaN : Date.parse(resetsAt)
   if (readingReset - recordedReset >= DAY_MS) return { last: percent, consumed: before.consumed + percent, ...at }
+  // A reading of the week before, which a session reports after the new
+  // week's first one, says nothing of this week.
+  if (recordedReset - readingReset >= DAY_MS) return before
   const kept = before.resetsAt === undefined ? at : { resetsAt: before.resetsAt }
   if (percent <= before.last) return { last: before.last, consumed: before.consumed, ...kept }
   return { last: percent, consumed: before.consumed + percent - before.last, ...kept }

@@ -15,7 +15,7 @@ import type { EngineInterface } from 'claude-code'
 import { currentPlan, over, readBudgetsInForce, type Plan, type ProjectBudget } from './budgets'
 import { describeError, run, writeAtomic, type Context } from './context'
 import { projectName, readPriorities } from './priorities'
-import { runningSessions } from './survey'
+import { sessionList } from './survey'
 
 export const WAKE_MS = 60_000
 
@@ -86,8 +86,13 @@ export async function wakeParked($: EngineInterface, ctx: Context, now: number):
   const names = (await $.fs.list(dir)).filter(entry => entry.kind === 'file' && !entry.name.endsWith('.tmp')).map(entry => entry.name)
   if (names.length === 0) return
   const me = await $.session.id()
-  const running = new Set((await runningSessions($, ctx)).map(session => session.sessionId))
+  const list = await sessionList($, ctx)
+  const running = new Set(list.running.map(session => session.sessionId))
   const overrun = await overrunsNow($, ctx, now)
+  // One session per project each pass: each woken one runs a whole turn
+  // unchecked, so a sliver of room woke all of a project's at once. The
+  // next check, a minute on or at any session's turn end, wakes another.
+  const woken = new Set<string>()
   for (const sessionId of names) {
     const file = parkedFile(ctx.root, sessionId)
     let text: string
@@ -98,7 +103,8 @@ export async function wakeParked($: EngineInterface, ctx: Context, now: number):
       continue
     }
     if (sessionId !== me && !running.has(sessionId)) {
-      await take($, file)
+      // Ended, unless a running session's entry could not be read just now.
+      if (!list.unread) await take($, file)
       continue
     }
     const folder = folderOf(text)
@@ -106,7 +112,8 @@ export async function wakeParked($: EngineInterface, ctx: Context, now: number):
       if (await take($, file)) $.ui.log(`cc-accounts: ${file} is not a parked session's record; it was removed.`)
       continue
     }
-    if (overrun(folder) !== undefined || !(await take($, file))) continue
+    if (woken.has(folder) || overrun(folder) !== undefined || !(await take($, file))) continue
+    woken.add(folder)
     const message = wakeText(folder)
     if (sessionId === me) {
       // A turn of its own once this session is idle, submitted from a timer:

@@ -189,7 +189,8 @@ export const register: Register = on => {
     // A subagent's turns cost the account too, and count against the budget.
     if (e.agentId !== undefined) {
       const ctx = await context($)
-      if (ctx !== undefined && e.usage !== undefined) {
+      // A session on a login cca does not hold spends no account's points.
+      if (ctx?.current !== undefined && e.usage !== undefined) {
         await recordSpend($, ctx.root, await $.session.id(), await $.session.root(), await $.clock.now(), weightedTokens(e.usage))
       }
       return result
@@ -209,10 +210,15 @@ export const register: Register = on => {
     if (ctx !== undefined) {
       try {
         const now = await $.clock.now()
-        if (e.usage !== undefined) {
-          await recordSpend($, ctx.root, await $.session.id(), await $.session.root(), now, weightedTokens(e.usage))
+        // A session on a login cca does not hold spends no account's points:
+        // counted, its tokens would have no points beside them in the
+        // calibration, and it would be parked as a project with no share.
+        if (ctx.current !== undefined) {
+          if (e.usage !== undefined) {
+            await recordSpend($, ctx.root, await $.session.id(), await $.session.root(), now, weightedTokens(e.usage))
+          }
+          await park($, ctx, parked, now)
         }
-        await park($, ctx, parked, now)
         await wakeParked($, ctx, now)
       } catch (error) {
         // Reported; the turn's cost is uncounted and the session goes on unparked until the next turn's end.

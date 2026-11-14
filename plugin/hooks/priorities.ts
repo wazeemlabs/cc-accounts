@@ -58,7 +58,8 @@ export function parsePriorities(text: string): Map<string, number> | undefined {
   const priorities = new Map<string, number>()
   for (const [folder, weight] of Object.entries(value)) {
     if (!folder.startsWith('/') || typeof weight !== 'number' || !(weight > 0 && weight <= MAX_WEIGHT)) return undefined
-    priorities.set(folder, weight)
+    // A key edited by hand (`/work/`) is the folder a session's reads as.
+    priorities.set(normalizeFolder(folder, '')!, weight)
   }
   return priorities
 }

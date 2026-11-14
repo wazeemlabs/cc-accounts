@@ -435,6 +435,19 @@ check "spend keeps a model it does not know, for the plugin to weigh as it weigh
   "0 7" "$status $(spend_record 1 /work | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["usage"]["some-new-model"]["input_tokens"])')"
 
 setup
+"$CCA" spend claude-opus-5-5 3 0 0 0 --project //work --account 1
+check "spend files a project written with a doubled leading slash under the folder it names" "3" \
+  "$(spend_record 1 /work | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["usage"]["claude-opus-5-5"]["input_tokens"])')"
+
+setup
+"$CCA" spend claude-opus-5-5 1 0 0 0 --project /work --account 1
+python3 -I -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["usage"]["claude-opus-5-5"]["input_tokens"]="1"; json.dump(d, open(p,"w"))' \
+  "$CCA_ROOT/spend/$(date -u +%F)/client-1-$(printf '%s' /work | shasum -a 256 | cut -c1-12).json"
+"$CCA" spend claude-opus-5-5 4 0 0 0 --project /work --account 1 2>/dev/null; status=$?
+check "spend starts a damaged record again instead of failing every call that day" "0 4" \
+  "$status $(spend_record 1 /work | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["usage"]["claude-opus-5-5"]["input_tokens"])')"
+
+setup
 for _ in $(seq 1 20); do "$CCA" spend claude-opus-5-5 1 0 0 0 --project /work --account 1 & done; wait
 check "spend calls running at once all count" "20" \
   "$(spend_record 1 /work | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["usage"]["claude-opus-5-5"]["input_tokens"])')"
