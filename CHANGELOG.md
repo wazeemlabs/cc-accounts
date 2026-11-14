@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.9.0 (2026-11-15)
+
+- Sessions opened in the Claude desktop app without a folder get an allowance. Each starts in a scratch folder of its own under `~/Library/Application Support/Claude/scratch-workspaces`, so each was a project with no budget, sharing what the budgets leave. Once the budgets set add up to more than the accounts supply, that share is nothing, and on 2026-11-14 such a session was parked from its first turn. Now, while any budget is set, all of them count as one project, that folder, with a default budget of 5 points a day. `/account budget <points> "~/Library/Application Support/Claude/scratch-workspaces"` changes it, and 0 brings the default back. The budgets table marks the row "default for sessions with no folder". With no budget set, nothing is parked, as before.
+
 ## 0.8.2 (2026-11-10)
 
 - A move waiting for a session's background work goes at once when the account then stops a turn. The balancer skipped every turn's end while a switch was pending, so a planned move queued behind background work never became a forced one. On 2026-11-10 a session holding gate waits queued a move off an account, then hit that account's weekly limit, and every message it received ended on the limit while the status line read "moving". Now a stopped turn forces the pending switch to the account it was waiting for, stopping the work and naming it in the follow-up, whether the balancer or the person asked for it. A turn that ends on an error not of the account leaves the move waiting.

@@ -34,9 +34,11 @@ import {
   parkedNow,
   parseBudget,
   projectOf,
-  readBudgets,
+  readBudgetsInForce,
   recordCalibration,
   recordSpend,
+  SCRATCH_BUDGET,
+  scratchRoot,
   setBudget,
   weightedTokens,
   type ProjectBudget,
@@ -256,7 +258,7 @@ export const register: Register = on => {
 
     if (ask.kind === 'budget') {
       if (ask.points === undefined) {
-        const budgets = await readBudgets($, ctx.root)
+        const budgets = await readBudgetsInForce($, ctx)
         if (budgets.size === 0) {
           return { text: 'No budgets set: every project may spend what the accounts have. Set one with /account budget <points a day> [folder].' }
         }
@@ -271,7 +273,9 @@ export const register: Register = on => {
       await setBudget($, ctx.root, folder, points)
       return {
         text: points === 0
-          ? `${projectName(folder)} (${folder}) has no budget of its own: it shares what is left after the budgets set.`
+          ? folder === scratchRoot(ctx.home)
+            ? `Sessions opened without a folder (${folder}) share the default, ${SCRATCH_BUDGET} points a day, again while any budget is set.`
+            : `${projectName(folder)} (${folder}) has no budget of its own: it shares what is left after the budgets set.`
           : `${projectName(folder)} (${folder}) may spend ${points} points a day, and so may the folders inside it that have no budget of their own. ` +
             'Projects with no budget share what the accounts supply beyond the budgets set, by their weights.',
       }

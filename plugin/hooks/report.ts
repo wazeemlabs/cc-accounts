@@ -8,7 +8,7 @@ import { holdsOf } from './failures'
 import { projectName, readPriorities, weightOf, DEFAULT_WEIGHT, type Priorities } from './priorities'
 import { accountStates, liveSessions, type AccountState, type LiveSession } from './survey'
 import { percentNow, POLICY, windowAtLimit, windowName, type Reading } from './usage'
-import { budgetLines, currentPlan, projectOf, readBudgets, type Plan } from './budgets'
+import { budgetLines, currentPlan, projectOf, readBudgetsInForce, type Plan } from './budgets'
 
 export type ReportInput = {
   now: number
@@ -152,7 +152,7 @@ export async function gatherReport(
   const now = await $.clock.now()
   const states = await accountStates($, ctx)
   const priorities = await readPriorities($, ctx.root)
-  const budgets = await readBudgets($, ctx.root)
+  const budgets = await readBudgetsInForce($, ctx)
   return {
     now,
     accounts: await Promise.all(states.map(async state => ({ state, holds: await holdsOf($, ctx.root, state.account.name, now) }))),

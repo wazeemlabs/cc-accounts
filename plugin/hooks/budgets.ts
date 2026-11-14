@@ -44,7 +44,21 @@ export const CALIBRATION_DAYS = 3
 // allowance, so a burst at the start of the day is not parked at once.
 export const BURST = 0.25
 
-export const POLICY_BUDGET = { calibrationDays: CALIBRATION_DAYS, burst: BURST }
+// Points a day the Claude desktop app's folderless sessions share once any
+// budget is set. Each such session starts in a scratch folder of its own, so
+// without this each would be a project with no budget, sharing what the
+// budgets leave, which is nothing once they add up to the supply: such a
+// session was parked from its first turn (2026-11-14). A budget set on the
+// scratch folder replaces it.
+export const SCRATCH_BUDGET = 5
+
+export const POLICY_BUDGET = { calibrationDays: CALIBRATION_DAYS, burst: BURST, scratch: SCRATCH_BUDGET }
+
+// Where the Claude desktop app starts a session opened without a folder: a
+// folder of its own somewhere under this one.
+export function scratchRoot(home: string): string {
+  return `${home}/Library/Application Support/Claude/scratch-workspaces`
+}
 
 export function budgetFile(root: string): string {
   return `${root}/budgets.json`
@@ -124,6 +138,20 @@ export async function readBudgets($: EngineInterface, root: string): Promise<Map
     return new Map()
   }
   return budgets
+}
+
+// The budgets that hold: the file's, and SCRATCH_BUDGET for the scratch
+// folder when any budget is set and none names it. With none set, nothing
+// is parked, folderless sessions included.
+export function budgetsInForce(budgets: Budgets, home: string): Map<string, number> {
+  const found = new Map(budgets)
+  const scratch = scratchRoot(home)
+  if (found.size > 0 && !found.has(scratch)) found.set(scratch, SCRATCH_BUDGET)
+  return found
+}
+
+export async function readBudgetsInForce($: EngineInterface, ctx: Context): Promise<Map<string, number>> {
+  return budgetsInForce(await readBudgets($, ctx.root), ctx.home)
 }
 
 // Sets `folder`'s budget; 0 removes it.
@@ -313,6 +341,8 @@ export type ProjectBudget = {
   // Points a day: set with /account budget, or the project's share of the rest.
   allowance: number
   budgeted: boolean
+  // Budgeted by SCRATCH_BUDGET, not by the file.
+  byDefault: boolean
   spent: number
   // What the project may have spent by now, this far into the day plus the burst.
   allowedNow: number
@@ -342,7 +372,7 @@ export function plan(
   const project = (folder: string): ProjectBudget => {
     const found = projects.get(folder)
     if (found !== undefined) return found
-    const made = { folder, allowance: 0, budgeted: budgets.has(folder), spent: 0, allowedNow: 0, sessions: 0 }
+    const made = { folder, allowance: 0, budgeted: budgets.has(folder), byDefault: false, spent: 0, allowedNow: 0, sessions: 0 }
     projects.set(folder, made)
     return made
   }
@@ -395,7 +425,7 @@ export function budgetLines(found: Plan, current: string | undefined, now: numbe
       pad(projectName(project.folder), 24) + pad(points(project.allowance), 8, true) + pad(points(project.spent), 8, true) +
         pad(points(project.allowedNow), 8, true) + pad(String(project.sessions), 10, true) +
         `   ${[
-          project.budgeted ? 'set' : 'share of the rest',
+          project.byDefault ? 'default for sessions with no folder' : project.budgeted ? 'set' : 'share of the rest',
           project.spent >= project.allowedNow ? 'over: parked' : '',
           project.folder === current ? '← this project' : '',
         ].filter(note => note !== '').join(', ')}`),
@@ -404,7 +434,7 @@ export function budgetLines(found: Plan, current: string | undefined, now: numbe
 
 // The plan as it stands now, read from every file it rests on.
 export async function currentPlan($: EngineInterface, ctx: Context, now: number): Promise<Plan> {
-  const [states, live, spend, budgets, priorities] = await Promise.all([
+  const [states, live, spend, set, priorities] = await Promise.all([
     accountStates($, ctx),
     liveSessions($, ctx),
     readSpend($, ctx.root, dayOf(now)),
@@ -412,7 +442,9 @@ export async function currentPlan($: EngineInterface, ctx: Context, now: number)
     readPriorities($, ctx.root),
   ])
   const perPoint = await tokensPerPoint($, ctx.root, ctx.accounts.map(account => account.name), now)
-  return plan(now, states, live, spend, budgets, priorities, perPoint)
+  const found = plan(now, states, live, spend, budgetsInForce(set, ctx.home), priorities, perPoint)
+  for (const project of found.projects) project.byDefault = project.budgeted && !set.has(project.folder)
+  return found
 }
 
 // Whether this session's project is over its allowance now; undefined when
@@ -421,7 +453,7 @@ export async function currentPlan($: EngineInterface, ctx: Context, now: number)
 // project that has outspent the accounts.
 export async function parkedNow($: EngineInterface, ctx: Context, cwd: string, now: number): Promise<{ project: ProjectBudget; plan: Plan } | undefined> {
   if ((await $.env.get('CCA_BUDGET')) === 'off') return undefined
-  const budgets = await readBudgets($, ctx.root)
+  const budgets = await readBudgetsInForce($, ctx)
   if (budgets.size === 0) return undefined
   const found = await currentPlan($, ctx, now)
   const project = over(found, budgets, await readPriorities($, ctx.root), cwd)

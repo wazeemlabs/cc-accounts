@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   budgetFile,
   budgetLines,
+  budgetsInForce,
   calibrated,
   calibrationFile,
   dailySupplyOf,
@@ -18,13 +19,15 @@ import {
   parseSpend,
   plan,
   projectOf,
+  SCRATCH_BUDGET,
+  scratchRoot,
   spendDir,
   weightedTokens,
   type Spend,
 } from '../hooks/budgets'
 import type { AccountState, LiveSession } from '../hooks/survey'
 import { readingOf } from '../hooks/usage'
-import { BY_SESSION, ROOT, SESSION, START, SUPERVISED, cost, run, saved, session, turn, world } from './world'
+import { BY_SESSION, HOME, ROOT, SESSION, START, SUPERVISED, cost, run, saved, session, turn, world } from './world'
 
 const DAY = 86_400_000
 const NOW = Date.parse('2026-11-07T06:00:00Z')
@@ -174,6 +177,40 @@ describe('budgets', () => {
     expect(over(found, budgets, priorities, '/p/none')).toBe(undefined)
   })
 
+  test('sessions opened without a folder share the scratch default once any budget is set, and a set budget replaces it', () => {
+    const scratch = scratchRoot('/h')
+    expect(scratch).toBe('/h/Library/Application Support/Claude/scratch-workspaces')
+    expect(budgetsInForce(new Map(), '/h')).toEqual(new Map())
+    expect(budgetsInForce(new Map([['/p/studio', 35]]), '/h')).toEqual(new Map([['/p/studio', 35], [scratch, SCRATCH_BUDGET]]))
+    expect(budgetsInForce(new Map([['/p/studio', 35], [scratch, 2]]), '/h')).toEqual(new Map([['/p/studio', 35], [scratch, 2]]))
+  })
+
+  test('folderless sessions keep their allowance when the budgets set take the whole supply', () => {
+    const scratch = scratchRoot('/h')
+    const one = `${scratch}/org/user/scratch-2026-11-14-8f222e`
+    const two = `${scratch}/org/user/scratch-2026-11-15-0a1b2c`
+    // One account supplies about 14 points; 50 are spoken for, so a project with no budget gets nothing.
+    const budgets = budgetsInForce(new Map([['/p/studio', 50]]), '/h')
+    const found = plan(
+      NOW,
+      [account('a', undefined)],
+      [live('1', one), live('2', two), live('3', '/p/misc')],
+      new Map([['1', spent(one, 7e6)], ['2', spent(two, 7e6)]]),
+      budgets,
+      new Map(),
+      DEFAULT_TOKENS_PER_POINT,
+    )
+    const by = Object.fromEntries(found.projects.map(project => [project.folder, project]))
+    expect(projectOf(budgets, new Map(), one)).toBe(scratch)
+    expect(by[scratch]!.allowance).toBe(SCRATCH_BUDGET)
+    expect(by[scratch]!.sessions).toBe(2)
+    expect(cents(by[scratch]!.spent)).toBe(2)
+    // Six hours in, a quarter ahead: 2.5 of the 5 allowed by now.
+    expect(over(found, budgets, new Map(), one)).toBe(undefined)
+    expect(by['/p/misc']!.allowance).toBe(0)
+    expect(over(found, budgets, new Map(), '/p/misc')).toBe(by['/p/misc'])
+  })
+
   test('a parked project is told its figures and when the day turns', () => {
     const budgets = new Map([['/p/legal', 10]])
     const found = plan(NOW, [account('a', undefined)], [live('1', '/p/legal')], new Map([['1', spent('/p/legal', 70e6)]]), budgets, new Map(), DEFAULT_TOKENS_PER_POINT)
@@ -315,6 +352,32 @@ describe('a session over its budget is parked between turns', () => {
     expect(await $.tool.call(read('Read'))).toEqual({ result: undefined, text: '' })
   })
 
+  test('a session opened without a folder runs on its share of the scratch default while the budgets set take the whole supply', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(budgetFile(ROOT), weights({ '/work': 100 }))
+    await $.session.start({ ...START, cwd: `${scratchRoot(HOME)}/org/user/scratch-1970-01-01-abcdef` })
+    // 1 M output tokens on Opus: 5 M weighted, 0.71 points, within the 1.25 of 5 allowed at the day's start.
+    await turn($, w, [], [], cost('claude-opus-5-5', 1_000_000))
+    expect(await $.tool.call(read('Read'))).toEqual({ result: undefined, text: '' })
+    // Another 1 M: 1.43 points, past 1.25, so it is parked like any project.
+    await turn($, w, [], [], cost('claude-opus-5-5', 1_000_000))
+    const refused = await $.tool.call(read('Read'))
+    expect('deny' in refused && refused.deny?.startsWith('cc-accounts: scratch-workspaces has spent 1.4 of the 5 points')).toBe(true)
+  })
+
+  test('/account budget changes the folderless default, and 0 brings it back', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(budgetFile(ROOT), weights({ '/work': 10 }))
+    await $.session.start(START)
+    const scratch = scratchRoot(HOME)
+    expect((await $.command.run(run(`budget 2 ${scratch}`))).text).toContain('scratch-workspaces')
+    expect(w.files.get(budgetFile(ROOT))).toBe(`{\n  "${scratch}": 2,\n  "/work": 10\n}\n`)
+    expect((await $.command.run(run(`budget 0 ${scratch}`))).text).toBe(
+      `Sessions opened without a folder (${scratch}) share the default, 5 points a day, again while any budget is set.`,
+    )
+    expect(w.files.get(budgetFile(ROOT))).toBe('{\n  "/work": 10\n}\n')
+  })
+
   test('/account budget sets, removes and shows budgets', async ($, on) => {
     const w = world(on, SUPERVISED)
     saved(w, '2', 10, 50)
@@ -333,6 +396,7 @@ describe('a session over its budget is parked between turns', () => {
     expect(shown.slice(1)).toEqual([
       'project                    a day   spent  by now  sessions   ',
       'studio                        35       0     8.8         0   set',
+      'scratch-workspaces             5       0     1.3         0   default for sessions with no folder',
       // The two accounts supply about 14 points today, all of it spoken for by studio's budget: nothing is left to share.
       'work                           0       0       0         1   share of the rest, over: parked, ← this project',
     ])
