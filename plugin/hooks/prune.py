@@ -34,8 +34,10 @@ subagents'); --all every transcript of at least --min-bytes (by default
 MIN_IDLE_SAVING, below which none can save enough) that changed since the
 state file last saw it, idle, under these rules. One line is printed per transcript shrunk.
 A transcript is replaced atomically, and rows Claude Code appends meanwhile
-are carried over, so a live session's file can be pruned. One prune runs at
-a time on the machine, under the lock.
+are carried over, so a live session's file can be pruned. One Claude Code
+rewrote meanwhile (its own compaction renames a new file over it; removing a
+row truncates it in place) is left as it is and looked at again next run.
+One prune runs at a time on the machine, under the lock.
 """
 import argparse
 import fcntl
@@ -46,14 +48,14 @@ import signal
 import sys
 import time
 from collections import namedtuple
-from datetime import datetime
 
-# The rows of the conversation itself.
-CONVERSATION = frozenset({'user', 'assistant', 'attachment', 'system', 'progress'})
+# The row model beside this script; tests load this file by its path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from transcript_rows import CONVERSATION, row_of, scan, strings, without_copy, without_images  # noqa: E402
+
 # The newest images a transcript keeps whole, so a resumed session or agent
 # still sees what it looked at last.
 KEEP_IMAGES = 5
-REMOVED = '[image removed by cc-accounts to save space]'
 # Below this saving a transcript is left as it is, so a live one is not
 # rewritten for a few rows; an idle one is rewritten once, and the state
 # then passes it by, so a smaller saving is worth it.
@@ -66,140 +68,6 @@ IDLE_SECONDS = 3600
 # at every transcript again.
 STATE_VERSION = 4
 CHUNK = 1 << 20
-
-
-class Row:
-    __slots__ = ('offset', 'length', 'kind', 'uuid', 'parent', 'boundary', 'images', 'copies',
-                 'source', 'keep', 'names', 'name', 'fork', 'at')
-
-    def __init__(self, offset, length):
-        self.offset = offset
-        self.length = length
-        self.kind = None
-        self.uuid = None
-        self.parent = None
-        # The compaction's metadata, on a main-loop compact boundary only.
-        self.boundary = None
-        # Base64 images in a conversation row, and whether its toolUseResult
-        # holds a copy of one.
-        self.images = 0
-        self.copies = False
-        # An api-request: its query source, how many messages of the request
-        # before it it starts with, and the blob and shape hashes it names.
-        self.source = None
-        self.keep = 0
-        self.names = ()
-        # An api-request-blob's or api-request-shape's hash.
-        self.name = None
-        # A fork-context-ref's parent: (session id, the message it forked from).
-        self.fork = None
-        # When Claude Code wrote the row, in seconds, where it says.
-        self.at = None
-
-
-def strings(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from strings(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from strings(item)
-
-
-def is_image(value):
-    return (isinstance(value, dict) and value.get('type') == 'image' and isinstance(value.get('source'), dict)
-            and value['source'].get('type') == 'base64')
-
-
-def count_images(value):
-    if is_image(value):
-        return 1
-    if isinstance(value, dict):
-        return sum(count_images(item) for item in value.values())
-    if isinstance(value, list):
-        return sum(count_images(item) for item in value)
-    return 0
-
-
-def is_read_copy(value):
-    """A Read tool's toolUseResult for an image, still holding its data."""
-    return (isinstance(value, dict) and value.get('type') == 'image' and isinstance(value.get('file'), dict)
-            and isinstance(value['file'].get('base64'), str) and value['file']['base64'] != '')
-
-
-def without_images(value, budget):
-    """`value` with its first `budget[0]` images replaced, in order."""
-    if budget[0] > 0 and is_image(value):
-        budget[0] -= 1
-        return {'type': 'text', 'text': REMOVED}
-    if isinstance(value, dict):
-        return {key: without_images(item, budget) for key, item in value.items()}
-    if isinstance(value, list):
-        return [without_images(item, budget) for item in value]
-    return value
-
-
-def seconds(stamp):
-    """An ISO 8601 time, as Claude Code writes `timestamp`, in seconds; None
-    when it is not one."""
-    if stamp is None:
-        return None
-    try:
-        return datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
-    except ValueError:
-        return None
-
-
-def row_of(offset, line):
-    row = Row(offset, len(line))
-    try:
-        data = json.loads(line)
-    except ValueError:
-        # Not a row Claude Code reads as one: kept as it is.
-        return row
-    if not isinstance(data, dict):
-        return row
-    text = lambda key: data.get(key) if isinstance(data.get(key), str) else None
-    row.kind = data.get('type')
-    row.at = seconds(text('timestamp'))
-    row.uuid = text('uuid')
-    row.parent = text('parentUuid')
-    if row.kind == 'system' and data.get('subtype') == 'compact_boundary' and not data.get('isSidechain'):
-        metadata = data.get('compactMetadata')
-        row.boundary = metadata if isinstance(metadata, dict) else {}
-    if row.kind in CONVERSATION:
-        copy = data.get('toolUseResult')
-        row.images = count_images({key: item for key, item in data.items() if key != 'toolUseResult'})
-        row.copies = is_read_copy(copy) or count_images(copy) > 0
-    elif row.kind == 'api-request':
-        row.source = text('querySource')
-        row.keep = data.get('keep') if isinstance(data.get('keep'), int) else 0
-        tail = data.get('tail') if isinstance(data.get('tail'), list) else []
-        row.names = frozenset([name for name in tail if isinstance(name, str)] + ([text('shapeHash')] if text('shapeHash') else []))
-    elif row.kind == 'api-request-blob':
-        row.name = text('hash')
-    elif row.kind == 'api-request-shape':
-        row.name = text('shapeHash')
-    elif row.kind == 'fork-context-ref' and text('parentSessionId') and text('parentLastUuid'):
-        row.fork = (text('parentSessionId'), text('parentLastUuid'))
-    return row
-
-
-def scan(source, size):
-    """The rows in the first `size` bytes, up to the last whole line."""
-    rows = []
-    offset = 0
-    source.seek(0)
-    while offset < size:
-        line = source.readline(size - offset)
-        if not line.endswith(b'\n'):
-            # A row still being written: it is carried over with the tail.
-            break
-        rows.append(row_of(offset, line))
-        offset += len(line)
-    return rows, offset
 
 
 def chain_start(rows, requests):
@@ -254,9 +122,21 @@ def dropped(rows, idle=False, forked=frozenset()):
     elif last is not None:
         requests = [index for index, row in enumerate(rows) if row.kind == 'api-request']
         start = chain_start(rows, requests)
-        named = set().union(*(rows[index].names for index in requests if index >= start or index > last))
+        kept = {index for index in requests if index >= start or index > last}
+        # A kept request that starts from messages of another (`keep` > 0)
+        # names it as its `base`, whatever its query source: that one stays,
+        # and the one it starts from.
+        by_id = {rows[index].id: index for index in requests if rows[index].id is not None}
+        waiting = [index for index in kept if rows[index].keep > 0]
+        while waiting:
+            base = by_id.get(rows[waiting.pop()].base)
+            if base is not None and base not in kept:
+                kept.add(base)
+                if rows[base].keep > 0:
+                    waiting.append(base)
+        named = set().union(*(rows[index].names for index in kept))
         for index, row in enumerate(rows[:last]):
-            if (row.kind == 'api-request' and index < start) or (
+            if (row.kind == 'api-request' and index not in kept) or (
                     row.kind in ('api-request-blob', 'api-request-shape') and row.name not in named):
                 drop.add(index)
     return drop
@@ -280,13 +160,6 @@ def forks_of(path):
         except FileNotFoundError:
             continue
     return frozenset(found)
-
-
-def without_copy(copy):
-    """A toolUseResult without its images."""
-    if is_read_copy(copy):
-        return {**copy, 'file': {**copy['file'], 'base64': ''}}
-    return without_images(copy, [float('inf')])
 
 
 def slimmed(rows, drop, source):
@@ -326,8 +199,38 @@ def copy_tail(source, out, offset):
 
 
 # What a prune found: whether the transcript was idle, and its (bytes
-# before, bytes after), or None when there was not enough to drop.
+# before, bytes after), or None when there was not enough to drop or another
+# writer changed the file meanwhile.
 Outcome = namedtuple('Outcome', 'idle sizes')
+
+# Bytes read at three places in the scanned part of a transcript, to tell
+# whether another writer rewrote it in place since.
+SAMPLE = 4096
+
+
+class Changed(Exception):
+    """Another writer changed what the prune read: Claude Code renames its
+    own compacted copy over a transcript (performCompactTranscript), and
+    removes a row by truncating the file in place and writing the rows after
+    it back (performRemoveByUuid). A copy of the old bytes would lose or
+    garble its rows, so the transcript is left as that writer made it."""
+
+
+def samples(fd, size):
+    return [os.pread(fd, SAMPLE, offset) for offset in sorted({0, max(0, size // 2 - SAMPLE // 2), max(0, size - SAMPLE)})]
+
+
+def unchanged(path, source, scanned, read, copied):
+    """Raises Changed unless `path` is still the file the prune opened, at
+    least as long as it copied, with the bytes it scanned where they were."""
+    now = os.stat(path)
+    opened = os.fstat(source.fileno())
+    if (now.st_ino, now.st_dev) != (opened.st_ino, opened.st_dev):
+        raise Changed('another file was renamed over it')
+    if opened.st_size < copied:
+        raise Changed('it was cut short in place')
+    if samples(source.fileno(), scanned) != read:
+        raise Changed('it was rewritten in place')
 
 
 def prune(path, now=None):
@@ -339,6 +242,7 @@ def prune(path, now=None):
         status = os.fstat(source.fileno())
         size = status.st_size
         rows, whole = scan(source, size)
+        read = samples(source.fileno(), whole)
         written = max((row.at for row in rows if row.at is not None), default=status.st_mtime)
         idle = (time.time() if now is None else now) - written >= IDLE_SECONDS
         drop = dropped(rows, idle, forked)
@@ -352,6 +256,8 @@ def prune(path, now=None):
                 source.seek(0)
                 for index, row in enumerate(rows):
                     line = source.read(row.length)
+                    if len(line) != row.length or not line.endswith(b'\n'):
+                        raise Changed('a row it scanned is not there any more')
                     if index not in drop:
                         out.write(lines.get(index, line))
                 # Rows appended since the scan, and a row it found half written.
@@ -359,7 +265,13 @@ def prune(path, now=None):
                 out.flush()
                 os.fsync(out.fileno())
             os.chmod(temp, os.stat(path).st_mode & 0o7777)
+            unchanged(path, source, whole, read, copied)
             os.replace(temp, path)
+        except Changed as change:
+            os.remove(temp)
+            print(f'{path}: left as it is, since {change} while it was being pruned', flush=True)
+            # Not idle as far as the state goes: the next run looks at it again.
+            return Outcome(False, None)
         except BaseException:
             if os.path.exists(temp):
                 os.remove(temp)
@@ -457,6 +369,13 @@ def main(argv=None):
             except (OSError, ValueError) as error:
                 failed = True
                 print(f'cc-accounts: could not prune {path} ({error})', file=sys.stderr, flush=True)
+            except RecursionError:
+                # A row nested deeper than the walks over it recurse: this
+                # transcript stays as it is, and the others are pruned.
+                failed = True
+                print(f'cc-accounts: could not prune {path} (a row is nested too deeply to read)', file=sys.stderr, flush=True)
+                # Told once: it is looked at again only once it changes.
+                seen[path] = now
         state = seen if args.all else {**state, **seen}
         write_state(args.state, state)
     return 1 if failed else 0

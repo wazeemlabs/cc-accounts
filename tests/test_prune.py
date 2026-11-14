@@ -17,6 +17,8 @@ SCRIPT = HERE.parent / 'plugin' / 'hooks' / 'prune.py'
 spec = importlib.util.spec_from_file_location('prune', SCRIPT)
 prune = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prune)
+# The row model prune.py imports from beside itself.
+rows_model = sys.modules['transcript_rows']
 
 SESSION = '0f4a6c1e-1111-4222-8333-944455556666'
 # A conversation row this long makes a drop worth a rewrite on its own.
@@ -49,7 +51,7 @@ def read_image(uuid, parent, data, shown=True):
     copy in toolUseResult, as Claude Code writes it."""
     row = screenshot(uuid, parent, data)
     if not shown:
-        row['message']['content'][0]['content'] = [{'type': 'text', 'text': prune.REMOVED}]
+        row['message']['content'][0]['content'] = [{'type': 'text', 'text': rows_model.REMOVED}]
     row['toolUseResult'] = {'type': 'image', 'file': {'base64': data, 'type': 'image/png', 'originalSize': len(data)}}
     return row
 
@@ -166,7 +168,7 @@ class Compaction(Transcript):
         stamped = lambda row, at: {**row, 'timestamp': at}
         self.write([stamped(message('a', None), '2026-11-14T10:00:00.000Z'), blob('h1', BIG),
                     stamped(request(0, ['h1']), '2026-11-14T10:00:01Z')])
-        newest = prune.seconds('2026-11-14T10:00:01Z')
+        newest = rows_model.seconds('2026-11-14T10:00:01Z')
         # The file was just written, as a prune of it would leave it; its rows are old.
         prune.prune(str(self.path), now=newest + prune.IDLE_SECONDS)
         self.assertEqual(self.kinds(), ['a'])
@@ -175,7 +177,7 @@ class Compaction(Transcript):
         stamped = lambda row, at: {**row, 'timestamp': at}
         self.write([stamped(message('a', None), '2026-11-14T10:00:00Z'), blob('h1', BIG), request(0, ['h1']),
                     stamped(message('b', 'a'), '2026-11-14T10:59:00Z')])
-        self.assertIsNone(prune.prune(str(self.path), now=prune.seconds('2026-11-14T11:00:00Z')).sizes)
+        self.assertIsNone(prune.prune(str(self.path), now=rows_model.seconds('2026-11-14T11:00:00Z')).sizes)
 
     def test_an_idle_transcript_is_rewritten_for_a_smaller_saving(self):
         log = blob('h1', 'x' * (prune.MIN_IDLE_SAVING + 1))
@@ -210,8 +212,8 @@ class Images(Transcript):
         prune.prune(str(self.path))
         rows = self.rows()
         notes = [row['message']['content'][0]['content'][0] for row in rows]
-        self.assertEqual(notes[:3], [{'type': 'text', 'text': prune.REMOVED}] * 3)
-        self.assertTrue(all(prune.is_image(note) for note in notes[3:]))
+        self.assertEqual(notes[:3], [{'type': 'text', 'text': rows_model.REMOVED}] * 3)
+        self.assertTrue(all(rows_model.is_image(note) for note in notes[3:]))
         # The rest of each row is as it was.
         self.assertEqual([row['uuid'] for row in rows], [f'i{n}' for n in range(8)])
         self.assertEqual(rows[0]['message']['content'][0]['tool_use_id'], 't-i0')
@@ -222,7 +224,7 @@ class Images(Transcript):
         self.write([row])
         prune.prune(str(self.path))
         content = self.rows()[0]['message']['content']
-        self.assertEqual([prune.is_image(block) for block in content], [False, False] + [True] * 5)
+        self.assertEqual([rows_model.is_image(block) for block in content], [False, False] + [True] * 5)
 
     def test_never_touches_the_request_logs_blobs_which_are_named_by_their_hash(self):
         data = 'A' * 600_000
@@ -238,7 +240,7 @@ class Images(Transcript):
         self.write([odd] + [screenshot(f'i{n}', None, data) for n in range(7)])
         self.assertIsNotNone(prune.prune(str(self.path)).sizes)
         self.assertEqual(self.rows()[0]['message']['content'][1]['text'], '\ud83d')
-        self.assertEqual(self.rows()[0]['message']['content'][0]['content'][0]['text'], prune.REMOVED)
+        self.assertEqual(self.rows()[0]['message']['content'][0]['content'][0]['text'], rows_model.REMOVED)
 
     def test_a_dropped_row_does_not_count_among_the_newest(self):
         data = 'A' * 600_000
@@ -246,7 +248,7 @@ class Images(Transcript):
                    + [screenshot(f'i{n}', 'k', data) for n in range(5)])
         prune.prune(str(self.path))
         self.assertEqual(self.kinds(), ['k'] + [f'i{n}' for n in range(5)])
-        self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in self.rows()[1:]))
+        self.assertTrue(all(rows_model.is_image(row['message']['content'][0]['content'][0]) for row in self.rows()[1:]))
 
 
     def test_a_read_results_copy_of_a_replaced_image_is_emptied_as_claude_code_slims_it(self):
@@ -257,16 +259,16 @@ class Images(Transcript):
         self.assertEqual([row['toolUseResult']['file']['base64'] for row in rows[:3]], [''] * 3)
         self.assertEqual([row['toolUseResult']['file']['base64'] for row in rows[3:]], [data] * 5)
         self.assertEqual(rows[0]['toolUseResult']['file']['originalSize'], len(data))
-        self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in rows[3:]))
+        self.assertTrue(all(rows_model.is_image(row['message']['content'][0]['content'][0]) for row in rows[3:]))
 
     def test_a_copy_written_before_the_message_takes_none_of_the_messages_budget(self):
         data = 'A' * 600_000
         self.write([{'toolUseResult': [image(data)], **screenshot(f'i{n}', None, data)} for n in range(6)])
         prune.prune(str(self.path))
         rows = self.rows()
-        self.assertEqual(rows[0]['message']['content'][0]['content'][0], {'type': 'text', 'text': prune.REMOVED})
-        self.assertEqual(rows[0]['toolUseResult'], [{'type': 'text', 'text': prune.REMOVED}])
-        self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in rows[1:]))
+        self.assertEqual(rows[0]['message']['content'][0]['content'][0], {'type': 'text', 'text': rows_model.REMOVED})
+        self.assertEqual(rows[0]['toolUseResult'], [{'type': 'text', 'text': rows_model.REMOVED}])
+        self.assertTrue(all(rows_model.is_image(row['message']['content'][0]['content'][0]) for row in rows[1:]))
 
     def test_a_copy_an_earlier_prune_left_is_emptied_and_does_not_count_among_the_newest(self):
         data = 'A' * 600_000
@@ -284,9 +286,9 @@ class Images(Transcript):
         self.write(rows)
         prune.prune(str(self.path))
         rows = self.rows()
-        self.assertEqual(rows[0]['toolUseResult'], [{'type': 'text', 'text': prune.REMOVED}])
-        self.assertTrue(all(prune.is_image(row['toolUseResult'][0]) for row in rows[1:]))
-        self.assertTrue(all(prune.is_image(row['message']['content'][0]['content'][0]) for row in rows[1:]))
+        self.assertEqual(rows[0]['toolUseResult'], [{'type': 'text', 'text': rows_model.REMOVED}])
+        self.assertTrue(all(rows_model.is_image(row['toolUseResult'][0]) for row in rows[1:]))
+        self.assertTrue(all(rows_model.is_image(row['message']['content'][0]['content'][0]) for row in rows[1:]))
 
 
 class Rewrite(Transcript):
@@ -378,7 +380,7 @@ class Command(Transcript):
     def test_all_looks_again_at_a_transcript_it_last_saw_active(self):
         stamped = lambda row: {**row, 'timestamp': '2026-11-14T10:00:00Z'}
         self.write([stamped(message('a', None)), stamped(blob('h1', BIG)), stamped(request(0, ['h1']))])
-        written = prune.seconds('2026-11-14T10:00:00Z')
+        written = rows_model.seconds('2026-11-14T10:00:00Z')
         argv = ['--projects', str(self.projects), '--lock', str(self.projects.parent / 'prune.lock'),
                 '--state', str(self.projects.parent / 'state.json'), '--all']
         with mock.patch.object(prune.time, 'time', return_value=written + 60):
