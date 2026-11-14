@@ -408,7 +408,7 @@ export function parkedText(project: ProjectBudget, found: Plan, now: number): st
   const when = minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`
   return `cc-accounts: ${projectName(project.folder)} has spent ${points(project.spent)} of the ${points(project.allowance)} ` +
     `points its sessions may use today (${points(project.allowedNow)} by now). This session is parked until the ` +
-    `allowance catches up or the UTC day turns in ${when}. Stop here; do not retry.`
+    `allowance catches up or the UTC day turns in ${when}. Stop here; do not retry: this session is told when it may go on.`
 }
 
 // The budgets section of /account usage and /account budget.
@@ -445,17 +445,4 @@ export async function currentPlan($: EngineInterface, ctx: Context, now: number)
   const found = plan(now, states, live, spend, budgetsInForce(set, ctx.home), priorities, perPoint)
   for (const project of found.projects) project.byDefault = project.budgeted && !set.has(project.folder)
   return found
-}
-
-// Whether this session's project is over its allowance now; undefined when
-// budgets are off (CCA_BUDGET=off) or no budget is set, since with none set
-// every project's allowance is the whole supply shared, which parks only a
-// project that has outspent the accounts.
-export async function parkedNow($: EngineInterface, ctx: Context, cwd: string, now: number): Promise<{ project: ProjectBudget; plan: Plan } | undefined> {
-  if ((await $.env.get('CCA_BUDGET')) === 'off') return undefined
-  const budgets = await readBudgetsInForce($, ctx)
-  if (budgets.size === 0) return undefined
-  const found = await currentPlan($, ctx, now)
-  const project = over(found, budgets, await readPriorities($, ctx.root), cwd)
-  return project === undefined ? undefined : { project, plan: found }
 }

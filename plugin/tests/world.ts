@@ -124,6 +124,20 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     }
   })
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
+  // Prompts the plugin submitted to this session, and messages it sent to
+  // others; `undeliverable`: a send reaches nobody.
+  const submitted: string[] = []
+  const sent: { to: string; text: string }[] = []
+  const delivery = { undeliverable: false }
+  on('prompt.submit', async (_$, e) => {
+    submitted.push(e.text)
+    return { text: e.text }
+  })
+  on('session.send', async (_$, e) => {
+    if (delivery.undeliverable) return { isDelivered: false, reason: 'no session by that id is running' }
+    sent.push({ to: e.to, text: e.text })
+    return { isDelivered: true }
+  })
   on('command.run', { command: 'exit' }, async (_$, e) => {
     ran.push(e.command)
     return {}
@@ -164,8 +178,12 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
       return done(0)
     }
     if (e.argv[0] === 'rm') {
-      files.delete(e.argv[2] ?? '')
-      return done(0)
+      // rm -f <path> always succeeds; rm <path> fails when it is gone, as for a second remover.
+      if (e.argv[1] === '-f') {
+        files.delete(e.argv[2] ?? '')
+        return done(0)
+      }
+      return files.delete(e.argv[1] ?? '') ? done(0) : done(1, 'No such file or directory')
     }
     if (e.argv[0] === 'kill' && e.argv[1] === '-USR1') {
       released.push(e.argv[2] ?? '')
@@ -226,7 +244,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   return {
     files, ran, statuses, logs, clock, killed, agents, results, denied, limits, running, writes, released, slow, transcript, settings,
-    folder, failWrites, where, prunes, debug, logged,
+    folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery,
   }
 }
 

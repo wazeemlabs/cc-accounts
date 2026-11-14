@@ -77,9 +77,9 @@ describe('/account usage', () => {
         { state: state('new', undefined, 0, { sized: false }), holds: [] },
       ],
       live: [
-        { sessionId: '1', account: 'cto', cwd: '/p/app', name: 'A' },
-        { sessionId: '2', account: 'cto', cwd: '/p/misc', name: 'B' },
-        { sessionId: '3', account: 'levoro', cwd: '/p/misc/sub', name: 'C' },
+        { sessionId: '1', account: 'cto', cwd: '/p/app', name: 'A', active: true },
+        { sessionId: '2', account: 'cto', cwd: '/p/misc', name: 'B', active: true },
+        { sessionId: '3', account: 'levoro', cwd: '/p/misc/sub', name: 'C', active: true },
       ],
       priorities: new Map([['/p/app', 3]]),
       current: 'cto',

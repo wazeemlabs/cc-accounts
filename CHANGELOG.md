@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.13.0 (2026-11-15)
+
+- A parked session goes on by itself once its project is within its allowance again. A refused session went idle, told to stop, and nothing started it again: it stayed parked after the allowance caught up, the day turned, or a budget was raised, until a person wrote to it. Now a session whose tool call was refused leaves a record in `parked/`, checks every minute, and is told to carry on when its project may spend again; every other session's turn end and `/account budget` or `priority` wake it too, at once for a change made with `/account`, and reach a session whose plugin was reloaded. A session is woken once, whoever notices first. The parked message tells the model it will be told when it may go on.
+
 ## 0.12.2 (2026-11-15)
 
 - The copy a tool's result keeps of an image goes with the image. A Read of an image stores it twice, in the message and again in `toolUseResult.file.base64`, which the API never sees; the prune replaced the first and left the second, 273 MB in 1,029 rows after 0.12.1's sweep. Once a row shows none of its images, its copy loses them too (a Read result's `base64` emptied, as Claude Code's own slim mode writes it), and a copy no longer counts among the newest five, which a tool result's own image blocks had made fewer.

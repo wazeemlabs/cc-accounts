@@ -1,4 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 import { formatList, parseAsk, USAGE } from './accounts'
 import { taskStarted, turnMark } from './background'
 import { balance, noteMeasure, publishStart } from './balance'
@@ -13,6 +13,7 @@ import {
   setPriority,
   weightOf,
 } from './priorities'
+import { forgetRefused, noteRefused, parkedNow, WAKE_MS, wakeParked } from './parking'
 import { prune } from './prune'
 import { formatReport, gatherReport, totals, totalsLine } from './report'
 import { readReading } from './survey'
@@ -32,7 +33,6 @@ import {
   currentPlan,
   MAX_BUDGET,
   parkedText,
-  parkedNow,
   parseBudget,
   projectOf,
   readBudgetsInForce,
@@ -59,9 +59,11 @@ async function startOrDefault($: EngineInterface, ctx: Context, preferred: strin
 
 // This session's project over its day's allowance, decided at each
 // main-loop turn's end and checked again at a parked session's tool calls,
-// so a turn in flight is never cut and a parked session wakes once the
-// allowance catches up.
-type Parked = { project: ProjectBudget | undefined }
+// so a turn in flight is never cut. `refused`: a tool call was refused, so
+// work stopped, and a record and a check every WAKE_MS (`timer`) wake the
+// session once the project is within its allowance (parking.ts); a call
+// that goes through, or a new turn, means it went on and needs no wake.
+type Parked = { project: ProjectBudget | undefined; refused: boolean; timer: Timer | undefined }
 
 async function park(
   $: EngineInterface,
@@ -82,9 +84,41 @@ async function park(
   return found
 }
 
+// The session goes on, woken or by itself: its check stops.
+function stopChecking(parked: Parked): void {
+  parked.timer?.cancel()
+  parked.timer = undefined
+  parked.refused = false
+}
+
+// A parked session's check, every WAKE_MS: whether its project is within
+// its allowance now, then every parked session woken that is, itself too.
+async function check($: EngineInterface, parked: Parked): Promise<void> {
+  try {
+    const ctx = await context($)
+    if (ctx === undefined) return
+    const now = await $.clock.now()
+    if ((await park($, ctx, parked, now)) === undefined) stopChecking(parked)
+    await wakeParked($, ctx, now)
+  } catch (error) {
+    // Reported; the next check tries again.
+    $.ui.log(`cc-accounts: could not check whether this session may go on (${describeError(error)}).`)
+  }
+}
+
+// After /account changes a budget or weight: the sessions it lets go on are woken at once.
+async function wakeAfterChange($: EngineInterface, ctx: Context): Promise<string> {
+  try {
+    await wakeParked($, ctx, await $.clock.now())
+    return ''
+  } catch (error) {
+    return ` Parked sessions could not be checked (${describeError(error)}); each checks again within a minute.`
+  }
+}
+
 export const register: Register = on => {
   const state = newState()
-  const parked: Parked = { project: undefined }
+  const parked: Parked = { project: undefined, refused: false, timer: undefined }
   // A compaction since the last main-loop turn's end, this session's or one
   // of its subagents' (whose transcripts a session's prune covers too).
   const pruning = { compacted: false }
@@ -117,6 +151,13 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       state.turns += 1
       if (state.root !== undefined) await $.fs.write(recordFile(state.root, await $.session.id()), turnMark(e.turnId))
+      // A person or a wake started it again: nothing is left to wake it for,
+      // and a refusal in this turn writes the record again.
+      if (parked.refused) {
+        stopChecking(parked)
+        const ctx = await context($)
+        if (ctx !== undefined) await forgetRefused($, ctx, await $.session.id())
+      }
     }
     return next(e)
   }).catch(async ($, e, next) => {
@@ -155,6 +196,7 @@ export const register: Register = on => {
           await recordSpend($, ctx.root, await $.session.id(), await $.session.root(), now, weightedTokens(e.usage))
         }
         await park($, ctx, parked, now)
+        await wakeParked($, ctx, now)
       } catch (error) {
         // Reported; the turn's cost is uncounted and the session goes on unparked until the next turn's end.
         $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
@@ -203,7 +245,18 @@ export const register: Register = on => {
       const ctx = await context($)
       const now = await $.clock.now()
       const found = ctx === undefined ? undefined : await park($, ctx, parked, now)
-      if (found !== undefined) return { deny: parkedText(found.project, found.plan, now) }
+      if (ctx !== undefined && found !== undefined) {
+        if (!parked.refused) {
+          parked.refused = true
+          await noteRefused($, ctx, await $.session.id(), await $.session.root())
+          parked.timer = $.clock.every(WAKE_MS, () => void check($, parked))
+        }
+        return { deny: parkedText(found.project, found.plan, now) }
+      }
+      if (ctx !== undefined && parked.refused) {
+        stopChecking(parked)
+        await forgetRefused($, ctx, await $.session.id())
+      }
     }
     const answer = await next(e)
     if (answer.result !== undefined) {
@@ -264,10 +317,11 @@ export const register: Register = on => {
       const folder = ask.folder === undefined ? here : normalizeFolder(ask.folder, ctx.home)
       if (folder === undefined) return { text: 'Name the folder as a full path, or ~/ and the rest of it.' }
       await setPriority($, ctx.root, folder, weight)
+      const woken = await wakeAfterChange($, ctx)
       return {
-        text: weight === DEFAULT_WEIGHT
+        text: (weight === DEFAULT_WEIGHT
           ? `${projectName(folder)} (${folder}) counts at the default, ${DEFAULT_WEIGHT}, again.`
-          : `${projectName(folder)} (${folder}) now counts at ${weight}, and so do the folders inside it that have no weight of their own.`,
+          : `${projectName(folder)} (${folder}) now counts at ${weight}, and so do the folders inside it that have no weight of their own.`) + woken,
       }
     }
 
@@ -286,13 +340,14 @@ export const register: Register = on => {
       const folder = ask.folder === undefined ? here : normalizeFolder(ask.folder, ctx.home)
       if (folder === undefined) return { text: 'Name the folder as a full path, or ~/ and the rest of it.' }
       await setBudget($, ctx.root, folder, points)
+      const woken = await wakeAfterChange($, ctx)
       return {
-        text: points === 0
+        text: (points === 0
           ? folder === scratchRoot(ctx.home)
             ? `Sessions opened without a folder (${folder}) share the default, ${SCRATCH_BUDGET} points a day, again while any budget is set.`
             : `${projectName(folder)} (${folder}) has no budget of its own: it shares what is left after the budgets set.`
           : `${projectName(folder)} (${folder}) may spend ${points} points a day, and so may the folders inside it that have no budget of their own. ` +
-            'Projects with no budget share what the accounts supply beyond the budgets set, by their weights.',
+            'Projects with no budget share what the accounts supply beyond the budgets set, by their weights.') + woken,
       }
     }
 

@@ -217,7 +217,7 @@ describe('budgets', () => {
     const project = over(found, budgets, new Map(), '/p/legal')!
     expect(parkedText(project, found, NOW)).toBe(
       'cc-accounts: legal has spent 10 of the 10 points its sessions may use today (5 by now). This session is parked until the ' +
-        'allowance catches up or the UTC day turns in 18h 0m. Stop here; do not retry.',
+        'allowance catches up or the UTC day turns in 18h 0m. Stop here; do not retry: this session is told when it may go on.',
     )
     expect(budgetLines(found, '/p/legal', NOW)).toEqual([
       'Budgets, in points (1% of a Max 5x week) per UTC day; the accounts supply about 14.1 today, and a point is about 7.0 M weighted tokens. The day turns in 18h 0m.',
@@ -301,7 +301,7 @@ describe('a session over its budget is parked between turns', () => {
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: cost('claude-opus-5-5', 400_000) })
     expect(w.logs.at(-1)).toBe(
       'cc-accounts: work has spent 0.3 of the 1 points its sessions may use today (0.3 by now). This session is parked until the ' +
-        'allowance catches up or the UTC day turns in 24h 0m. Stop here; do not retry.',
+        'allowance catches up or the UTC day turns in 24h 0m. Stop here; do not retry: this session is told when it may go on.',
     )
     expect(w.statuses.at(-1)).toBe('account 1 · parked: work over budget')
     const refused = await $.tool.call(read('Read'))

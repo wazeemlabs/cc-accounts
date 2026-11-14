@@ -44,14 +44,15 @@ export type LiveSession = { sessionId: string; account: string; cwd: string; nam
 // answering, or a background task's report, starts its next turn.
 export const ACTIVE_MS = 30 * 60_000
 
-// The live sessions: Claude Code's session list (shared by every account),
-// each entry's conversation as cca recorded it, and one `ps` for which of
-// their processes still run.
-export async function liveSessions($: EngineInterface, ctx: Context): Promise<LiveSession[]> {
+type RunningEntry = { pid: number; sessionId: string; cwd: string; name: string; active: boolean }
+
+// The sessions whose processes still run: Claude Code's session list
+// (shared by every account), and one `ps` for which of their processes run.
+export async function runningSessions($: EngineInterface, ctx: Context): Promise<RunningEntry[]> {
   const dir = `${ctx.shared}/sessions`
   if (!(await $.fs.exists(dir))) return []
   const now = await $.clock.now()
-  const entries: { pid: number; sessionId: string; cwd: string; name: string; active: boolean }[] = []
+  const entries: RunningEntry[] = []
   for (const entry of await $.fs.list(dir)) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
     let value: unknown
@@ -74,9 +75,13 @@ export async function liveSessions($: EngineInterface, ctx: Context): Promise<Li
   if (entries.length === 0) return []
   const { stdout } = await run($, ['ps', '-o', 'pid=', '-p', entries.map(entry => entry.pid).join(',')])
   const alive = new Set(stdout.split('\n').map(line => line.trim()).filter(line => line !== ''))
+  return entries.filter(entry => alive.has(String(entry.pid)))
+}
+
+// The live sessions cca recorded, each with the account it runs on.
+export async function liveSessions($: EngineInterface, ctx: Context): Promise<LiveSession[]> {
   const live: LiveSession[] = []
-  for (const entry of entries) {
-    if (!alive.has(String(entry.pid))) continue
+  for (const entry of await runningSessions($, ctx)) {
     const file = `${ctx.root}/by-session/${entry.sessionId}`
     if (!(await $.fs.exists(file))) continue
     live.push({ sessionId: entry.sessionId, account: (await $.fs.read(file)).trim(), cwd: entry.cwd, name: entry.name, active: entry.active })
