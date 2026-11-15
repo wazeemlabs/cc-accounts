@@ -43,7 +43,7 @@ Done. Keep using `claude` as before.
 | Start Claude Code on a given account | `cca personal` |
 | Choose the account new sessions start on when no week resets sooner | `cca use personal` |
 
-In a terminal, `/account` closes the session and reopens the same conversation on the other account, with the options you started it with. In VS Code, the conversation reopens on the other account in the same tab.
+In a terminal, `/account` closes the session and reopens the same conversation on the other account, with the options you started it with. In VS Code, the conversation stays in the same tab. When the move leaves nothing to carry on, the tab's process ends quietly and your next message starts the conversation on the other account. The panel then starts it the way it starts any conversation, so everything it shows is the new account's: the account and plan, Remote Control, the models and commands. When the move has work to carry on (a turn the limit stopped), the conversation reopens at once and carries on, and once that turn is done and nothing else runs, it ends the same way. A session with a scheduled wakeup (`/loop`, a cron job) or background work keeps running, so the wakeup still fires. `CCA_REFRESH=off` keeps every move a reopen in place.
 
 A switch does not cut work short. If Claude is in the middle of a turn, or a subagent, a Monitor or a background command is still running, `/account` replies at once that the switch is queued and names what it is waiting for. The switch happens when the turn has ended and that work has finished; a finished task wakes the session, so the switch follows on its own. Until then the session stays on its account, and messages you send run there.
 
@@ -69,6 +69,7 @@ New sessions start on the account a move would pick: the one with room whose wee
 - When no other account has room, the session stays and says so in its log.
 - The Claude desktop app starts Claude Code itself and signs every session in with the account the app is signed in to, so cc-accounts cannot move a desktop session. It counts the session on that account, and when the account fills up the session says so in its status line and log, with the account that has room and how to go on there: reopen the conversation in VS Code and type `/account <name>`, or run `cca <name> --resume <id>` in a terminal. To move every desktop session at once, sign the desktop app in to another account.
 - `CCA_BALANCE=off` turns the moves off. Readings are still saved.
+- Remote Control is tied to an account. After a move, a tab's Remote Control comes back on the new account when the panel starts the conversation again, at your next message in VS Code.
 
 ### Projects that matter more
 
