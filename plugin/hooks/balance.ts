@@ -13,7 +13,7 @@
 // lighter session moves off to leave the rest to a heavier one.
 // CCA_BALANCE=off stops the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
-import { context, defaultName, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
+import { context, defaultName, describeError, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
 import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { accountStates, liveSessions, ownReading, writeReading, type LiveSession } from './survey'
@@ -78,6 +78,17 @@ export async function publishStart($: EngineInterface, ctx: Context): Promise<st
   const chosen = startAccount(preferred, current, await $.clock.now())
   if (chosen !== undefined) await writeAtomic($, startFile(ctx.root), `${chosen}\n`)
   return chosen
+}
+
+// Where new sessions start, published for cca as it is shown; the default
+// when that cannot be worked out (reported).
+export async function startOrDefault($: EngineInterface, ctx: Context, preferred: string | undefined): Promise<string | undefined> {
+  try {
+    return await publishStart($, ctx)
+  } catch (error) {
+    $.ui.log(`cc-accounts: could not work out where new sessions start (${describeError(error)}).`)
+    return preferred
+  }
 }
 
 // After each measurement: save the reading for every session to see, and
