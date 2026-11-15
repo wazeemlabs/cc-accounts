@@ -4,7 +4,8 @@
 // test, so a value set before session.start stands as one an earlier load
 // left.
 import { describe, expect, test } from 'claude-code/testing'
-import { parseSaved, type SavedSwitch } from '../hooks/saved'
+import { parseSaved, save, type SavedSwitch } from '../hooks/saved'
+import { newState } from '../hooks/switching'
 import { BY_SESSION, RECORD, SELF, SHELL, START, SUPERVISED, SWITCH, run, turn, world } from './world'
 
 const SIGINT = ['kill', '-INT', SELF]
@@ -60,6 +61,18 @@ describe('what a reload keeps', () => {
     await $.session.start(START)
     const { text } = await $.command.run(run('2'))
     expect(text).toMatch(/^Switching to 2/)
+  })
+
+  test('a save the host refuses is reported to the debug log and never rejects', async () => {
+    // It runs after a tool call has gone through, where a rejection would run
+    // the hook's fallback, and the tool, again.
+    const logged: string[] = []
+    const refusing = {
+      state: { set: () => Promise.reject(new Error('store full')) },
+      ui: { log: (text: string, options?: { to?: string }) => { if (options?.to === 'debug') logged.push(text) } },
+    }
+    await save(refusing as never, newState())
+    expect(logged).toEqual(["cc-accounts: could not save this session's switching state for a reload (store full)."])
   })
 
   test('a saved value of another shape is dropped, not trusted', () => {

@@ -10,6 +10,7 @@
 // reloads; a new process (a switch's --resume) starts without them. The exit
 // is not kept: exitOf reads it from the environment again.
 import type { EngineInterface } from 'claude-code'
+import { describeError } from './context'
 import type { Task } from './background'
 import type { Pending, SwitchState } from './switching'
 import type { Stop } from './usage'
@@ -63,8 +64,15 @@ export function parseSaved(value: unknown): SavedSwitch | undefined {
   return saved as SavedSwitch
 }
 
+// Never rejects: it runs after a tool call has gone through, where an error
+// would run the hook's fallback and the call again. A save that fails only
+// leaves a later reload to start from what was saved before.
 export async function save($: EngineInterface, state: SwitchState): Promise<void> {
-  await $.state.set(SWITCHING, snapshot(state))
+  try {
+    await $.state.set(SWITCHING, snapshot(state))
+  } catch (error) {
+    $.ui.log(`cc-accounts: could not save this session's switching state for a reload (${describeError(error)}).`, { to: 'debug' })
+  }
 }
 
 // Puts what an earlier load of the plugin saved in this process back into

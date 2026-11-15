@@ -284,9 +284,9 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
   state.pending = undefined
   state.ending = true
   state.cutTurn = false
-  await save($, state)
   const { exit, target, from, stop } = pending
   try {
+    await save($, state)
     // What the reopened conversation is told, as things stand now: the work a
     // forced move stops, which one the account forced asks it to start again.
     // Only a switch file carries a follow-up.
