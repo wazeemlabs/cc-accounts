@@ -32,7 +32,8 @@ FAKE = textwrap.dedent('''\
     def note(value):
         log.write(json.dumps(value) + '\\n'); log.flush()
     note({'start': sys.argv[2:], 'bin': sys.argv[1], 'child': os.environ.get('CCA_STREAM_CHILD'),
-          'switch': os.environ.get('CLAUDE_ACCOUNT_SWITCH_FILE'), 'supervisor': os.environ.get('CCA_STREAM_PID')})
+          'switch': os.environ.get('CLAUDE_ACCOUNT_SWITCH_FILE'), 'supervisor': os.environ.get('CCA_STREAM_PID'),
+          'fresh': os.environ.get('CCA_STREAM_FRESH'), 'resumed': os.environ.get('CCA_STREAM_RESUMED')})
     echoes = '--replay-user-messages' in sys.argv
     first = '--resume' not in sys.argv
     for line in sys.stdin:
@@ -212,9 +213,11 @@ class ReadSwitch(unittest.TestCase):
 
     def test_reads_the_account_the_conversation_and_the_follow_up(self):
         self.file.write_text(f'work {ID}\n')
-        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, ''))
+        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, '', False))
         self.file.write_text(f'work {ID}\nCarry on.\nSecond line.\n')
-        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, 'Carry on.\nSecond line.'))
+        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, 'Carry on.\nSecond line.', False))
+        self.file.write_text(f'work {ID} fresh\n')
+        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, '', True))
 
     def test_refuses_a_request_without_a_conversation_id(self):
         for text in ('work\n', 'work not-an-id\n', f'work {ID} extra\n'):
@@ -308,7 +311,7 @@ class Supervisor(unittest.TestCase):
         s.next()
         self.assertEqual(s.process.wait(timeout=WAIT), 0)
         self.assertEqual(len(s.starts()), 1)
-        self.assertIn('not "<account> <conversation id>"', s.process.stderr.read().decode())
+        self.assertIn('not "<account> <conversation id> [fresh]"', s.process.stderr.read().decode())
 
     def test_a_message_the_old_child_never_took_is_sent_to_the_new_one_after_the_follow_up(self):
         s = Supervised(self, ['--replay-user-messages'])

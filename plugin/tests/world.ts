@@ -303,8 +303,9 @@ export async function endTurn(
   turnId: string,
   stop?: readonly Task[],
   usage?: TurnUsage,
+  wakeups = 0,
 ): Promise<void> {
-  if (stop !== undefined) w.files.set(RECORD, `${JSON.stringify({ tasks: stop })}\n`)
+  if (stop !== undefined) w.files.set(RECORD, `${JSON.stringify({ tasks: stop, wakeups })}\n`)
   const reason = stop === undefined ? 'error' : 'answer'
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId, reason, ...(usage && { usage }) })
 }
@@ -324,7 +325,7 @@ export async function turn(
   usage?: TurnUsage,
 ): Promise<void> {
   schedule(w, crons)
-  await endTurn($, w, await startTurn($), stop, usage)
+  await endTurn($, w, await startTurn($), stop, usage, crons.length)
 }
 
 type World = ReturnType<typeof world>

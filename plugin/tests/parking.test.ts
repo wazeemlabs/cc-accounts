@@ -1,5 +1,6 @@
 import { describe, expect, test, type Engine } from 'claude-code/testing'
-import { budgetFile, spendDir } from '../hooks/budgets'
+import { budgetFile } from '../hooks/budgets'
+import { spendDir } from '../hooks/spend'
 import { parkedFile, WAKE_MS, wakeText } from '../hooks/parking'
 import { ROOT, SESSION, START, SUPERVISED, cost, endTurn, run, saved, session, startTurn, turn, world } from './world'
 

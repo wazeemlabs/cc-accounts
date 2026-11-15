@@ -99,6 +99,10 @@ class Unread:
             with self.lock:
                 self.lines.pop(found, None)
 
+    def pending(self):
+        with self.lock:
+            return bool(self.lines)
+
     def from_panel(self, line):
         """The panel withdrew a queued message (cancel_async_message): never
         echoed, it is not one to send a new child."""
@@ -213,6 +217,10 @@ class Open:
                 self.child.add(request_id)
             else:
                 self.child.discard(request_id)
+
+    def pending(self):
+        with self.lock:
+            return bool(self.panel or self.child)
 
     def take(self):
         """(the panel's open requests, the child's open ids), forgotten here."""

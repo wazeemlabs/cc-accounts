@@ -3,12 +3,14 @@
 
 Claude Code passes the hook its input on stdin, with `session_id` and
 `background_tasks` (subagents, shells, monitors and workflows in flight).
-This writes {"tasks": [...]} to <CCA_ROOT>/background/<session id>, where the
-plugin's module reads it when the turn completes, to decide whether a pending
-switch can end the process yet. The session's scheduled wakeups
-(`session_crons`) are left out: Claude Code restores them itself when the
-conversation is resumed. A session that cca does not manage (no
-accounts.tsv) writes nothing.
+This writes {"tasks": [...], "wakeups": N} to <CCA_ROOT>/background/<session
+id>, where the plugin's module reads it when the turn completes, to decide
+whether a pending switch can end the process yet. Of the session's scheduled
+wakeups (`session_crons`) only their count is kept: Claude Code restores them
+itself when the conversation is resumed, but a process that ends so the panel
+starts the conversation afresh at the next message would hold them until
+then. No count is written when the input lists none. A session that cca does
+not manage (no accounts.tsv) writes nothing.
 """
 import json
 import os
@@ -25,7 +27,9 @@ def root():
 
 
 def tasks_of(hook_input):
-    """The input's tasks, each cut to what the plugin reads; ValueError when it is not the shape Claude Code sends."""
+    """The input's session id, its tasks, each cut to what the plugin reads,
+    and its wakeups' count (None when it lists none); ValueError when it is
+    not the shape Claude Code sends."""
     if not isinstance(hook_input, dict):
         raise ValueError('the hook input is not a JSON object')
     session_id = hook_input.get('session_id')
@@ -37,7 +41,9 @@ def tasks_of(hook_input):
     tasks = hook_input['background_tasks']
     if not isinstance(tasks, list) or not all(isinstance(t, dict) and isinstance(t.get('id'), str) for t in tasks):
         raise ValueError('background_tasks is not a list of tasks with ids')
-    return session_id, [{k: t[k] for k in KEPT if isinstance(t.get(k), str)} for t in tasks]
+    crons = hook_input.get('session_crons')
+    wakeups = len(crons) if isinstance(crons, list) else None
+    return session_id, [{k: t[k] for k in KEPT if isinstance(t.get(k), str)} for t in tasks], wakeups
 
 
 def write_atomic(path, text):
@@ -58,12 +64,13 @@ def main():
     if not os.path.isfile(os.path.join(state, 'accounts.tsv')):
         return 0
     try:
-        session_id, tasks = tasks_of(json.load(sys.stdin))
+        session_id, tasks, wakeups = tasks_of(json.load(sys.stdin))
     except ValueError as error:
         # Exit 1: Claude Code shows a Stop hook error and goes on.
         print(f'cc-accounts: {error}', file=sys.stderr)
         return 1
-    write_atomic(os.path.join(state, 'background', session_id), json.dumps({'tasks': tasks}) + '\n')
+    record = {'tasks': tasks} if wakeups is None else {'tasks': tasks, 'wakeups': wakeups}
+    write_atomic(os.path.join(state, 'background', session_id), json.dumps(record) + '\n')
     return 0
 
 

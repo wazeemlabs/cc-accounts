@@ -27,6 +27,7 @@ import {
   readRecord,
   recordFile,
   requestSwitch,
+  startAfresh,
 } from './switching'
 import { describeUse } from './usage'
 import {
@@ -37,14 +38,12 @@ import {
   parseBudget,
   projectOf,
   readBudgetsInForce,
-  recordCalibration,
-  recordSpend,
   SCRATCH_BUDGET,
   scratchRoot,
   setBudget,
-  weightedTokens,
   type ProjectBudget,
 } from './budgets'
+import { recordCalibration, recordSpend, weightedTokens } from './spend'
 import { ownReading } from './survey'
 
 // Where new sessions start, published for cca as it is shown; the default
@@ -227,6 +226,12 @@ export const register: Register = on => {
         $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
       }
       await startOrDefault($, ctx, undefined)
+      // Reported and left: the next turn's end looks again.
+      try {
+        if (!parked.refused) await startAfresh($, state, ctx, e.reason === 'error')
+      } catch (error) {
+        $.ui.log(`cc-accounts: could not check whether this conversation can start afresh (${describeError(error)}).`)
+      }
       if (pruning.compacted) {
         pruning.compacted = false
         // As at the start: prune() reports its own failures and never rejects.

@@ -5,7 +5,7 @@
 import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
 import { followUpText, type Move, type Stop } from './usage'
-import { describeError, record, run, type Context } from './context'
+import { describeError, exitOf, record, run, type Context } from './context'
 import { save } from './saved'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
@@ -43,6 +43,12 @@ export type SwitchState = {
   cutTurn: boolean
   // The model that last answered a main-loop turn in this process.
   answered: string | undefined
+  // The scheduled wakeups the last Stop hook counted; undefined when it said
+  // nothing of them.
+  wakeups: number | undefined
+  // Whether this process, which a move relaunched, has asked to end so the
+  // panel starts the conversation afresh (startAfresh): once is enough.
+  refreshAsked: boolean
   // The full window or failure a session that cannot move last told of, so
   // each is told once (balance.ts, stranded), and what its status line adds
   // while it lasts.
@@ -60,6 +66,8 @@ export function newState(): SwitchState {
     ending: false,
     cutTurn: false,
     answered: undefined,
+    wakeups: undefined,
+    refreshAsked: false,
     stranded: undefined,
     strandedNote: undefined,
   }
@@ -122,6 +130,7 @@ export async function readRecord($: EngineInterface, state: SwitchState): Promis
   if (found.kind !== 'tasks') return
   state.tasks.clear()
   for (const task of found.tasks) state.tasks.set(task.id, task)
+  state.wakeups = found.wakeups
 }
 
 // Whether a process still runs.
@@ -161,9 +170,43 @@ async function endProcess($: EngineInterface, pid: string, between: () => Promis
   return `still running after ${END_STEPS.map(step => `SIG${step.signal.slice(1)}`).join(', ')}`
 }
 
-// Line one: the account and the conversation; the rest: the follow-up.
-export function switchRequest(target: string, sessionId: string, followUp: string | undefined): string {
-  return `${target} ${sessionId}\n${followUp === undefined ? '' : `${followUp}\n`}`
+// Line one: the account and the conversation, and `fresh` when cca-stream
+// may end with the process so the panel starts the conversation afresh; the
+// rest: the follow-up.
+export function switchRequest(target: string, sessionId: string, followUp: string | undefined, fresh = false): string {
+  return `${target} ${sessionId}${fresh ? ' fresh' : ''}\n${followUp === undefined ? '' : `${followUp}\n`}`
+}
+
+// Whether the conversation can be left for the panel to start afresh at its
+// next message, rather than relaunched behind the panel's back (cca-stream).
+// The extension starts a process itself with its whole startup: the account
+// and plan it shows, Remote Control, the models and commands. A process
+// cca-stream relaunches gets none of that, so the panel kept the old
+// account's. Only where nothing would wait for that next message: the
+// cca-stream that runs this process can end for it (CCA_STREAM_FRESH), the
+// Stop hook counted no scheduled wakeup, no background work runs, and the
+// session is not parked waiting to be woken. CCA_REFRESH=off keeps every
+// move a relaunch.
+export async function mayStartFresh($: EngineInterface, state: SwitchState): Promise<boolean> {
+  if ((await $.env.get('CCA_REFRESH')) === 'off' || (await $.env.get('CCA_STREAM_FRESH')) !== '1') return false
+  if (state.wakeups !== 0 || state.root === undefined) return false
+  if ((await waitingFor($, state)).tasks.length > 0) return false
+  return !(await $.fs.exists(`${state.root}/parked/${await $.session.id()}`))
+}
+
+// At the end of a main-loop turn of a process a move relaunched: once it has
+// nothing left that a new process would have to take over, it ends so the
+// panel starts the conversation afresh at its next message, on the account
+// it runs on now. The move's follow-up turn has carried the work on by then.
+export async function startAfresh($: EngineInterface, state: SwitchState, ctx: Context | undefined, stopped: boolean): Promise<void> {
+  if (stopped || state.pending !== undefined || state.ending || state.refreshAsked) return
+  if ((await $.env.get('CCA_STREAM_RESUMED')) !== '1' || ctx?.current === undefined) return
+  const exit = await exitOf($, await $.session.id())
+  if (exit?.kind !== 'stream' || exit.switchFile === undefined || !(await mayStartFresh($, state))) return
+  state.refreshAsked = true
+  const here = ctx.current.name
+  state.pending = { target: here, force: false, exit, from: here, stop: undefined }
+  $.ui.log(`cc-accounts: ending this process so the panel starts the conversation afresh on ${here}.`, { to: 'debug' })
 }
 
 // A switch that could not end the process is withdrawn: nothing should
@@ -187,7 +230,11 @@ async function withdraw($: EngineInterface, exit: Exit): Promise<void> {
 async function runExit($: EngineInterface, state: SwitchState, pending: Pending, move: Move): Promise<void> {
   const { exit, target } = pending
   const ask = async (followUp: string | undefined) => {
-    if (exit.switchFile !== undefined) await $.fs.write(exit.switchFile, switchRequest(target, exit.sessionId, followUp))
+    if (exit.switchFile === undefined) return
+    const fresh = followUp === undefined && exit.kind === 'stream' && (await mayStartFresh($, state))
+    // The panel keeps the last status after the process ends.
+    if (fresh) $.ui.status(`account ${target}`)
+    await $.fs.write(exit.switchFile, switchRequest(target, exit.sessionId, followUp, fresh))
   }
   await ask(followUpText(move))
   if (exit.kind === 'terminal') {

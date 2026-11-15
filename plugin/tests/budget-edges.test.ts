@@ -1,7 +1,8 @@
 // Budget and parking edges the 2026-11-15 review found: each test states
 // the contract the README promises.
 import { describe, expect, test } from 'claude-code/testing'
-import { budgetFile, calibrated, calibrationFile, parseBudgets, projectOf, spendDir } from '../hooks/budgets'
+import { budgetFile, parseBudgets, projectOf } from '../hooks/budgets'
+import { calibrated, calibrationFile, spendDir } from '../hooks/spend'
 import { parkedFile, WAKE_MS, wakeText } from '../hooks/parking'
 import { parsePriorities } from '../hooks/priorities'
 import { DESKTOP, HOME, ROOT, SESSION, START, SUPERVISED, cost, run, session, turn, world } from './world'

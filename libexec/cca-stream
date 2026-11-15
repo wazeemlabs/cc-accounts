@@ -78,8 +78,10 @@ def relaunch_args(args, conversation):
 
 
 def read_switch(path):
-    """(account, conversation id, follow-up text) the plugin asked for, or
-    None when there is no request. Raises ValueError on a malformed one."""
+    """(account, conversation id, follow-up text, fresh) the plugin asked
+    for, or None when there is no request. `fresh`: the plugin found nothing
+    in the session a new process would have to take over (`<account> <id>
+    fresh`). Raises ValueError on a malformed one."""
     try:
         with open(path, encoding='utf-8') as handle:
             text = handle.read()
@@ -89,9 +91,9 @@ def read_switch(path):
         return None
     first, _, rest = text.partition('\n')
     parts = first.split()
-    if len(parts) != 2 or not UUID_RE.match(parts[1]):
-        raise ValueError(f'switch file held {first!r}, not "<account> <conversation id>"')
-    return parts[0], parts[1], rest.strip()
+    if len(parts) not in (2, 3) or not UUID_RE.match(parts[1]) or parts[2:] not in ([], ['fresh']):
+        raise ValueError(f'switch file held {first!r}, not "<account> <conversation id> [fresh]"')
+    return parts[0], parts[1], rest.strip(), parts[2:] == ['fresh']
 
 
 def read_lines(fd):
@@ -139,13 +141,27 @@ class Supervisor:
         # SIGUSR1 writes here; pump_releases reads it.
         self.release_read, self.release_write = os.pipe()
 
-    def env(self):
-        return {**os.environ, 'CCA_STREAM_CHILD': '1', 'CLAUDE_ACCOUNT_SWITCH_FILE': self.options.switch,
-                'CCA_STREAM_PID': str(os.getpid())}
+    def env(self, resumed):
+        """The child's environment. CCA_STREAM_FRESH tells the plugin this
+        cca-stream can end for a fresh start; CCA_STREAM_RESUMED, that a move
+        relaunched the child, which the panel then knows nothing of."""
+        env = {**os.environ, 'CCA_STREAM_CHILD': '1', 'CLAUDE_ACCOUNT_SWITCH_FILE': self.options.switch,
+               'CCA_STREAM_PID': str(os.getpid()), 'CCA_STREAM_FRESH': '1'}
+        env.pop('CCA_STREAM_RESUMED', None)
+        if resumed:
+            env['CCA_STREAM_RESUMED'] = '1'
+        return env
 
-    def start(self, args):
+    def start(self, args, resumed=False):
         return subprocess.Popen([self.options.cca, self.options.bin, *args], stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE, env=self.env())
+                                stdout=subprocess.PIPE, env=self.env(resumed))
+
+    def nothing_in_flight(self):
+        """Whether the panel has nothing a new child would have to take: no
+        line held, no message the old child never took, no request open
+        either way."""
+        with self.lock:
+            return not self.held and not self.unread.pending() and not self.open.pending()
 
     def send(self, child, line):
         """Writes one line to the child; False when it has gone."""
@@ -292,9 +308,17 @@ class Supervisor:
             self.remove_switch()
             if request is None:
                 return 128 - status if status < 0 else status
-            account, conversation, follow_up = request
+            account, conversation, follow_up, fresh = request
+            if fresh and not follow_up and self.nothing_in_flight():
+                # The panel starts the conversation at its next message, on the
+                # account cca recorded for it, and runs its whole startup. A
+                # line the panel writes in the instant between this check and
+                # the exit is lost, as it is when the extension ends an idle
+                # process itself (restartAtTurnBoundary).
+                log(f'{conversation} moved to account {account}; the panel starts it afresh at its next message')
+                return 0
             log(f'resuming {conversation} on account {account}')
-            child = self.start(relaunch_args(self.args, conversation))
+            child = self.start(relaunch_args(self.args, conversation), resumed=True)
             # The setup, the panel's requests the old child left open, the
             # plugin's follow-up, then the messages the old child never took,
             # ahead of what the panel sent meanwhile.

@@ -5,7 +5,7 @@ Adds one model call's token counts to the day's spend, for a client that
 calls Claude outside a Claude Code session the plugin runs in (an LLM bridge
 signed in to one of the accounts), so project budgets and calibration count
 its use. The counts are kept raw, summed per model; the plugin weights them
-when it reads the day (weightedTokens in plugin/hooks/budgets.ts), the one
+when it reads the day (weightedTokens in plugin/hooks/spend.ts), the one
 definition of what a token costs. bin/cca resolves the account to its name
 before calling this.
 
