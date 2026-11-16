@@ -30,8 +30,8 @@ class Moves(unittest.TestCase):
         self.assertEqual(second['start'][-2:], ['--resume', ID])
         self.assertIn(f'resuming {ID} on account work', s.process.stderr.read().decode())
 
-    def test_a_child_is_not_told_cca_stream_could_end_with_it(self):
-        s = Supervised(self, [])
+    def test_a_child_is_not_told_cca_stream_could_end_with_it_even_under_an_older_one(self):
+        s = Supervised(self, [], env={'CCA_STREAM_FRESH': '1', 'CCA_STREAM_RESUMED': '1'})
         s.send(user(f'switch:work {ID}\n'))
         s.next()
         s.send(user('hello'))

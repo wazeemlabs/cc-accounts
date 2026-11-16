@@ -7,7 +7,7 @@ import { projectName } from './priorities'
 import { forgetRefused, noteRefused, parkedFile, parkedNow, WAKE_MS, wakeParked } from './parking'
 import { prune } from './prune'
 import { restore, save } from './saved'
-import { carryOut, newState, readRecord, recordFile, startAfresh } from './switching'
+import { carryOut, newState, readRecord, recordFile } from './switching'
 import { parkedText, type ProjectBudget } from './budgets'
 import { recordCalibration, recordSpend, weightedTokens } from './spend'
 import { ownReading } from './survey'
@@ -171,12 +171,6 @@ export const register: Register = on => {
         $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
       }
       await startOrDefault($, ctx, undefined)
-      // Reported and left: the next turn's end looks again.
-      try {
-        if (!parked.refused) await startAfresh($, state, ctx, e.reason === 'error')
-      } catch (error) {
-        $.ui.log(`cc-accounts: could not check whether this conversation can start afresh (${describeError(error)}).`)
-      }
       if (pruning.compacted) {
         pruning.compacted = false
         // As at the start: prune() reports its own failures and never rejects.

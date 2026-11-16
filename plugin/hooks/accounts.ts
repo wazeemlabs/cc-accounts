@@ -73,11 +73,24 @@ export function currentAccount(
   home: string,
   host?: HostLogin,
 ): Account | undefined {
-  if (host !== undefined) return accounts.find(account => host.logins.get(account.name) === host.accountUuid)
+  const dir = (configDir ?? `${home}/.claude`).replace(/\/+$/, '')
+  if (host !== undefined) return hostAccount(accounts, dir, host)
   const named = accounts.find(account => account.name === envAccount)
   if (named !== undefined) return named
-  const dir = (configDir ?? `${home}/.claude`).replace(/\/+$/, '')
   return accounts.find(account => account.dir === dir)
+}
+
+// The account whose login has the id the host names. Claude Code writes the
+// login it runs on into its config dir's login record, so a host's session
+// leaves the host's login in the record of the account kept in that dir
+// (2026-11-16: the desktop app's sessions, in ~/.claude, left the app's login
+// in ~/.claude.json). That record vouches for its account only when no other
+// account holds the login; two others that both hold it name neither.
+function hostAccount(accounts: readonly Account[], dir: string, host: HostLogin): Account | undefined {
+  const holders = accounts.filter(account => host.logins.get(account.name) === host.accountUuid)
+  if (holders.length <= 1) return holders[0]
+  const others = holders.filter(account => account.dir !== dir)
+  return others.length === 1 ? others[0] : undefined
 }
 
 // Where an account's login record lives: ~/.claude's in ~/.claude.json.

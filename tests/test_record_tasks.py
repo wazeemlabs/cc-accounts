@@ -40,17 +40,12 @@ class RecordTasks(unittest.TestCase):
         done = self.hook(self.stop([SHELL]))
         self.assertEqual((done.returncode, done.stderr), (0, ''))
         self.assertEqual(json.loads(self.record.read_text()),
-                         {'tasks': [{'id': 'b1', 'type': 'shell', 'status': 'running', 'description': 'npm test'}], 'wakeups': 0})
+                         {'tasks': [{'id': 'b1', 'type': 'shell', 'status': 'running', 'description': 'npm test'}]})
 
-    def test_counts_the_scheduled_wakeups_and_keeps_none_of_them(self):
-        # Claude Code restores a session's wakeups on resume; a process that
-        # ends to start afresh at the next message would hold them till then.
+    def test_keeps_nothing_of_the_scheduled_wakeups_which_claude_code_restores_on_resume(self):
         crons = [{'id': 'c1', 'schedule': '* * * * *', 'prompt': 'x… [+20 chars]'}, {'id': 'c2', 'schedule': '0 9 * * *'}]
-        self.assertEqual(self.hook({**self.stop([]), 'session_crons': crons}).returncode, 0)
-        self.assertEqual(json.loads(self.record.read_text()), {'tasks': [], 'wakeups': 2})
-
-    def test_wakeups_of_another_shape_or_none_listed_are_not_counted_as_none(self):
-        for hook_input in ({**self.stop([]), 'session_crons': 'c1'}, {k: v for k, v in self.stop([]).items() if k != 'session_crons'}):
+        for hook_input in ({**self.stop([]), 'session_crons': crons}, {**self.stop([]), 'session_crons': 'c1'},
+                           {k: v for k, v in self.stop([]).items() if k != 'session_crons'}):
             with self.subTest(hook_input=hook_input):
                 self.assertEqual(self.hook(hook_input).returncode, 0)
                 self.assertEqual(json.loads(self.record.read_text()), {'tasks': []})
@@ -59,7 +54,7 @@ class RecordTasks(unittest.TestCase):
         self.record.parent.mkdir()
         self.record.write_text('{"turn":"t1"}\n')
         self.assertEqual(self.hook(self.stop([])).returncode, 0)
-        self.assertEqual(json.loads(self.record.read_text()), {'tasks': [], 'wakeups': 0})
+        self.assertEqual(json.loads(self.record.read_text()), {'tasks': []})
         self.assertEqual(os.listdir(self.record.parent), [SESSION])
 
     def test_writes_nothing_where_cca_is_not_set_up(self):

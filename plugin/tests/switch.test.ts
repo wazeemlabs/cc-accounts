@@ -27,8 +27,9 @@ describe('background work', () => {
       tasks: [SHELL],
     })
     expect(parseRecord('{"tasks":[]}')).toEqual({ kind: 'tasks', tasks: [] })
-    // 0.4.1 also saved wakeups; Claude Code restores them on resume now.
+    // 0.4.1 saved wakeups and 0.14.0 their count; Claude Code restores them on resume.
     expect(parseRecord('{"tasks":[],"crons":[{"id":"c1","schedule":"* * * * *"}]}')).toEqual({ kind: 'tasks', tasks: [] })
+    expect(parseRecord('{"tasks":[],"wakeups":2}')).toEqual({ kind: 'tasks', tasks: [] })
     expect(parseRecord(turnMark('t1'))).toEqual({ kind: 'turn', turnId: 't1' })
     expect(parseRecord('{"tasks":[{"type":"shell"}]}')).toBe(undefined)
     expect(parseRecord('{"tasks":"b1"}')).toBe(undefined)

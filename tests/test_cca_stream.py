@@ -71,14 +71,14 @@ FAKE = textwrap.dedent('''\
 class Supervised:
     """cca-stream over the fake child, with its stdout read on a thread."""
 
-    def __init__(self, test, args):
+    def __init__(self, test, args, env=None):
         self.tmp = test.tmp
         self.log = pathlib.Path(self.tmp.name) / 'log'
         self.switch = pathlib.Path(self.tmp.name) / 'switch'
         fake = pathlib.Path(self.tmp.name) / 'fake-cca'
         fake.write_text(f'#!{sys.executable}\n{FAKE}')
         fake.chmod(0o755)
-        env = {**os.environ, 'FAKE_LOG': str(self.log)}
+        env = {**os.environ, **(env or {}), 'FAKE_LOG': str(self.log)}
         env.pop('CCA_STREAM_CHILD', None)
         self.process = subprocess.Popen(
             [sys.executable, '-I', str(SCRIPT), '--switch', str(self.switch), '--cca', str(fake), '--bin', '/x/claude',
@@ -225,11 +225,12 @@ class ReadSwitch(unittest.TestCase):
 
     def test_reads_the_account_the_conversation_and_the_follow_up(self):
         self.file.write_text(f'work {ID}\n')
-        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, '', False))
+        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, ''))
         self.file.write_text(f'work {ID}\nCarry on.\nSecond line.\n')
-        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, 'Carry on.\nSecond line.', False))
+        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, 'Carry on.\nSecond line.'))
+        # 0.14.0's plugin asked to end with the child; read and ignored.
         self.file.write_text(f'work {ID} fresh\n')
-        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, '', True))
+        self.assertEqual(stream.read_switch(str(self.file)), ('work', ID, ''))
 
     def test_refuses_a_request_without_a_conversation_id(self):
         for text in ('work\n', 'work not-an-id\n', f'work {ID} extra\n'):
@@ -323,7 +324,7 @@ class Supervisor(unittest.TestCase):
         s.next()
         self.assertEqual(s.process.wait(timeout=WAIT), 0)
         self.assertEqual(len(s.starts()), 1)
-        self.assertIn('not "<account> <conversation id> [fresh]"', s.process.stderr.read().decode())
+        self.assertIn('not "<account> <conversation id>"', s.process.stderr.read().decode())
 
     def test_a_message_the_old_child_never_took_is_sent_to_the_new_one_after_the_follow_up(self):
         s = Supervised(self, ['--replay-user-messages'])

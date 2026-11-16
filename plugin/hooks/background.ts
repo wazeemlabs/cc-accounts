@@ -17,9 +17,7 @@ export type Task = { id: string; type: string; description: string }
 
 // The record file: the work in flight when the last turn ended, or the mark
 // that a turn started and no Stop has run since.
-// `wakeups`: how many scheduled wakeups the session held, when the Stop hook
-// was told.
-export type TaskRecord = { kind: 'tasks'; tasks: Task[]; wakeups?: number } | { kind: 'turn'; turnId: string }
+export type TaskRecord = { kind: 'tasks'; tasks: Task[] } | { kind: 'turn'; turnId: string }
 
 // Agent states after which an agent no longer runs (AgentStatus).
 export const ENDED_AGENT = new Set(['completed', 'failed', 'killed'])
@@ -41,7 +39,8 @@ function taskOf(value: unknown): Task | undefined {
 }
 
 // undefined: the file is not a record (a partial write, another version's).
-// A record 0.4.1 wrote lists wakeups themselves under `crons`; ignored here.
+// The wakeups a record from 0.4.1 lists under `crons`, and the count 0.14.0
+// keeps under `wakeups`, are ignored.
 export function parseRecord(text: string): TaskRecord | undefined {
   let value: unknown
   try {
@@ -55,10 +54,7 @@ export function parseRecord(text: string): TaskRecord | undefined {
   if (!Array.isArray(value.tasks)) return undefined
   const tasks = value.tasks.map(taskOf)
   if (!tasks.every(task => task !== undefined)) return undefined
-  const wakeups = value.wakeups
-  return Number.isInteger(wakeups) && (wakeups as number) >= 0
-    ? { kind: 'tasks', tasks: tasks as Task[], wakeups: wakeups as number }
-    : { kind: 'tasks', tasks: tasks as Task[] }
+  return { kind: 'tasks', tasks: tasks as Task[] }
 }
 
 // The background task a tool call started, read from its input and result.
