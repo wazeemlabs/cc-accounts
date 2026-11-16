@@ -12,6 +12,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import time
 import types
 import unittest
 
@@ -114,6 +115,17 @@ class Supervised:
 
     def starts(self):
         return [entry for entry in self.logged() if 'start' in entry]
+
+    def settled(self, count):
+        """The children started once `count` have, or once cca-stream has
+        exited with fewer: what it decided after a child's exit, which its
+        output does not show when the next child says nothing at its start."""
+        deadline = time.monotonic() + WAIT
+        while len(self.starts()) < count and self.process.poll() is None:
+            if time.monotonic() > deadline:
+                raise AssertionError(f'no child {count} and no exit within {WAIT}s')
+            time.sleep(0.01)
+        return self.starts()
 
     def received(self, start):
         """What the child started `start`-th (0-based) read."""

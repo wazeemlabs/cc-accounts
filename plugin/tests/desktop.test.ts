@@ -6,7 +6,7 @@
 // stayed at the limit without a word.
 import { describe, expect, test } from 'claude-code/testing'
 import { parseReading } from '../hooks/usage'
-import { BY_SESSION, DESKTOP, ROOT, SESSION, START, limits, run, saved, turn, world } from './world'
+import { BY_SESSION, DESKTOP, HOME, ROOT, SESSION, START, limits, run, saved, turn, world } from './world'
 
 const measure = (w: ReturnType<typeof world>) =>
   ({ context: { window: 200000 }, rateLimits: [...w.limits], changed: ['rateLimits'] }) as never
@@ -21,6 +21,17 @@ describe('a desktop session counts on the account the app signed it in to', () =
     expect(w.files.has(`${ROOT}/usage/1.json`)).toBe(false)
     expect(w.files.get(BY_SESSION)).toBe('2\n')
     expect(w.statuses.at(-1)).toBe('account 2 · 5h 42%, week 7%')
+  })
+
+  test("its reading is saved under the app's account though ~/.claude's login record names the app's login too", async ($, on) => {
+    const w = world(on, DESKTOP)
+    w.files.set(`${HOME}/.claude.json`, '{"oauthAccount":{"emailAddress":"two@example.com","accountUuid":"uuid-two"}}')
+    await $.session.start(START)
+    limits(w, 42.4, 7)
+    await $.session.measure(measure(w))
+    expect(parseReading(w.files.get(`${ROOT}/usage/2.json`) ?? '')?.windows.five_hour?.percentUsed).toBe(42.4)
+    expect(w.files.has(`${ROOT}/usage/1.json`)).toBe(false)
+    expect(w.files.get(BY_SESSION)).toBe('2\n')
   })
 
   test('signed in to an account cca does not hold, it saves no reading and moves nothing', async ($, on) => {
