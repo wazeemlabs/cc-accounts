@@ -27,6 +27,9 @@ from stream_fixtures import ID, SCRIPT, WAIT, control, line, stream, user, witho
 # first child (not started with --resume) leaves control requests whose id
 # starts `silent-` unanswered, like one in flight when a process ends; on
 # `ask:<id>` a child asks the panel a permission question with that id.
+# It answers `remote_control` as Claude Code does, with its bridge's epoch: 1
+# in the first child, 7 in a resumed one, which refuses with
+# FAKE_RC_REFUSE set; on `bridge:<state>` it reports its bridge in that state.
 FAKE = textwrap.dedent('''\
     import json, os, sys
     log = open(os.environ['FAKE_LOG'], 'a')
@@ -37,11 +40,21 @@ FAKE = textwrap.dedent('''\
           'fresh': os.environ.get('CCA_STREAM_FRESH'), 'resumed': os.environ.get('CCA_STREAM_RESUMED')})
     echoes = '--replay-user-messages' in sys.argv
     first = '--resume' not in sys.argv
+    epoch = 1 if first else 7
     for line in sys.stdin:
         message = json.loads(line)
         note({'got': message})
         if message['type'] == 'control_request':
             if first and message['request_id'].startswith('silent-'):
+                continue
+            if message['request']['subtype'] == 'remote_control' and not first and os.environ.get('FAKE_RC_REFUSE'):
+                print(json.dumps({'type': 'control_response', 'response': {'subtype': 'error',
+                      'request_id': message['request_id'], 'error': 'Remote Control is not available'}}), flush=True)
+                continue
+            if message['request']['subtype'] == 'remote_control':
+                answer = {'session_url': f'https://claude.ai/code/s{epoch}', 'bridge_epoch': epoch} if message['request']['enabled'] else {}
+                print(json.dumps({'type': 'control_response', 'response': {'subtype': 'success',
+                      'request_id': message['request_id'], 'response': answer}}), flush=True)
                 continue
             print(json.dumps({'type': 'control_response', 'response': {'subtype': 'success',
                   'request_id': message['request_id'], 'response': {}}}), flush=True)
@@ -54,6 +67,9 @@ FAKE = textwrap.dedent('''\
                   'request': {'subtype': 'can_use_tool', 'tool_name': 'Bash'}}), flush=True)
         if text.startswith('ignore:'):
             continue
+        if text.startswith('bridge:'):
+            print(json.dumps({'type': 'system', 'subtype': 'bridge_state', 'state': text[len('bridge:'):],
+                  'bridge_epoch': epoch}), flush=True)
         if echoes and message['type'] == 'user':
             print(json.dumps({'type': 'user', 'uuid': message.get('uuid'), 'isReplay': True}), flush=True)
         if text.startswith('switch:'):
