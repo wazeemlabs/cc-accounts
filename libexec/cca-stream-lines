@@ -222,6 +222,102 @@ class Open:
         return panel, child
 
 
+class RemoteControl:
+    """Remote Control across a switch. The panel turns it on with a
+    `remote_control` request and keeps the bridge epoch of the answer; after
+    that it marks Remote Control off only on a `bridge_state` line of
+    `failed` or `policy_disabled` that names that epoch, and nothing else
+    updates it. A bridge belongs to the account of the process that opened
+    it and ends with that process. So a new child is asked to open one on its
+    own account (without the old bridge session, which the new account
+    cannot take over), its bridge's state lines carry the epoch the panel
+    knows, and a child that cannot open one tells the panel it is off. The
+    link the panel shows stays the old session's until the panel turns
+    Remote Control on again or the tab is reopened."""
+
+    STATE = b'"bridge_state"'
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        # The panel's remote_control requests the child has not answered.
+        self.asked = {}
+        # What the panel holds as on: its bridge's epoch and session name.
+        self.on = None
+        # The epoch of a bridge this opened in the current child, which the
+        # panel does not know.
+        self.opened = None
+        self.replay_id = None
+        self.replays = 0
+
+    def from_panel(self, line):
+        found = parse_control(line)
+        if found is not None and found[0] == 'control_request' and found[2].get('subtype') == 'remote_control':
+            with self.lock:
+                self.asked[found[1]] = found[2]
+
+    def replay(self):
+        """The request that opens a bridge in a new child, or None when the
+        panel holds Remote Control off or has a request of its own on the way.
+        Called between children."""
+        with self.lock:
+            self.opened = None
+            self.replay_id = None
+            if self.on is None or self.asked:
+                return None
+            self.replays += 1
+            self.replay_id = f'{REPLAY_PREFIX}remote-{self.replays}'
+            request = {'subtype': 'remote_control', 'enabled': True}
+            if self.on[1] is not None:
+                request['name'] = self.on[1]
+            return control_line({'type': 'control_request', 'request_id': self.replay_id, 'request': request})
+
+    def from_child(self, line):
+        """The lines to pass the panel for a line of the child's."""
+        found = parse_control(line)
+        if found is not None and found[0] == 'control_response':
+            return self._answer(line, found[1], found[2])
+        if self.STATE not in line:
+            return [line]
+        try:
+            value = json.loads(line)
+        except ValueError:
+            return [line]
+        if not isinstance(value, dict) or value.get('type') != 'system' or value.get('subtype') != 'bridge_state':
+            return [line]
+        with self.lock:
+            if self.on is None:
+                return [line]
+            epoch = self.on[0]
+            if self.opened is not None and value.get('bridge_epoch') == self.opened:
+                value = {**value, 'bridge_epoch': epoch}
+                line = control_line(value)
+            if value.get('state') in ('failed', 'policy_disabled') and value.get('bridge_epoch') in (None, epoch):
+                self.on = None
+                self.opened = None
+        return [line]
+
+    def _answer(self, line, request_id, body):
+        with self.lock:
+            if request_id == self.replay_id:
+                self.replay_id = None
+                answer = body.get('response')
+                if body.get('subtype') == 'success' and isinstance(answer, dict):
+                    self.opened = answer.get('bridge_epoch')
+                    return []
+                epoch, self.on = self.on[0] if self.on is not None else None, None
+                return [control_line({'type': 'system', 'subtype': 'bridge_state', 'state': 'failed',
+                                      'detail': 'Remote Control could not start on the account the session moved to',
+                                      'bridge_epoch': epoch})]
+            request = self.asked.pop(request_id, None)
+            if request is None or body.get('subtype') != 'success':
+                return [line]
+            answer = body.get('response') if isinstance(body.get('response'), dict) else {}
+            self.opened = None
+            name = request.get('name') if isinstance(request.get('name'), str) else None
+            self.on = (answer.get('bridge_epoch'), name) if request.get('enabled') is True else None
+        return [line]
+
+
 def is_replay_answer(line):
     if REPLAY_PREFIX.encode() not in line:
         return False

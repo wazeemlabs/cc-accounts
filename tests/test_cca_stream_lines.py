@@ -76,5 +76,50 @@ class SetupNote(unittest.TestCase):
         self.assertEqual(setup.replay(), [])
 
 
+
+def answer(request_id, response=None, error=None):
+    body = {'subtype': 'error', 'request_id': request_id, 'error': error} if error else \
+        {'subtype': 'success', 'request_id': request_id, 'response': response or {}}
+    return line({'type': 'control_response', 'response': body})
+
+
+def bridge(state, epoch):
+    return line({'type': 'system', 'subtype': 'bridge_state', 'state': state, 'bridge_epoch': epoch})
+
+
+class RemoteControl(unittest.TestCase):
+    def turned_on(self):
+        remote = stream.protocol.RemoteControl()
+        remote.from_panel(line(control('rc', 'remote_control', enabled=True)))
+        remote.from_child(answer('rc', {'bridge_epoch': 3}))
+        return remote
+
+    def test_a_request_the_child_refused_leaves_remote_control_as_it_was(self):
+        remote = stream.protocol.RemoteControl()
+        remote.from_panel(line(control('rc', 'remote_control', enabled=True)))
+        refused = answer('rc', error='not available')
+        self.assertEqual(remote.from_child(refused), [refused])
+        self.assertIsNone(remote.replay())
+
+    def test_a_bridge_the_panel_hears_has_failed_is_not_opened_again_by_a_move(self):
+        remote = self.turned_on()
+        remote.from_child(bridge('policy_disabled', 3))
+        self.assertIsNone(remote.replay())
+
+    def test_a_failure_of_another_epoch_leaves_it_on(self):
+        remote = self.turned_on()
+        remote.from_child(bridge('failed', 2))
+        self.assertIsNotNone(remote.replay())
+
+    def test_lines_that_only_look_like_bridge_states_pass_unchanged(self):
+        remote = self.turned_on()
+        remote.replay()
+        remote.from_child(answer('cca-replay-remote-1', {'bridge_epoch': 9}))
+        for odd in (b'not json "bridge_state"\n', line({'type': 'assistant', 'text': 'bridge_state', 'bridge_epoch': 9}),
+                    line(['bridge_state'])):
+            self.assertEqual(remote.from_child(odd), [odd])
+        self.assertEqual(json.loads(remote.from_child(bridge('connected', 9))[0])['bridge_epoch'], 3)
+
+
 if __name__ == '__main__':
     unittest.main()

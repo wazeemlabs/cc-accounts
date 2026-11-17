@@ -16,7 +16,8 @@ never sees the process end.
 The setup replayed is the `initialize` control request and the latest request
 of every kind that sets session state (`set_*`, `ui_attach` until a
 `ui_detach`). The new child's replies to those replays are dropped: the panel
-already had its answers.
+already had its answers. Remote Control the panel had on is turned on in the
+new child, on its own account (RemoteControl in cca-stream-lines).
 
 No message the panel sends is lost to a switch. Once the switch file exists,
 lines are held for the new child. A user message the old child was sent but
@@ -138,6 +139,7 @@ class Supervisor:
         self.output_child = None
         self.unread = protocol.Unread(REPLAY_FLAG in args)
         self.open = protocol.Open()
+        self.remote = protocol.RemoteControl()
         # SIGUSR1 writes here; pump_releases reads it.
         self.release_read, self.release_write = os.pipe()
 
@@ -190,6 +192,7 @@ class Supervisor:
         for line in read_lines(sys.stdin.fileno()):
             self.open.from_panel(line)
             self.unread.from_panel(line)
+            self.remote.from_panel(line)
             with self.lock:
                 self.setup.note(line)
                 if self.holding():
@@ -208,15 +211,16 @@ class Supervisor:
 
     def pump_stdout(self, child):
         for line in iter(child.stdout.readline, b''):
-            if protocol.is_replay_answer(line):
-                continue
             with self.out_lock:
                 if child is not self.output_child:
                     continue
-                self.unread.echoed(line)
-                self.unread.from_child(line)
-                self.open.from_child(line)
-                self.out.write(line)
+                for passed in self.remote.from_child(line):
+                    if protocol.is_replay_answer(passed):
+                        continue
+                    self.unread.echoed(passed)
+                    self.unread.from_child(passed)
+                    self.open.from_child(passed)
+                    self.out.write(passed)
                 self.out.flush()
 
     def settle(self):
@@ -313,7 +317,8 @@ class Supervisor:
             # with this blocked writing to it. After settle(), so the notes
             # that close what the old child left open reach the panel first.
             reader = self.read_from(child)
-            before = [*self.setup.replay(unanswered, self.held_ids()), *again]
+            remote = self.remote.replay()
+            before = [*self.setup.replay(unanswered, self.held_ids()), *([remote] if remote else []), *again]
             if follow_up:
                 before.append(protocol.user_message(follow_up, conversation))
             before.extend(self.unread.take())
