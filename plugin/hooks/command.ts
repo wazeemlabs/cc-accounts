@@ -4,13 +4,13 @@ import type { EngineInterface } from 'claude-code'
 import { formatList, parseAsk, USAGE } from './accounts'
 import { startOrDefault } from './balance'
 import { budgetLines, currentPlan, MAX_BUDGET, parseBudget, projectOf, readBudgetsInForce, SCRATCH_BUDGET, scratchRoot, setBudget } from './budgets'
-import { context, defaultName, describeError, emailOf, exitOf, inDesktopApp, record, writeAtomic, type Context } from './context'
+import { context, defaultName, describeError, emailOf, exitOf, inDesktopApp, writeAtomic, type Context } from './context'
 import { wakeParked } from './parking'
 import { DEFAULT_WEIGHT, MAX_WEIGHT, normalizeFolder, parseWeight, projectName, readPriorities, setPriority, weightOf } from './priorities'
 import { formatReport, gatherReport, totals, totalsLine } from './report'
 import { save } from './saved'
 import { readReading } from './survey'
-import { afterOf, describeWait, leadOf, requestSwitch, type SwitchState } from './switching'
+import { afterOf, describeWait, dropSwitch, leadOf, requestSwitch, type SwitchState } from './switching'
 import { describeUse } from './usage'
 
 // After /account changes a budget or weight: the sessions it lets go on are woken at once.
@@ -126,10 +126,7 @@ export async function accountCommand($: EngineInterface, args: string, state: Sw
   if (target.name === current) {
     if (state.pending === undefined) return { text: `This session already runs on ${target.name}.` }
     const dropped = state.pending.target
-    state.pending = undefined
-    await save($, state)
-    await record($, ctx, sessionId, target.name)
-    $.ui.status(`account ${target.name}`)
+    await dropSwitch($, state, ctx)
     return { text: `Cancelled the switch to ${dropped}: this session stays on ${target.name}.` }
   }
   const signIn = (await emailOf($, target, ctx.home)) === undefined
@@ -148,7 +145,7 @@ export async function accountCommand($: EngineInterface, args: string, state: Sw
         `reopen it in VS Code, or run \`cca ${target.name} --resume ${sessionId}\` in a terminal.${signIn}`,
     }
   }
-  const asked = await requestSwitch($, state, ctx, exit, { target: target.name, force: ask.force })
+  const asked = await requestSwitch($, state, ctx, exit, { target: target.name, force: ask.force, by: 'person' })
   await save($, state)
   // Started without cca: the process cannot change its own login, so the
   // choice waits for the conversation's next open.

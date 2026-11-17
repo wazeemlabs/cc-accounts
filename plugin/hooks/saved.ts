@@ -60,6 +60,7 @@ export function parseSaved(value: unknown): SavedSwitch | undefined {
     if (typeof pending !== 'object' || typeof pending.target !== 'string' || typeof pending.force !== 'boolean') return undefined
     if (pending.from !== undefined && typeof pending.from !== 'string') return undefined
     if (!isStop(pending.stop)) return undefined
+    if (pending.by !== undefined && pending.by !== 'person' && pending.by !== 'balancer') return undefined
   }
   return saved as SavedSwitch
 }
@@ -86,6 +87,9 @@ export async function restore($: EngineInterface, state: SwitchState, exitNow: P
   state.stranded = saved.stranded ?? undefined
   state.strandedNote = saved.strandedNote ?? undefined
   // A queued switch goes on only where this process can still be ended for it.
-  state.pending = saved.pending !== null && exitNow !== undefined ? { ...saved.pending, exit: exitNow } : undefined
+  // One saved with no word of who asked is a person's, never decided again.
+  state.pending = saved.pending !== null && exitNow !== undefined
+    ? { ...saved.pending, by: saved.pending.by ?? 'person', exit: exitNow }
+    : undefined
   return true
 }

@@ -4,9 +4,10 @@
 // switch waits for the turn to end and the work to finish unless forced.
 import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
-import { followUpText, type Move, type Stop } from './usage'
+import { accountStatus, followUpText, type Move, type Stop } from './usage'
 import { describeError, record, run, type Context } from './context'
 import { save } from './saved'
+import { ownReading } from './survey'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
 // waits on the process, reads the switch file and resumes the conversation
@@ -21,8 +22,17 @@ export type Exit =
   | { kind: 'stream'; pid: string; switchFile: string | undefined; supervisor: string | undefined; sessionId: string }
 
 // The switch asked for and not carried out yet: from which account, and, for
-// a move the account forced by stopping a turn, what stopped it.
-export type Pending = { target: string; force: boolean; exit: Exit; from: string | undefined; stop: Stop | undefined }
+// a move the account forced by stopping a turn, what stopped it. `by`: who
+// asked, a person with /account or the balancer, which decides its own
+// queued moves again at each turn's end (balance.ts).
+export type Pending = {
+  target: string
+  force: boolean
+  exit: Exit
+  from: string | undefined
+  stop: Stop | undefined
+  by: 'person' | 'balancer'
+}
 
 // What a switch waits for: the turn in flight and the background work.
 export type Wait = { turn: boolean; tasks: Task[] }
@@ -270,15 +280,26 @@ export async function requestSwitch(
   state: SwitchState,
   ctx: Context,
   exit: Exit | undefined,
-  ask: { target: string; force: boolean; stop?: Stop },
+  ask: { target: string; force: boolean; stop?: Stop; by: Pending['by'] },
 ): Promise<SwitchAsked> {
   await record($, ctx, await $.session.id(), ask.target)
   if (exit === undefined) return { kind: 'recorded' }
-  state.pending = { target: ask.target, force: ask.force, exit, from: ctx.current?.name, stop: ask.stop }
+  state.pending = { target: ask.target, force: ask.force, exit, from: ctx.current?.name, stop: ask.stop, by: ask.by }
   const wait = await waitingFor($, state)
   if (ask.force || (!wait.turn && wait.tasks.length === 0)) {
     await $.clock.after(0, () => carryOut($, state))
     return { kind: 'started', exit, stopping: wait }
   }
   return { kind: 'queued', exit, wait }
+}
+
+// Drops the queued switch: the conversation stays recorded on the account it
+// runs on, and the status line shows that account again.
+export async function dropSwitch($: EngineInterface, state: SwitchState, ctx: Context): Promise<void> {
+  const stay = ctx.current?.name
+  state.pending = undefined
+  await save($, state)
+  if (stay === undefined) return
+  await record($, ctx, await $.session.id(), stay)
+  $.ui.status(accountStatus(stay, await ownReading($, stay), await $.clock.now(), state.strandedNote))
 }

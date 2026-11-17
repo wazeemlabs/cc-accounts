@@ -16,6 +16,8 @@ export type CcAccountsPending = {
   force: boolean
   from?: string
   stop?: { window: string } | { error: string }
+  // Who asked: absent in what a plugin before 0.16.0 saved, read as a person.
+  by?: 'person' | 'balancer'
 }
 
 // Background work the last Stop hook listed or a tool call started.

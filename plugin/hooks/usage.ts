@@ -318,6 +318,13 @@ export function describeUse(reading: Reading | undefined, now: number): string {
   return `5h ${Math.round(percentNow(reading, 'five_hour', now))}%${week}`
 }
 
+// The status line while no switch is under way: the account, its use, and
+// `note` (a session that cannot move says so).
+export function accountStatus(name: string, reading: Reading | undefined, now: number, note = ''): string {
+  const use = describeUse(reading, now)
+  return `account ${name}${use === '' ? '' : ` · ${use}`}${note}`
+}
+
 // What the conversation is told when it reopens on `to`, or undefined when
 // it needs to be told nothing: `stop`, what stopped its last turn;
 // `interrupted`, whether ending the process cut short a turn a message

@@ -22,7 +22,7 @@ describe('what a reload keeps', () => {
     const { text } = await $.command.run(run('2'))
     expect(text).toMatch(/^Switch to 2 queued/)
     const value = w.state.get('cc-accounts.switching') as SavedSwitch | undefined
-    expect(value?.pending).toEqual({ target: '2', force: false, from: '1' })
+    expect(value?.pending).toEqual({ target: '2', force: false, from: '1', by: 'person' })
     expect(value?.tasks).toEqual([SHELL])
   })
 
@@ -82,5 +82,6 @@ describe('what a reload keeps', () => {
     expect(parseSaved({ ...saved(), tasks: [{ id: 'b1' }] })).toBe(undefined)
     expect(parseSaved({ ...saved(), pending: { target: 2, force: false } })).toBe(undefined)
     expect(parseSaved({ ...saved(), pending: { target: '2', force: false, stop: { other: 1 } } })).toBe(undefined)
+    expect(parseSaved({ ...saved(), pending: { target: '2', force: false, by: 'someone' } })).toBe(undefined)
   })
 })

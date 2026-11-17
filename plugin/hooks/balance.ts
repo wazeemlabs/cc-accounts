@@ -17,11 +17,11 @@ import { context, defaultName, describeError, exitOf, inDesktopApp, startFile, w
 import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { accountStates, liveSessions, ownReading, writeReading, type LiveSession } from './survey'
-import { requestSwitch, type SwitchState } from './switching'
+import { dropSwitch, requestSwitch, type Exit, type SwitchState } from './switching'
 import {
   ACCOUNT_FAILURES,
+  accountStatus,
   chooseTarget,
-  describeUse,
   describeWindows,
   fullWindow,
   percentNow,
@@ -100,8 +100,7 @@ export async function noteMeasure($: EngineInterface, state: SwitchState): Promi
   if (reading === undefined) return
   await writeReading($, ctx.root, reading)
   if (state.pending === undefined && !state.ending) {
-    const use = describeUse(reading, await $.clock.now())
-    $.ui.status(`account ${ctx.current.name}${use === '' ? '' : ` · ${use}`}${state.strandedNote ?? ''}`)
+    $.ui.status(accountStatus(ctx.current.name, reading, await $.clock.now(), state.strandedNote))
   }
 }
 
@@ -121,13 +120,47 @@ export function stopOf(failure: string | undefined, window: string | undefined):
 // before cca-stream at its next message, which then goes to the new
 // account), or a terminal session a person is at. A `-p` run would come back
 // as an interactive one, and a process cca did not start never reopens.
+// A move the balancer queued behind background work is decided again at each
+// turn's end, since the readings that called for it change while it waits
+// (2026-11-17: one queued to spend a week before its reset waited past the
+// reset): it keeps waiting while the same move is called for, goes to
+// another account that now fits better, or is dropped. A person's /account
+// switch is theirs and is left alone.
 export async function balance($: EngineInterface, state: SwitchState, stopped: boolean): Promise<void> {
   if (state.ending) return
-  if (state.pending !== undefined) return stopped ? hurry($, state) : undefined
+  const pending = state.pending
+  if (pending !== undefined && (stopped || pending.by === 'person' || pending.force)) return stopped ? hurry($, state) : undefined
   if ((await $.env.get('CCA_BALANCE')) === 'off') return
   const ctx = await context($)
   if (ctx?.current === undefined) return
-  const from = ctx.current.name
+  const plan = await planMove($, state, ctx, ctx.current.name, stopped)
+  if (plan !== undefined && plan.target === pending?.target) return
+  if (plan !== undefined) return move($, state, ctx, plan)
+  if (pending === undefined) return
+  await dropSwitch($, state, ctx)
+  $.ui.log(`cc-accounts: nothing calls for the move to ${pending.target} any more; this conversation stays on ${ctx.current.name}.`)
+}
+
+// A move the balancer would make now: where to, how the process ends for
+// it, whether it goes at once (a turn the account stopped), and why.
+type Plan = { from: string; target: string; exit: Exit; force: boolean; stop: Stop | undefined; why: string }
+
+async function move($: EngineInterface, state: SwitchState, ctx: Context, plan: Plan): Promise<void> {
+  const { from, target, exit, force, stop, why } = plan
+  const asked = await requestSwitch($, state, ctx, exit, { target, force, stop, by: 'balancer' })
+  const waits = asked.kind === 'queued'
+  if (waits) $.ui.status(`account ${from}, moving to ${target}`)
+  $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
+}
+
+// The live sessions, with this one on the account it runs on: a queued move
+// has already recorded it on its target, where it does not run yet.
+async function liveHere($: EngineInterface, ctx: Context, from: string): Promise<LiveSession[]> {
+  const self = await $.session.id()
+  return (await liveSessions($, ctx)).map(live => (live.sessionId === self ? { ...live, account: from } : live))
+}
+
+async function planMove($: EngineInterface, state: SwitchState, ctx: Context, from: string, stopped: boolean): Promise<Plan | undefined> {
   const now = await $.clock.now()
   const reading = await ownReading($, from)
   const stop = stopped ? stopOf(await turnFailure($, ctx), windowAtLimit(reading, now)) : undefined
@@ -138,18 +171,22 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
     state.stranded = undefined
     state.strandedNote = undefined
   }
-  if (stop === undefined && full === undefined && tight === undefined) return spendSooner($, state, ctx, reading, now)
   const exit = await exitOf($, await $.session.id())
-  if (exit === undefined) return stranded($, state, ctx, from, reading, stop, full, now)
-  if (exit.kind === 'terminal' && !state.interactive) return
-  const live = await liveSessions($, ctx)
+  if (exit === undefined) {
+    await stranded($, state, ctx, from, reading, stop, full, now)
+    return undefined
+  }
+  if (exit.kind === 'terminal' && !state.interactive) return undefined
+  const live = await liveHere($, ctx, from)
   const priorities = await readPriorities($, ctx.root)
-  // Below the leave line, only a session with a heavier one beside it moves.
   const mine = weightOf(priorities, await $.session.root())
-  const heavier = stop === undefined && full === undefined
+  // Below the leave line, only a session with a heavier one beside it moves.
+  const heavier = stop === undefined && full === undefined && tight !== undefined
     ? heavierOn(live, priorities, from, await $.session.id(), mine.weight)
     : undefined
-  if (stop === undefined && full === undefined && heavier === undefined) return spendSooner($, state, ctx, reading, now)
+  if (stop === undefined && full === undefined && heavier === undefined) {
+    return soonerPlan($, state, ctx, { from, reading, now, exit, live, priorities, arriving: mine.weight })
+  }
   // `full ?? tight` is set whenever `stop` is not.
   const window = stop !== undefined && 'window' in stop ? stop.window : full ?? tight ?? 'five_hour'
   if (stop === undefined && waitsForReset(reading, tight, now)) {
@@ -157,7 +194,7 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
       `cc-accounts: ${from}'s ${describeWindows(reading, now)}, but the ${windowName(window)} window resets within ` +
         `${POLICY.resetGraceMs / 60_000} minutes; staying.`,
     )
-    return
+    return undefined
   }
   const family = await sessionFamily($, state.answered)
   // A failure the readings do not explain is recorded, so that no session
@@ -175,12 +212,9 @@ export async function balance($: EngineInterface, state: SwitchState, stopped: b
   if (target === undefined) {
     // Making room is a courtesy: with nowhere better to go, the session stays quietly.
     if (heavier === undefined) $.ui.log(`cc-accounts: ${why}, and no other account has room to move to.`)
-    return
+    return undefined
   }
-  const asked = await requestSwitch($, state, ctx, exit, { target, force: stop !== undefined, stop })
-  const waits = asked.kind === 'queued'
-  if (waits) $.ui.status(`account ${from}, moving to ${target}`)
-  $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
+  return { from, target, exit, force: stop !== undefined, stop, why }
 }
 
 // A session that would leave its account but that nothing would reopen
@@ -224,8 +258,7 @@ async function stranded(
       : `${target} has room: go on with this conversation in a terminal with ${command}.`
   $.ui.log(`cc-accounts: ${why}, and this session cannot move: ${cause}. ${next}`)
   state.strandedNote = ` · cannot move${target === undefined ? '' : `; ${target} has room`}`
-  const use = describeUse(reading, now)
-  $.ui.status(`account ${from}${use === '' ? '' : ` · ${use}`}${state.strandedNote}`)
+  $.ui.status(accountStatus(from, reading, now, state.strandedNote))
 }
 
 // A turn the account stopped while a move waits for the session's background
@@ -253,31 +286,36 @@ async function hurry($: EngineInterface, state: SwitchState): Promise<void> {
 // well before this one's and has room, so that room is spent before the reset
 // takes it (usage.ts, soonerTarget). The move is planned, so it waits for the
 // session's background work and goes only where a planned move may.
-async function spendSooner($: EngineInterface, state: SwitchState, ctx: Context, reading: Reading | undefined, now: number): Promise<void> {
-  const from = ctx.current?.name
-  if (from === undefined) return
-  const exit = await exitOf($, await $.session.id())
-  if (exit === undefined || (exit.kind === 'terminal' && !state.interactive)) return
-  const live = await liveSessions($, ctx)
-  const priorities = await readPriorities($, ctx.root)
+// `arriving`: this session's project weight.
+async function soonerPlan(
+  $: EngineInterface,
+  state: SwitchState,
+  ctx: Context,
+  here: {
+    from: string
+    reading: Reading | undefined
+    now: number
+    exit: Exit
+    live: readonly LiveSession[]
+    priorities: Priorities
+    arriving: number
+  },
+): Promise<Plan | undefined> {
+  const { from, reading, now, exit, live, priorities, arriving } = here
   const options = await candidates($, ctx, await sessionFamily($, state.answered), live, priorities)
   // This session's own reading is fresher than its account's file; before
   // its first response it has none, and its account's saved one stands in.
   const own = options.find(option => option.name === from)
   const current = { name: from, reading: reading ?? own?.reading, load: own?.load ?? 0, units: own?.units ?? 1 }
-  const arriving = weightOf(priorities, await $.session.root()).weight
   const sooner = soonerTarget(current, options, now, arriving)
   const target = sooner ?? spreadTarget(current, options, now, arriving)
-  if (target === undefined) return
+  if (target === undefined) return undefined
   const why = sooner !== undefined
     ? `${target}'s week resets at ${utcMinute(weekEnds(options.find(option => option.name === target)?.reading, now))} UTC, ` +
       `well before ${from}'s, and has room it would lose`
     : `the sessions working on ${from} would fill its 5-hour window, which is at ` +
       `${percentNow(reading, 'five_hour', now)}%, and ${target} has room`
-  const asked = await requestSwitch($, state, ctx, exit, { target, force: false, stop: undefined })
-  const waits = asked.kind === 'queued'
-  if (waits) $.ui.status(`account ${from}, moving to ${target}`)
-  $.ui.log(`cc-accounts: ${why}; moving this conversation to ${target}${waits ? ' once its background work ends' : ''}.`)
+  return { from, target, exit, force: false, stop: undefined, why }
 }
 
 function utcMinute(ms: number): string {
