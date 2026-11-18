@@ -62,6 +62,8 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const released: string[] = []
   // Pids of other sessions' processes that still run.
   const running = new Set<string>()
+  // Every process on the machine, as `ps -axo pid=,ppid=,rss=` lists them.
+  const processes = { table: '' }
   // The rate-limit windows the session's last response reported.
   const limits: { kind: string; percentUsed: number; resetsAt?: string }[] = []
   // The folder the session's shell is in was deleted (a removed worktree):
@@ -107,7 +109,10 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     if (model.fails) throw new Error('no session bound')
     return { value: model.value as never }
   })
-  on('session.usage', async () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [...limits] } as never }))
+  // The live context window, as $.session.usage() answers: no `percent`
+  // until a test sets one, as before a window's first response.
+  const window: { window: number; percent?: number } = { window: 200000 }
+  on('session.usage', async () => ({ value: { startedAt: 0, context: { ...window }, rateLimits: [...limits] } as never }))
   // The session's folder: where it started, until a test moves it, as the
   // desktop app moves a session it started in a standby folder.
   const where = { root: '/' }
@@ -217,6 +222,10 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
       released.push(e.argv[2] ?? '')
       return done(0)
     }
+    if (e.argv[0] === 'ps' && e.argv[1] === '-axo') {
+      // ps -axo pid=,ppid=,rss=: every process, as a test listed them.
+      return { value: { exitCode: 0, stdout: processes.table, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === 'ps') {
       // ps -o pid= -p a,b,c: the ones in `running`.
       const asked = (e.argv[4] ?? '').split(',')
@@ -272,7 +281,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   return {
     files, ran, statuses, logs, clock, killed, agents, state, results, denied, limits, running, writes, released, slow, transcript, settings, model,
-    folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery,
+    folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery, window, processes,
   }
 }
 

@@ -8,7 +8,7 @@ import { accountStatus, followUpText, type Move, type Stop } from './usage'
 import { describeError, record, run, type Context } from './context'
 import { keptFile, writeKept } from './keep'
 import { save } from './saved'
-import { ownReading } from './survey'
+import { ownContext, ownReading } from './survey'
 
 // How this process ends for a switch, by how cca started it. A terminal: cca
 // waits on the process, reads the switch file and resumes the conversation
@@ -306,5 +306,5 @@ export async function dropSwitch($: EngineInterface, state: SwitchState, ctx: Co
   await save($, state)
   if (stay === undefined) return
   await record($, ctx, await $.session.id(), stay)
-  $.ui.status(accountStatus(stay, await ownReading($, stay), await $.clock.now(), state.strandedNote))
+  $.ui.status(accountStatus(stay, await ownReading($, stay), await $.clock.now(), state.strandedNote, await ownContext($)))
 }

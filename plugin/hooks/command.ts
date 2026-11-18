@@ -9,6 +9,7 @@ import { wakeParked } from './parking'
 import { DEFAULT_WEIGHT, MAX_WEIGHT, normalizeFolder, parseWeight, projectName, readPriorities, setPriority, weightOf } from './priorities'
 import { formatReport, gatherReport, totals, totalsLine } from './report'
 import { save } from './saved'
+import { formatSessions, gatherSessions } from './sessions'
 import { readReading } from './survey'
 import { afterOf, describeWait, dropSwitch, leadOf, requestSwitch, type SwitchState } from './switching'
 import { describeUse } from './usage'
@@ -50,6 +51,8 @@ export async function accountCommand($: EngineInterface, args: string, state: Sw
     const preferred = await defaultName($, ctx)
     return { text: formatReport(await gatherReport($, ctx, preferred, await startOrDefault($, ctx, preferred), here)) }
   }
+
+  if (ask.kind === 'sessions') return { text: formatSessions(await gatherSessions($, ctx), await $.session.id()) }
 
   if (ask.kind === 'priority') {
     const priorities = await readPriorities($, ctx.root)

@@ -6,6 +6,7 @@ export type Account = { name: string; dir: string }
 export type Ask =
   | { kind: 'list' }
   | { kind: 'report' }
+  | { kind: 'sessions' }
   | { kind: 'switch'; name: string; force: boolean }
   | { kind: 'default'; name: string }
   | { kind: 'priority'; weight: string | undefined; folder: string | undefined }
@@ -16,6 +17,7 @@ export const USAGE =
   'Usage: /account (list), /account <name> (switch this session once its work is done), ' +
   '/account <name> now (switch at once, stopping that work), /account default <name>, ' +
   '/account usage (what is free on every account, and where each project runs), ' +
+  '/account sessions (every running session, how long it has been idle and the memory it holds), ' +
   '/account priority [<weight> [<folder>]] (how much a project matters; this one by default), ' +
   '/account budget [<points a day> [<folder>]] (what a project may spend each UTC day; 0 removes it)'
 
@@ -48,6 +50,7 @@ export function parseAsk(args: string): Ask {
   }
   if (second === undefined) {
     if (first === 'default') return { kind: 'help' }
+    if (first === 'sessions') return { kind: 'sessions' }
     return first === 'usage' ? { kind: 'report' } : { kind: 'switch', name: first, force: false }
   }
   if (rest.length > 0) return { kind: 'help' }

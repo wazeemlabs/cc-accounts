@@ -16,7 +16,7 @@ import type { EngineInterface } from 'claude-code'
 import { context, defaultName, describeError, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
 import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
-import { accountStates, liveSessions, ownReading, writeReading, type LiveSession } from './survey'
+import { accountStates, liveSessions, ownContext, ownReading, writeReading, type LiveSession } from './survey'
 import { dropSwitch, requestSwitch, type Exit, type SwitchState } from './switching'
 import {
   ACCOUNT_FAILURES,
@@ -99,9 +99,16 @@ export async function noteMeasure($: EngineInterface, state: SwitchState): Promi
   const reading = await ownReading($, ctx.current.name)
   if (reading === undefined) return
   await writeReading($, ctx.root, reading)
-  if (state.pending === undefined && !state.ending) {
-    $.ui.status(accountStatus(ctx.current.name, reading, await $.clock.now(), state.strandedNote))
-  }
+  await showStatus($, state)
+}
+
+// The status line as things stand: the account, its use and the context
+// window's fill. A switch under way keeps the line that names it.
+export async function showStatus($: EngineInterface, state: SwitchState): Promise<void> {
+  const ctx = await context($)
+  if (ctx?.current === undefined || state.pending !== undefined || state.ending) return
+  const reading = await ownReading($, ctx.current.name)
+  $.ui.status(accountStatus(ctx.current.name, reading, await $.clock.now(), state.strandedNote, await ownContext($)))
 }
 
 // Why a stopped turn's account cannot go on: an API error of the account's
@@ -258,7 +265,7 @@ async function stranded(
       : `${target} has room: go on with this conversation in a terminal with ${command}.`
   $.ui.log(`cc-accounts: ${why}, and this session cannot move: ${cause}. ${next}`)
   state.strandedNote = ` · cannot move${target === undefined ? '' : `; ${target} has room`}`
-  $.ui.status(accountStatus(from, reading, now, state.strandedNote))
+  $.ui.status(accountStatus(from, reading, now, state.strandedNote, await ownContext($)))
 }
 
 // A turn the account stopped while a move waits for the session's background

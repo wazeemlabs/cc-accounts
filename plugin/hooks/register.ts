@@ -1,7 +1,7 @@
 import type { EngineInterface, Register, Timer } from 'claude-code'
 import { taskStarted, turnMark } from './background'
 import { accountCommand } from './command'
-import { balance, noteMeasure, startOrDefault } from './balance'
+import { balance, noteMeasure, showStatus, startOrDefault } from './balance'
 import { context, describeError, exitOf, record, type Context } from './context'
 import { projectName } from './priorities'
 import { forgetRefused, noteRefused, parkedFile, parkedNow, WAKE_MS, wakeParked } from './parking'
@@ -190,6 +190,7 @@ export const register: Register = on => {
   })
 
   // The account's rate-limit windows moved: every session can now see them.
+  // The context window's fill moved: the status line shows it.
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
     if (e.changed.includes('rateLimits')) {
@@ -197,6 +198,8 @@ export const register: Register = on => {
       const ctx = await context($)
       const reading = ctx?.current === undefined ? undefined : await ownReading($, ctx.current.name)
       if (ctx !== undefined && reading !== undefined) await recordCalibration($, ctx.root, reading)
+    } else if (e.changed.includes('context')) {
+      await showStatus($, state)
     }
     return result
   }).catch(async ($, e, next) => {

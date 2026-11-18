@@ -318,11 +318,12 @@ export function describeUse(reading: Reading | undefined, now: number): string {
   return `5h ${Math.round(percentNow(reading, 'five_hour', now))}%${week}`
 }
 
-// The status line while no switch is under way: the account, its use, and
-// `note` (a session that cannot move says so).
-export function accountStatus(name: string, reading: Reading | undefined, now: number, note = ''): string {
+// The status line while no switch is under way: the account, its use, how
+// full the session's context window is (`context`, a percentage, once a
+// response reported it), and `note` (a session that cannot move says so).
+export function accountStatus(name: string, reading: Reading | undefined, now: number, note = '', context?: number): string {
   const use = describeUse(reading, now)
-  return `account ${name}${use === '' ? '' : ` · ${use}`}${note}`
+  return `account ${name}${use === '' ? '' : ` · ${use}`}${context === undefined ? '' : ` · context ${context}%`}${note}`
 }
 
 // What the conversation is told when it reopens on `to`, or undefined when

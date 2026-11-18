@@ -44,7 +44,19 @@ export type LiveSession = { sessionId: string; account: string; cwd: string; nam
 // answering, or a background task's report, starts its next turn.
 export const ACTIVE_MS = 30 * 60_000
 
-type RunningEntry = { pid: number; sessionId: string; cwd: string; name: string; active: boolean }
+// `entrypoint`: how it was started (`claude-vscode`, `claude-desktop`, `cli`);
+// `startedAt` and `idleSince`: when its process started and, for an idle one,
+// when its last turn ended, where the entry says.
+export type RunningEntry = {
+  pid: number
+  sessionId: string
+  cwd: string
+  name: string
+  active: boolean
+  entrypoint: string
+  startedAt: number | undefined
+  idleSince: number | undefined
+}
 
 // The sessions whose processes still run: Claude Code's session list
 // (shared by every account), and one `ps` for which of their processes run.
@@ -80,6 +92,9 @@ export async function sessionList($: EngineInterface, ctx: Context): Promise<{ r
         cwd: typeof value.cwd === 'string' ? value.cwd : '',
         name: typeof value.name === 'string' ? value.name : '',
         active: activeOf(value.status, value.statusUpdatedAt, now),
+        entrypoint: typeof value.entrypoint === 'string' ? value.entrypoint : '',
+        startedAt: typeof value.startedAt === 'number' ? value.startedAt : undefined,
+        idleSince: value.status === 'idle' && typeof value.statusUpdatedAt === 'number' ? value.statusUpdatedAt : undefined,
       })
     }
   }
@@ -88,6 +103,13 @@ export async function sessionList($: EngineInterface, ctx: Context): Promise<{ r
   const { stdout } = await run($, ['ps', '-o', 'pid=', '-p', pids.join(',')])
   const alive = new Set(stdout.split('\n').map(line => line.trim()).filter(line => line !== ''))
   return { running: entries.filter(entry => alive.has(String(entry.pid))), unread: unreadPids.some(pid => alive.has(pid)) }
+}
+
+// How full this session's context window is, as a whole percentage; undefined
+// before the first response of the live window (a fresh session, or one just
+// compacted).
+export async function ownContext($: EngineInterface): Promise<number | undefined> {
+  return (await $.session.usage()).context.percent
 }
 
 // The live sessions cca recorded, each with the account it runs on.

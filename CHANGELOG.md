@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.18.0 (2026-11-18)
+
+- `/account sessions` lists every session running on the machine with how long it has been idle, the background work its last turn's end listed, how long its process has been up, its memory, and the number and memory of the processes under it (tool servers, shells and what they started). Longest idle first; sessions idle for over a day are marked and their memory added up. On 2026-11-18 thirteen sessions held 3.6 GB themselves and 3.8 GB in 59 helper processes, and nothing showed which were worth closing. cca closes none itself. Measured the same day: restarting a session frees little (sessions restarted hours earlier held as much as ones up for days), and Claude Code gives a plugin no way to disconnect a session's tool servers, so neither is done.
+- The status line shows how full the session's context window is, `account work · 5h 42%, week 10% · context 62%`, from the first response of a window on, and follows it as it moves.
+
 ## 0.17.1 (2026-11-18)
 
 - A session prunes its own transcript after it compacts on managed and Team accounts too. The plugin learned of a compaction from its `session.compact` hook, and Claude Code's built-in `sec-default` plugin, seated for those accounts, sends that event past every plugin a person installed ("its session.compact hook was skipped"). So a long-running session kept everything from before its last compaction until some session next started: on 2026-11-18 a transcript two compactions old held 5.8 MB of such rows out of 19.5 MB. The plugin no longer hooks the event. At every main turn's end it runs `prune.py --session <id> --since prune-tails.json`, which reads only the rows written since its last look and prunes when a compact boundary is among them, or when the file was replaced or cut since. One look runs at a time per session.
