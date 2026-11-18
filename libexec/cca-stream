@@ -69,13 +69,19 @@ def log(text):
     print(f'cca: {text}', file=sys.stderr, flush=True)
 
 
-def relaunch_args(args, conversation):
+def relaunch_args(args, conversation, kept=None):
     """The first run's args without the options that choose a conversation
-    (cca-keep-args' CONVERSATION, which a terminal relaunch drops too), then
-    `--resume <conversation>`. Every other option the panel passed is kept,
-    the hidden ones included."""
-    kept, _dropped = keep_args.keep(args, {}, drop=keep_args.CONVERSATION, keep_unknown=True)
-    return [*kept, '--resume', conversation]
+    (cca-keep-args' CONVERSATION, which a terminal relaunch drops too), with
+    the model and effort the session ran on (`kept`, from the plugin) in
+    place of the first run's, then `--resume <conversation>`. Every other
+    option the panel passed is kept, the hidden ones included."""
+    args, _dropped = keep_args.keep(args, {}, drop=keep_args.CONVERSATION, keep_unknown=True)
+    return [*keep_args.with_kept(args, kept or {}), '--resume', conversation]
+
+
+def kept_path(switch):
+    """Where the plugin leaves the model and effort a move keeps (keep.ts)."""
+    return f'{switch}.keep'
 
 
 def read_switch(path):
@@ -302,12 +308,13 @@ class Supervisor:
             except ValueError as error:
                 log(str(error))
                 request = None
+            kept = keep_args.read_kept(kept_path(self.options.switch)) if request is not None else {}
             self.remove_switch()
             if request is None:
                 return 128 - status if status < 0 else status
             account, conversation, follow_up = request
-            log(f'resuming {conversation} on account {account}')
-            child = self.start(relaunch_args(self.args, conversation))
+            log(f'resuming {conversation} on account {account}' + ''.join(f', {name} {value}' for name, value in kept.items()))
+            child = self.start(relaunch_args(self.args, conversation, kept))
             # The setup, the panel's requests the old child left open, the
             # plugin's follow-up, then the messages the old child never took,
             # ahead of what the panel sent meanwhile.
@@ -318,7 +325,9 @@ class Supervisor:
             # that close what the old child left open reach the panel first.
             reader = self.read_from(child)
             remote = self.remote.replay()
-            before = [*self.setup.replay(unanswered, self.held_ids()), *([remote] if remote else []), *again]
+            # The panel's own model and effort picks are older than what the
+            # session ran on, which the new child now starts with.
+            before = [*self.setup.replay(unanswered, self.held_ids(), kept), *([remote] if remote else []), *again]
             if follow_up:
                 before.append(protocol.user_message(follow_up, conversation))
             before.extend(self.unread.take())
@@ -343,10 +352,11 @@ class Supervisor:
                     if found is not None and found[0] == 'control_request'}
 
     def remove_switch(self):
-        try:
-            os.remove(self.options.switch)
-        except FileNotFoundError:
-            pass
+        for path in (self.options.switch, kept_path(self.options.switch)):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
 
 
 def main():

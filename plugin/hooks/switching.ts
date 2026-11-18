@@ -6,6 +6,7 @@ import type { EngineInterface } from 'claude-code'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
 import { accountStatus, followUpText, type Move, type Stop } from './usage'
 import { describeError, record, run, type Context } from './context'
+import { keptFile, writeKept } from './keep'
 import { save } from './saved'
 import { ownReading } from './survey'
 
@@ -182,8 +183,10 @@ export function switchRequest(target: string, sessionId: string, followUp: strin
 // is told to pass it to this process again.
 async function withdraw($: EngineInterface, exit: Exit): Promise<void> {
   if (exit.kind !== 'stream' || exit.switchFile === undefined) return
-  const removed = await run($, ['rm', '-f', exit.switchFile])
-  if (removed.exitCode !== 0) throw new Error(`could not remove ${exit.switchFile}: ${removed.stderr.trim()}`)
+  for (const file of [exit.switchFile, keptFile(exit.switchFile)]) {
+    const removed = await run($, ['rm', '-f', file])
+    if (removed.exitCode !== 0) throw new Error(`could not remove ${file}: ${removed.stderr.trim()}`)
+  }
   if (exit.supervisor === undefined) return
   const told = await run($, ['kill', '-USR1', exit.supervisor])
   if (told.exitCode !== 0) throw new Error(`could not tell cca-stream ${exit.supervisor}: ${told.stderr.trim()}`)
@@ -200,6 +203,8 @@ async function runExit($: EngineInterface, state: SwitchState, pending: Pending,
     if (exit.switchFile === undefined) return
     await $.fs.write(exit.switchFile, switchRequest(target, exit.sessionId, followUp))
   }
+  // Before the request: whoever reads the request reads this with it.
+  if (exit.switchFile !== undefined) await writeKept($, exit.switchFile)
   await ask(followUpText(move))
   if (exit.kind === 'terminal') {
     try {

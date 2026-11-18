@@ -81,6 +81,25 @@ export function run($: EngineInterface, argv: readonly string[]): ReturnType<Eng
   return $.process.run(argv, { cwd: '/' })
 }
 
+// Runs `rest`, a shell pipeline over "$f", the newest transcript of
+// `sessionId` in the shared projects folder (a resume from another folder
+// can leave two); fails with "no transcript" when there is none.
+export function runOnTranscript(
+  $: EngineInterface,
+  shared: string,
+  sessionId: string,
+  rest: string,
+): ReturnType<EngineInterface['process']['run']> {
+  return run($, [
+    '/bin/sh',
+    '-c',
+    `f=$(ls -t "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); if [ -z "$f" ]; then echo "no transcript of $2" >&2; exit 1; fi; ${rest}`,
+    'sh',
+    shared,
+    sessionId,
+  ])
+}
+
 // Writes started in this process, which name their temporary files.
 let writesStarted = 0
 

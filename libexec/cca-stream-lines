@@ -124,12 +124,22 @@ class Unread:
         return lines
 
 
+# What the panel's own picks of what a move keeps are named: the request that
+# sets the model, and the flag setting that sets the effort for the session
+# alone. The values the session ran on (cca-keep-args, read_kept) replace them.
+KEPT_REQUEST = {'model': 'set_model'}
+KEPT_FLAG = {'model': 'model', 'effort': 'effortLevel'}
+
+
 class Setup:
     """The panel's session setup, as it sent it, to replay to a new child:
-    the latest request of each kind, with the id the panel gave it."""
+    the latest request of each kind, with the id the panel gave it, and the
+    settings for the session alone (`apply_flag_settings`), merged as Claude
+    Code merges them: each request sets its keys, and a null removes one."""
 
     def __init__(self):
         self.requests = {}
+        self.flags = {}
         self.replays = 0
 
     def note(self, line):
@@ -139,16 +149,26 @@ class Setup:
             return
         if subtype == 'ui_detach':
             self.requests.pop('ui_attach', None)
+        elif subtype == 'apply_flag_settings' and isinstance(found[2].get('settings'), dict):
+            for key, value in found[2]['settings'].items():
+                if value is None:
+                    self.flags.pop(key, None)
+                else:
+                    self.flags[key] = value
         elif is_setup(subtype):
             self.requests[subtype] = (found[1], found[2])
 
     def holds(self, request_id):
         return any(held == request_id for held, _request in self.requests.values())
 
-    def replay(self, unanswered=frozenset(), held=frozenset()):
+    def replay(self, unanswered=frozenset(), held=frozenset(), kept=None):
         """The recorded requests as lines, initialize first: under a fresh id,
         whose answer is dropped, or under the panel's own when the old child
-        never answered it, so the panel gets the new child's answer."""
+        never answered it, so the panel gets the new child's answer. Then
+        the merged settings for the session alone. A request or setting for
+        what the move keeps (`kept`) is left out when the old child answered
+        it: the new child starts with the value the session ran on."""
+        kept = kept or {}
         order = sorted(self.requests, key=lambda subtype: subtype != 'initialize')
         lines = []
         for subtype in order:
@@ -157,9 +177,16 @@ class Setup:
             if request_id in held:
                 continue
             if request_id not in unanswered:
+                if any(KEPT_REQUEST.get(name) == subtype for name in kept):
+                    continue
                 self.replays += 1
                 request_id = f'{REPLAY_PREFIX}{self.replays}'
             lines.append(control_line({'type': 'control_request', 'request_id': request_id, 'request': request}))
+        flags = {key: value for key, value in self.flags.items() if key not in {KEPT_FLAG[name] for name in kept}}
+        if flags:
+            self.replays += 1
+            lines.append(control_line({'type': 'control_request', 'request_id': f'{REPLAY_PREFIX}{self.replays}',
+                                       'request': {'subtype': 'apply_flag_settings', 'settings': flags}}))
         return lines
 
 

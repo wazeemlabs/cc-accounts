@@ -16,7 +16,7 @@
 // `model_requires_usage_credits`), so it is recorded for the model family
 // that hit it, and sessions on other families still move there.
 import type { EngineInterface } from 'claude-code'
-import { describeError, run, writeAtomic, type Context } from './context'
+import { describeError, runOnTranscript, writeAtomic, type Context } from './context'
 import { blockMsOf } from './usage'
 
 // The scope of a failure that is the whole account's.
@@ -90,16 +90,7 @@ const TAIL_BYTES = 1024 * 1024
 // another folder have left two); undefined when it shows none or cannot be
 // read (the caller then goes by the readings).
 export async function turnFailure($: EngineInterface, ctx: Context): Promise<string | undefined> {
-  const sessionId = await $.session.id()
-  const { exitCode, stdout, stderr, isStdoutTruncated } = await run($, [
-    '/bin/sh',
-    '-c',
-    'f=$(ls -t "$1"/projects/*/"$2".jsonl 2>/dev/null | head -n 1); ' +
-      `if [ -z "$f" ]; then echo "no transcript of $2" >&2; exit 1; fi; tail -c ${TAIL_BYTES} "$f"`,
-    'sh',
-    ctx.shared,
-    sessionId,
-  ])
+  const { exitCode, stdout, stderr, isStdoutTruncated } = await runOnTranscript($, ctx.shared, await $.session.id(), `tail -c ${TAIL_BYTES} "$f"`)
   if (exitCode !== 0 || isStdoutTruncated) {
     $.ui.log(`cc-accounts: could not read why the last turn failed (${isStdoutTruncated ? 'the transcript tail was cut' : stderr.trim()}).`)
     return undefined

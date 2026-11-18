@@ -259,14 +259,14 @@ launch() {
   # The plugin checks CCA_PID is its parent, so a claude started inside this
   # session (inheriting these) cannot switch this one.
   export CLAUDE_ACCOUNT_SWITCH_FILE="$switch" CCA_MODE=terminal CCA_PID=$$
-  trap 'rm -f "$SWITCH"' EXIT
+  trap 'rm -f "$SWITCH" "$SWITCH.keep"' EXIT
   local args=("$@") first=("$@")
   if [[ -d "$ROOT/by-session" ]]; then
     find "$ROOT/by-session" -type f -mtime +"$RECORD_DAYS" -delete
   fi
   prune_short_records
   while :; do
-    rm -f "$switch"
+    rm -f "$switch" "$switch.keep"
     apply "$account"
     sync_account "$bin" "$account"
     # In front, as --mcp-config=FILE: the option takes several values, and
@@ -286,8 +286,10 @@ launch() {
     account="$next_account"
     args=()
     local arg
+    # The plugin leaves the model and effort the session ran on beside the
+    # request; they replace the first run's --model and --effort.
     while IFS= read -r -d '' arg; do args+=("$arg"); done \
-      < <("$LIBEXEC/cca-keep-args" "$bin" ${first[@]+"${first[@]}"})
+      < <("$LIBEXEC/cca-keep-args" --kept "$switch.keep" "$bin" ${first[@]+"${first[@]}"})
     args+=(--resume "$id")
     if [[ -n "$follow_up" ]]; then args+=("$follow_up"); fi
   done

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""cca-keep-args <claude binary> [args...]
+"""cca-keep-args [--kept FILE] <claude binary> [args...]
 
 Prints, NUL-separated, the args a relaunch on another account carries over:
 every option except those that choose, start or end a session, and no prompt.
 Which options take a value is read from `<claude binary> --help`.
 Dropped args go to stderr, so the person sees what did not carry over.
+With --kept, the model and effort the session ran on, which the plugin
+writes beside the switch file, replace any --model or --effort in the args.
 """
 import re
 import subprocess
@@ -24,6 +26,13 @@ DROP = CONVERSATION | {
     '--print', '--worktree', '--tmux', '--background', '--bg', '--cloud', '--teleport', '--desktop',
     '--environment', '--file', '--help', '--version',
 }
+
+# What a move keeps of the session as it ran, as the plugin writes it beside
+# the switch file (keep.ts): `<name> <value>` lines, each the value of an
+# option for the new process. They replace the first run's own, which the
+# session may have changed since (/model, /effort).
+KEPT_OPTIONS = {'model': '--model', 'effort': '--effort'}
+KEPT_VALUE = re.compile(r'^[A-Za-z0-9._:/\[\]-]+$')
 
 # "  -r, --resume [value]", "  --add-dir <directories...>", "  --bg, --background"
 OPTION_LINE = re.compile(
@@ -96,13 +105,57 @@ def keep(args, table, drop=DROP, keep_unknown=False):
     return kept, dropped
 
 
+def read_kept(path):
+    """{name: value} from the file the plugin left beside the switch file;
+    empty when there is none (a plugin before 0.17.0 writes none). A line
+    that is not `<model|effort> <value>` is reported and passed over."""
+    try:
+        with open(path, encoding='utf-8') as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return {}
+    kept = {}
+    for line in text.splitlines():
+        name, _, value = line.partition(' ')
+        if name in KEPT_OPTIONS and KEPT_VALUE.match(value):
+            kept[name] = value
+        elif line.strip():
+            print(f'cca: not keeping {line!r}: not "<model|effort> <value>"', file=sys.stderr)
+    return kept
+
+
+def with_kept(args, kept):
+    """`args` (with no prompt) with each kept setting's option in place of
+    any the args held, in either spelling (`--model x`, `--model=x`)."""
+    options = {KEPT_OPTIONS[name] for name in kept}
+    out = []
+    i = 0
+    while i < len(args):
+        token = args[i]
+        i += 1
+        if token.split('=', 1)[0] in options:
+            if '=' not in token and i < len(args):
+                i += 1
+            continue
+        out.append(token)
+    for name, value in kept.items():
+        out.extend([KEPT_OPTIONS[name], value])
+    return out
+
+
 def main():
-    if len(sys.argv) < 2:
-        sys.exit('usage: cca-keep-args <claude binary> [args...]')
-    help_text = subprocess.run([sys.argv[1], '--help'], capture_output=True, text=True, check=True).stdout
-    kept, dropped = keep(sys.argv[2:], arities(help_text))
+    argv = sys.argv[1:]
+    kept_file = None
+    if argv[:1] == ['--kept'] and len(argv) >= 2:
+        kept_file, argv = argv[1], argv[2:]
+    if not argv:
+        sys.exit('usage: cca-keep-args [--kept FILE] <claude binary> [args...]')
+    help_text = subprocess.run([argv[0], '--help'], capture_output=True, text=True, check=True).stdout
+    kept, dropped = keep(argv[1:], arities(help_text))
     if dropped:
         print('cca: not carried over: ' + ' '.join(dropped), file=sys.stderr)
+    if kept_file is not None:
+        kept = with_kept(kept, read_kept(kept_file))
     sys.stdout.write(''.join(arg + '\0' for arg in kept))
 
 

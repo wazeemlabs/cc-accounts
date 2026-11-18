@@ -47,6 +47,8 @@ In a terminal, `/account` closes the session and reopens the same conversation o
 
 A switch does not cut work short. If Claude is in the middle of a turn, or a subagent, a Monitor or a background command is still running, `/account` replies at once that the switch is queued and names what it is waiting for. The switch happens when the turn has ended and that work has finished; a finished task wakes the session, so the switch follows on its own. Until then the session stays on its account, and messages you send run there.
 
+A switch keeps the session's model and effort: the conversation reopens on the model it ran on, whether you picked it in the panel or with `/model`, and at the effort of its last request, including one set with `/effort` for that session alone. Settings the VS Code panel set for the session alone come along too.
+
 - `/account personal now` switches at once and stops whatever is running.
 - `/account <this session's account>` cancels a queued switch.
 - Scheduled wakeups (`/loop`, ScheduleWakeup, CronCreate) are not waited for. Claude Code restores them when the conversation reopens on the other account.

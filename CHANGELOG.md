@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.17.0 (2026-11-18)
+
+- A move keeps the session's model and effort. The new process started on Claude Code's configured model and effort, so a model picked with `/model` and an effort set with `/effort` for the session alone were lost at every move. In VS Code the panel's own model pick, which cca-stream replayed, could be older than the model the session ran on (2026-11-14: a session on Fable 5.2 came back on Opus 5.5). The plugin now writes the session's model and the effort of its last request beside the switch request, and cca and cca-stream start the new process with them in place of the first run's `--model` and `--effort`.
+- cca-stream replays the settings the VS Code panel set for the session alone (`apply_flag_settings`, such as focus view or a session-only effort), which a move used to drop.
+
 ## 0.16.0 (2026-11-18)
 
 - A move the balancer queued behind background work is decided again at each turn end. It used to wait for as long as the work ran and then go regardless, though the readings that called for it had changed: on 2026-11-17 a session queued to spend cto's week before its reset would still have moved after the reset. Now the move keeps waiting while it is still called for, goes to another account if that one fits better, and is dropped when nothing calls for it, with the conversation recorded back on its account. The session counts on the account it runs on while it decides, not on the target already recorded for it. A switch a person asked for with `/account` is never changed this way.
