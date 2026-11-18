@@ -7,6 +7,9 @@
 // each session also knows the accounts it is not on. An account with no
 // session yet has no reading, and counts as unused until one reports.
 
+import { artifactsText, type Published } from './artifacts'
+import { browserText } from './browser'
+
 export type Window = { percentUsed: number; resetsAt?: string }
 
 export type Reading = { account: string; at: number; windows: Record<string, Window> }
@@ -338,6 +341,11 @@ export type Move = {
   stop: Stop | undefined
   interrupted: boolean
   stopped: readonly string[]
+  // The artifacts this conversation published that `to` does not own, and
+  // whether it used the browser extension: absent, none and no (artifacts.ts,
+  // browser.ts).
+  left?: readonly Published[]
+  browser?: boolean
 }
 
 // How the conversation is told what stopped its last turn.
@@ -359,6 +367,13 @@ export function followUpText(move: Move): string | undefined {
     }
   } else if (move.interrupted) {
     parts.push(`Moving this conversation to the ${move.to} account interrupted your turn. Carry on from where you stopped.`)
+  }
+  // Told only with a turn the move already starts: these alone start none,
+  // and an Artifact call on one of them carries the same words.
+  if (parts.length > 0) {
+    const left = artifactsText(move.left ?? [], move.to)
+    if (left !== undefined) parts.push(left)
+    if (move.browser) parts.push(browserText(move.to))
   }
   return parts.length === 0 ? undefined : `[cc-accounts] ${parts.join(' ')}`
 }

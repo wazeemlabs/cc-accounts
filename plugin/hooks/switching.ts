@@ -3,6 +3,7 @@
 // in flight and all background work (subagents, shells, monitors), so a
 // switch waits for the turn to end and the work to finish unless forced.
 import type { EngineInterface } from 'claude-code'
+import { elsewhere, isLostWatch, readNotes } from './artifacts'
 import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
 import { accountStatus, followUpText, type Move, type Stop } from './usage'
 import { describeError, record, run, type Context } from './context'
@@ -59,6 +60,8 @@ export type SwitchState = {
   // while it lasts.
   stranded: string | undefined
   strandedNote: string | undefined
+  // Whether this conversation called the Claude in Chrome tools (browser.ts).
+  browser: boolean
 }
 
 export function newState(): SwitchState {
@@ -73,6 +76,7 @@ export function newState(): SwitchState {
     answered: undefined,
     stranded: undefined,
     strandedNote: undefined,
+    browser: false,
   }
 }
 
@@ -259,8 +263,12 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
     // What the reopened conversation is told, as things stand now: the work a
     // forced move stops, which one the account forced asks it to start again.
     // Only a switch file carries a follow-up.
-    const stopped = stop === undefined ? [] : (await waitingFor($, state)).tasks.map(nameTask)
-    await runExit($, state, pending, { from, to: target, stop, interrupted: false, stopped })
+    // The artifacts the conversation leaves on other accounts: their watches
+    // cannot be started again on this one, so they are named with them.
+    const left = state.root === undefined ? [] : elsewhere(await readNotes($, state.root, exit.sessionId), target)
+    const tasks = stop === undefined ? [] : (await waitingFor($, state)).tasks
+    const stopped = tasks.filter(task => !isLostWatch(task.description, left)).map(nameTask)
+    await runExit($, state, pending, { from, to: target, stop, interrupted: false, stopped, left, browser: state.browser })
   } catch (error) {
     $.ui.log(`cc-accounts: the switch to ${target} failed (${describeError(error)}); type /account ${target} again.`)
   } finally {

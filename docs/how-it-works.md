@@ -139,6 +139,7 @@ User MCP servers live in `~/.claude-shared/mcp.json`, in the `{"mcpServers": {..
 | `~/.claude-shared/accounts/start` | The account the plugin says a new session should start on, from every account's readings: the account's name and a newline. |
 | `~/.claude-shared/accounts/share.conf` | What other accounts link from `~/.claude`. |
 | `~/.claude-shared/accounts/by-session/<id>` | The account each conversation last ran on. |
+| `~/.claude-shared/accounts/artifacts/<id>.json` | The artifacts each conversation published as their owner: link, source file and account (`artifacts.ts`), written after each Artifact publish and kept as long as `by-session`. A move reads it to say which artifacts stayed on another account; an Artifact call on one of them carries the same words after its result. |
 | `~/.claude-shared/accounts/switch/<pid>` | A pending switch for the terminal cca or the cca-stream with that pid: `<account> <conversation id>`, then the follow-up, if any. Removed when it is read and when cca exits. |
 | `~/.claude-shared/accounts/priorities.json` | Project weights: a folder and its weight, set with `/account priority`. |
 | `~/.claude-shared/accounts/prune-state.json` and `prune.lock` | Each transcript's size and mtime when the prune last looked at it, and the lock one prune at a time holds. |

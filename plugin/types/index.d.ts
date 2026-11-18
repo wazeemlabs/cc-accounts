@@ -8,6 +8,9 @@ export type CcAccountsSwitching = {
   answered: string | null
   stranded: string | null
   strandedNote: string | null
+  // Whether the conversation called the Claude in Chrome tools: absent in what
+  // a plugin before 0.21.0 saved, read as no.
+  browser?: boolean
 }
 
 // A queued switch, less how this process ends, which is read again.

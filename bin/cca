@@ -261,9 +261,13 @@ launch() {
   export CLAUDE_ACCOUNT_SWITCH_FILE="$switch" CCA_MODE=terminal CCA_PID=$$
   trap 'rm -f "$SWITCH" "$SWITCH.keep"' EXIT
   local args=("$@") first=("$@")
-  if [[ -d "$ROOT/by-session" ]]; then
-    find "$ROOT/by-session" -type f -mtime +"$RECORD_DAYS" -delete
-  fi
+  # by-session: each conversation's account. artifacts: what it published.
+  local kept
+  for kept in by-session artifacts; do
+    if [[ -d "$ROOT/$kept" ]]; then
+      find "$ROOT/$kept" -type f -mtime +"$RECORD_DAYS" -delete
+    fi
+  done
   prune_short_records
   while :; do
     rm -f "$switch" "$switch.keep"

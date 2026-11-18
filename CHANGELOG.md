@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.21.0 (2026-11-18)
+
+- A conversation knows which artifacts it left on another account. An artifact belongs to the claude.ai account that published it, another account reaches it only after its owner shares it from the page's Share control, and Claude Code has no call that shares or moves one. So after a move a session could not read, watch or republish what it had published, and was told to start those watches again (2026-11-18: both of a session's artifacts answered "no such artifact for this account" after a move from cto to levoro). The plugin now notes each publish (link, source file, account) in `~/.claude-shared/accounts/artifacts/<conversation id>.json`. The message a move reopens with names the artifacts the new account does not own and what keeps each one: its owner adds the new account as an editor from Share, once, and the link is kept; otherwise the source file is published as a new artifact. Their watches are no longer listed as work to start again, and an Artifact call on one of them carries the same words after its result. cca cannot share an artifact itself.
+- A conversation that used the Claude in Chrome tools is told, in the message a move reopens with, that the extension is tied to one account: the tools work only through a Chrome profile whose extension is signed in to the new account, and it should list the connected browsers and pick one, or say which account's browser is needed. Nothing in Claude Code lets one extension serve two accounts.
+
 ## 0.20.0 (2026-11-18)
 
 - `/account dashboard` opens a pane with every account (a bar for each window, its reset, a Switch button) and every running session (where it runs, idle time, background work, memory, a Close button), a button that closes the sessions idle for over a day that run nothing, and Refresh. A Close that would stop work asks for a second press. Each button runs the `/account` command a person would type and shows its answer in the pane; the pane is read again after a press and once what the press started has settled. On a Claude Code without the `Progress` element the bars are drawn in text. Where the window shows no panes the command says what to type instead.

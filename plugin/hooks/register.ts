@@ -1,5 +1,7 @@
 import type { EngineInterface, Register, Timer } from 'claude-code'
+import { afterCall } from './artifacts'
 import { taskStarted, turnMark } from './background'
+import { usesBrowser } from './browser'
 import { accountCommand } from './command'
 import { balance, noteMeasure, showStatus, startOrDefault } from './balance'
 import { context, describeError, exitOf, record, type Context } from './context'
@@ -229,7 +231,15 @@ export const register: Register = on => {
         await forgetRefused($, ctx, await $.session.id())
       }
     }
-    const answer = await next(e)
+    let answer = await next(e)
+    if (e.tool === 'Artifact' && state.root !== undefined) {
+      const account = (await context($))?.current?.name
+      if (account !== undefined) answer = await afterCall($, state.root, account, e as unknown as Record<string, unknown>, answer)
+    }
+    if (usesBrowser(e.tool) && !state.browser) {
+      state.browser = true
+      await save($, state)
+    }
     if (answer.result !== undefined) {
       const task = taskStarted(e.tool, e as unknown as Record<string, unknown>, answer.result)
       if (task !== undefined) {
