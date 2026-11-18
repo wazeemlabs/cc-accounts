@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.19.0 (2026-11-18)
+
+- `/account close <session name or id>` ends another session's process, and `/account close stale` every session idle for over a day that runs nothing, to free their memory. A session is named by its tab's name, the start of it, or the start of its id; a name several sessions share closes none. One that is working, or whose last turn's end listed background work, is closed only with `now`. The process is ended as a move ends one (SIGINT, again, then SIGTERM), the helpers it leaves running are ended after it, and a line says what was closed and about how much memory was freed, or that a session runs on. The conversation stays. The session the command is typed in is never closed.
+
 ## 0.18.0 (2026-11-18)
 
 - `/account sessions` lists every session running on the machine with how long it has been idle, the background work its last turn's end listed, how long its process has been up, its memory, and the number and memory of the processes under it (tool servers, shells and what they started). Longest idle first; sessions idle for over a day are marked and their memory added up. On 2026-11-18 thirteen sessions held 3.6 GB themselves and 3.8 GB in 59 helper processes, and nothing showed which were worth closing. cca closes none itself. Measured the same day: restarting a session frees little (sessions restarted hours earlier held as much as ones up for days), and Claude Code gives a plugin no way to disconnect a session's tool servers, so neither is done.

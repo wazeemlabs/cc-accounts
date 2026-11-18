@@ -7,6 +7,7 @@ export type Ask =
   | { kind: 'list' }
   | { kind: 'report' }
   | { kind: 'sessions' }
+  | { kind: 'close'; target: string; force: boolean }
   | { kind: 'switch'; name: string; force: boolean }
   | { kind: 'default'; name: string }
   | { kind: 'priority'; weight: string | undefined; folder: string | undefined }
@@ -18,6 +19,8 @@ export const USAGE =
   '/account <name> now (switch at once, stopping that work), /account default <name>, ' +
   '/account usage (what is free on every account, and where each project runs), ' +
   '/account sessions (every running session, how long it has been idle and the memory it holds), ' +
+  '/account close <session name or id> [now] (end another session; now ends one that is working), ' +
+  '/account close stale (end every session idle for over a day that runs nothing), ' +
   '/account priority [<weight> [<folder>]] (how much a project matters; this one by default), ' +
   '/account budget [<points a day> [<folder>]] (what a project may spend each UTC day; 0 removes it)'
 
@@ -42,6 +45,14 @@ export function parseAsk(args: string): Ask {
   const words = trimmed.split(/\s+/).filter(word => word !== '')
   const [first, second, ...rest] = words
   if (first === undefined) return { kind: 'list' }
+  // A session's name may hold spaces: everything after `close` names it, but
+  // for a last word `now`.
+  if (first === 'close') {
+    if (second === undefined) return { kind: 'help' }
+    const named = unquoted(trimmed.slice(trimmed.indexOf(second)).trim())
+    const force = /\snow$/.test(named)
+    return { kind: 'close', target: force ? unquoted(named.replace(/\s+now$/, '')) : named, force }
+  }
   // A folder may hold spaces: everything after the weight is the folder.
   if (first === 'priority' || first === 'budget') {
     const folder = second === undefined ? undefined : unquoted(trimmed.slice(trimmed.indexOf(second) + second.length).trim())

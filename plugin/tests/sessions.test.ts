@@ -85,8 +85,9 @@ describe('/account sessions', () => {
       '',
       '3 sessions: 900 MB in the sessions themselves, and 200 MB in 3 helper processes (tool servers, shells and what they started).',
       '1 idle for over a day holds 500 MB.',
-      'Closing a session frees its memory and stops the work it runs in the background; the conversation stays, and reopens from ' +
-        "the app's or the editor's list or with `claude --resume <id>`. cca closes none itself.",
+      'Close one with /account close <session name or id>, or every one idle for over a day and running nothing with ' +
+        '/account close stale. Closing frees its memory and stops the work it runs in the background; the conversation ' +
+        "stays, and reopens from the app's or the editor's list or with `claude --resume <id>`.",
     ])
   })
 

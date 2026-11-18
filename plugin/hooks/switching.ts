@@ -159,7 +159,7 @@ const END_STEPS: readonly { signal: string; waitMs: number }[] = [
 ]
 const END_POLL_MS = 500
 
-async function endProcess($: EngineInterface, pid: string, between: () => Promise<void>): Promise<string | undefined> {
+export async function endProcess($: EngineInterface, pid: string, between: () => Promise<void>): Promise<string | undefined> {
   for (const [index, step] of END_STEPS.entries()) {
     if (index > 0) await between()
     const { exitCode, stderr } = await run($, ['kill', step.signal, pid])

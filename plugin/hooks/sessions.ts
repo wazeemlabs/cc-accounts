@@ -1,7 +1,8 @@
 // /account sessions: every Claude Code session running on this machine, how
 // long each has been idle, and the memory it and the processes it started
-// hold, so a person can see which to close. cca closes none: ending a session
-// stops its background work, and only its owner knows what that is worth.
+// hold, so a person can see which to close (close.ts). cca closes none by
+// itself: ending a session stops its background work, and only its owner
+// knows what that is worth.
 import type { EngineInterface } from 'claude-code'
 import { parseRecord } from './background'
 import { run, type Context } from './context'
@@ -15,6 +16,7 @@ export const LONG_IDLE_MS = 24 * 60 * 60_000
 
 export type SessionRow = {
   sessionId: string
+  pid: number
   name: string
   project: string
   // undefined: a session cca has no record of.
@@ -32,6 +34,7 @@ export type SessionRow = {
   ownKb: number
   helpers: number
   helperKb: number
+  helperPids: readonly number[]
 }
 
 type Process = { parent: number; kb: number }
@@ -82,6 +85,7 @@ export function sessionRows(
     const helpers = under(processes, entry.pid)
     return {
       sessionId: entry.sessionId,
+      pid: entry.pid,
       name: entry.name,
       project: entry.cwd === '' ? '' : projectName(entry.cwd),
       account: accounts.get(entry.sessionId),
@@ -92,6 +96,7 @@ export function sessionRows(
       ownKb: processes.get(entry.pid)?.kb ?? 0,
       helpers: helpers.length,
       helperKb: helpers.reduce((sum, pid) => sum + (processes.get(pid)?.kb ?? 0), 0),
+      helperPids: helpers,
     }
   })
   return rows.sort((a, b) => (b.idleMs ?? -1) - (a.idleMs ?? -1) || b.ownKb + b.helperKb - (a.ownKb + a.helperKb))
@@ -103,7 +108,7 @@ export function memoryText(kb: number): string {
   return mb < 1000 ? `${Math.round(mb)} MB` : `${(mb / 1024).toFixed(1)} GB`
 }
 
-const span = (ms: number) => (ms < 60_000 ? 'under a minute' : untilText(ms, 0))
+export const span = (ms: number) => (ms < 60_000 ? 'under a minute' : untilText(ms, 0))
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 
 export function formatSessions(rows: readonly SessionRow[], thisSession: string | undefined): string {
@@ -138,8 +143,9 @@ export function formatSessions(rows: readonly SessionRow[], thisSession: string 
     long.length === 0
       ? 'None has been idle for a day.'
       : `${long.length} idle for over a day hold${long.length === 1 ? 's' : ''} ${memoryText(held)}.`,
-    'Closing a session frees its memory and stops the work it runs in the background; the conversation stays, and reopens from ' +
-      "the app's or the editor's list or with `claude --resume <id>`. cca closes none itself.",
+    'Close one with /account close <session name or id>, or every one idle for over a day and running nothing with ' +
+      '/account close stale. Closing frees its memory and stops the work it runs in the background; the conversation ' +
+      "stays, and reopens from the app's or the editor's list or with `claude --resume <id>`.",
   ].join('\n')
 }
 

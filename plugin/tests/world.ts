@@ -64,6 +64,11 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   const running = new Set<string>()
   // Every process on the machine, as `ps -axo pid=,ppid=,rss=` lists them.
   const processes = { table: '' }
+  // Other sessions' processes a test lets be signalled: how many signals each
+  // still takes before it exits, when it leaves `running`. And the helper
+  // processes still running, each with its parent, as `ps -o pid=,ppid=` lists them.
+  const others = new Map<string, number>()
+  const helpers = new Map<string, string>()
   // The rate-limit windows the session's last response reported.
   const limits: { kind: string; percentUsed: number; resetsAt?: string }[] = []
   // The folder the session's shell is in was deleted (a removed worktree):
@@ -226,6 +231,10 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
       // ps -axo pid=,ppid=,rss=: every process, as a test listed them.
       return { value: { exitCode: 0, stdout: processes.table, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (e.argv[0] === 'ps' && e.argv[2] === 'pid=,ppid=') {
+      const stdout = (e.argv[4] ?? '').split(',').filter(pid => helpers.has(pid)).map(pid => `${pid} ${helpers.get(pid)}\n`).join('')
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === 'ps') {
       // ps -o pid= -p a,b,c: the ones in `running`.
       const asked = (e.argv[4] ?? '').split(',')
@@ -249,6 +258,16 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     }
     if (e.argv[0] === '/bin/sh') {
       return { value: { exitCode: 0, stdout: `${SELF}\n ${PARENT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    const other = e.argv[0] === 'kill' ? e.argv[2] ?? '' : ''
+    if (others.has(other) || helpers.has(other)) {
+      const left = others.get(other) ?? 0
+      if (e.argv[1] === '-0') return done(left > 0 ? 0 : 1, left > 0 ? '' : 'No such process')
+      killed.push([...e.argv])
+      helpers.delete(other)
+      if (left > 0) others.set(other, left - 1)
+      if (left === 1) running.delete(other)
+      return done(0)
     }
     const exited = signals >= signalsToDie
     if (e.argv[1] === '-0') {
@@ -281,7 +300,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   return {
     files, ran, statuses, logs, clock, killed, agents, state, results, denied, limits, running, writes, released, slow, transcript, settings, model,
-    folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery, window, processes,
+    folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery, window, processes, others, helpers,
   }
 }
 
