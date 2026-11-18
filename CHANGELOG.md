@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.20.0 (2026-11-18)
+
+- `/account dashboard` opens a pane with every account (a bar for each window, its reset, a Switch button) and every running session (where it runs, idle time, background work, memory, a Close button), a button that closes the sessions idle for over a day that run nothing, and Refresh. A Close that would stop work asks for a second press. Each button runs the `/account` command a person would type and shows its answer in the pane; the pane is read again after a press and once what the press started has settled. On a Claude Code without the `Progress` element the bars are drawn in text. Where the window shows no panes the command says what to type instead.
+
 ## 0.19.0 (2026-11-18)
 
 - `/account close <session name or id>` ends another session's process, and `/account close stale` every session idle for over a day that runs nothing, to free their memory. A session is named by its tab's name, the start of it, or the start of its id; a name several sessions share closes none. One that is working, or whose last turn's end listed background work, is closed only with `now`. The process is ended as a move ends one (SIGINT, again, then SIGTERM), the helpers it leaves running are ended after it, and a line says what was closed and about how much memory was freed, or that a session runs on. The conversation stays. The session the command is typed in is never closed.

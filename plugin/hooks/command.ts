@@ -10,6 +10,7 @@ import { DEFAULT_WEIGHT, MAX_WEIGHT, normalizeFolder, parseWeight, projectName, 
 import { formatReport, gatherReport, totals, totalsLine } from './report'
 import { save } from './saved'
 import { closeCommand } from './close'
+import { openDashboard } from './dashboard'
 import { formatSessions, gatherSessions } from './sessions'
 import { readReading } from './survey'
 import { afterOf, describeWait, dropSwitch, leadOf, requestSwitch, type SwitchState } from './switching'
@@ -54,6 +55,7 @@ export async function accountCommand($: EngineInterface, args: string, state: Sw
   }
 
   if (ask.kind === 'sessions') return { text: formatSessions(await gatherSessions($, ctx), await $.session.id()) }
+  if (ask.kind === 'dashboard') return { text: await openDashboard($, ctx) }
   if (ask.kind === 'close') return { text: await closeCommand($, ctx, ask.target, ask.force) }
 
   if (ask.kind === 'priority') {

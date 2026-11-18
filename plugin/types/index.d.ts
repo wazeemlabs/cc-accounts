@@ -23,8 +23,46 @@ export type CcAccountsPending = {
 // Background work the last Stop hook listed or a tool call started.
 export type CcAccountsTask = { id: string; type: string; description: string }
 
+// The dashboard pane's picture of the machine, as its last refresh read it
+// (dashboard.ts), with what the person is being asked to confirm and the
+// answer to the last button pressed.
+export type CcAccountsDashboard = {
+  accounts: CcAccountsDashAccount[]
+  sessions: CcAccountsDashSession[]
+  // The session whose Close waits for a second press, since it would stop work.
+  confirm: string | null
+  note: string
+}
+
+// `fiveUsed`, `weekUsed`: percentages, null with no reading. `spent`: the
+// words for an account with a window at its limit.
+export type CcAccountsDashAccount = {
+  name: string
+  isSignedIn: boolean
+  fiveUsed: number | null
+  fiveReset: string
+  weekUsed: number | null
+  weekReset: string
+  spent: string | null
+  sessions: number
+  isCurrent: boolean
+  isStart: boolean
+}
+
+// `busy`: why closing it would stop work, null when it would stop none.
+export type CcAccountsDashSession = {
+  id: string
+  name: string
+  where: string
+  state: string
+  busy: string | null
+  kb: number
+  isStale: boolean
+  isHere: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'cc-accounts': { switching: CcAccountsSwitching }
+    'cc-accounts': { switching: CcAccountsSwitching; dashboard: Shaped<CcAccountsDashboard> }
   }
 }

@@ -7,6 +7,7 @@ export type Ask =
   | { kind: 'list' }
   | { kind: 'report' }
   | { kind: 'sessions' }
+  | { kind: 'dashboard' }
   | { kind: 'close'; target: string; force: boolean }
   | { kind: 'switch'; name: string; force: boolean }
   | { kind: 'default'; name: string }
@@ -18,6 +19,7 @@ export const USAGE =
   'Usage: /account (list), /account <name> (switch this session once its work is done), ' +
   '/account <name> now (switch at once, stopping that work), /account default <name>, ' +
   '/account usage (what is free on every account, and where each project runs), ' +
+  '/account dashboard (a pane with every account and session, and buttons to switch and close), ' +
   '/account sessions (every running session, how long it has been idle and the memory it holds), ' +
   '/account close <session name or id> [now] (end another session; now ends one that is working), ' +
   '/account close stale (end every session idle for over a day that runs nothing), ' +
@@ -62,6 +64,7 @@ export function parseAsk(args: string): Ask {
   if (second === undefined) {
     if (first === 'default') return { kind: 'help' }
     if (first === 'sessions') return { kind: 'sessions' }
+    if (first === 'dashboard') return { kind: 'dashboard' }
     return first === 'usage' ? { kind: 'report' } : { kind: 'switch', name: first, force: false }
   }
   if (rest.length > 0) return { kind: 'help' }

@@ -5,6 +5,7 @@ import { balance, noteMeasure, showStatus, startOrDefault } from './balance'
 import { context, describeError, exitOf, record, type Context } from './context'
 import { projectName } from './priorities'
 import { forgetRefused, noteRefused, parkedFile, parkedNow, WAKE_MS, wakeParked } from './parking'
+import { registerPane } from './pane'
 import { prune } from './prune'
 import { restore, save } from './saved'
 import { carryOut, newState, readRecord, recordFile } from './switching'
@@ -63,6 +64,7 @@ async function check($: EngineInterface, parked: Parked): Promise<void> {
 
 export const register: Register = on => {
   const state = newState()
+  registerPane(on, state)
   const parked: Parked = { project: undefined, refused: false, timer: undefined }
   // Whether the prune a main-loop turn's end started for this conversation
   // still runs: it can wait on the machine's lock, and turns ending meanwhile

@@ -35,7 +35,7 @@ export function untilText(at: number, now: number): string {
   return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`
 }
 
-function resetIn(reading: Reading, kind: string, now: number): string {
+export function resetIn(reading: Reading, kind: string, now: number): string {
   const resetsAt = reading.windows[kind]?.resetsAt
   const at = resetsAt === undefined ? NaN : Date.parse(resetsAt)
   return Number.isNaN(at) || at <= now ? '-' : untilText(at, now)
