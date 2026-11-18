@@ -325,6 +325,14 @@ touch -t 202001010000 "$CCA_ROOT/by-session/aaaaaaaa-1111-4222-8333-944455556666
 check "a terminal run drops records older than RECORD_DAYS and keeps fresh ones" "$ID" "$(ls "$CCA_ROOT/by-session")"
 
 setup
+mkdir -p "$CCA_ROOT/artifacts"
+echo '[]' > "$CCA_ROOT/artifacts/$ID.json"
+echo '[]' > "$CCA_ROOT/artifacts/aaaaaaaa-1111-4222-8333-944455556666.json"
+touch -t 202001010000 "$CCA_ROOT/artifacts/aaaaaaaa-1111-4222-8333-944455556666.json"
+"$CCA" run
+check "a terminal run drops artifact notes older than RECORD_DAYS and keeps fresh ones" "$ID.json" "$(ls "$CCA_ROOT/artifacts")"
+
+setup
 mkdir -p "$CCA_ROOT/background"
 echo '{"tasks":[]}' > "$CCA_ROOT/background/$ID"
 echo '{"tasks":[]}' > "$CCA_ROOT/background/aaaaaaaa-1111-4222-8333-944455556666"

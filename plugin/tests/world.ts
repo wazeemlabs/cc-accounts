@@ -215,6 +215,8 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
       files.delete(e.argv[2] ?? '')
       return done(0)
     }
+    // mkdir -p <folder>: the files map has no folders to make.
+    if (e.argv[0] === 'mkdir') return done(0)
     if (e.argv[0] === 'rm') {
       // rm -f <path> always succeeds; rm <path> fails when it is gone, as for a second remover.
       if (e.argv[1] === '-f') {
