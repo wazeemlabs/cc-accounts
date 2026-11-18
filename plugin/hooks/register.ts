@@ -64,9 +64,10 @@ async function check($: EngineInterface, parked: Parked): Promise<void> {
 export const register: Register = on => {
   const state = newState()
   const parked: Parked = { project: undefined, refused: false, timer: undefined }
-  // A compaction since the last main-loop turn's end, this session's or one
-  // of its subagents' (whose transcripts a session's prune covers too).
-  const pruning = { compacted: false }
+  // Whether the prune a main-loop turn's end started for this conversation
+  // still runs: it can wait on the machine's lock, and turns ending meanwhile
+  // would each leave another child waiting behind it.
+  const pruning = { running: false }
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -171,10 +172,13 @@ export const register: Register = on => {
         $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
       }
       await startOrDefault($, ctx, undefined)
-      if (pruning.compacted) {
-        pruning.compacted = false
+      // The transcript is pruned once the turn a compaction ran in has ended:
+      // prune.py looks for one since its last look, and passes by without.
+      if (!pruning.running) {
+        const session = await $.session.id()
+        pruning.running = true
         // As at the start: prune() reports its own failures and never rejects.
-        void prune($, ctx, { session: await $.session.id() })
+        void prune($, ctx, { session }).then(() => { pruning.running = false })
       }
     }
     await save($, state)
@@ -183,14 +187,6 @@ export const register: Register = on => {
   }).catch(async ($, e, next) => {
     $.ui.log(`cc-accounts: could not finish this turn's checks (${describeError(next.error)}).`)
     return next(e)
-  })
-
-  // The transcript is pruned once the turn the compaction ran in has ended.
-  // A precomputed one is only kept for later and changes nothing yet.
-  on('session.compact', async ($, e, next) => {
-    const result = await next(e)
-    if (e.trigger !== 'precompute' && !('skip' in result)) pruning.compacted = true
-    return result
   })
 
   // The account's rate-limit windows moved: every session can now see them.

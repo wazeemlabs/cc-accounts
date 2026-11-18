@@ -2,9 +2,12 @@
 // before its last compaction, its request log once idle, and every image
 // but its newest few. A session
 // prunes, at its start, every transcript that changed since the last look,
-// and after it compacts, its own. The prune runs as a child of the session,
-// which never waits for it; one runs at a time on the machine, under a lock.
-// CCA_PRUNE=off turns it off.
+// and after it compacts, its own: it asks at every turn's end, and prune.py
+// looks in the transcript for a compaction since its last look
+// (prune-tails.json), as a session is not told of its compactions where an
+// organization's plugin sends session.compact past a person's plugins. The
+// prune runs as a child of the session, which never waits for it; one runs
+// at a time on the machine, under a lock. CCA_PRUNE=off turns it off.
 import type { EngineInterface } from 'claude-code'
 import { describeError, type Context } from './context'
 
@@ -16,6 +19,7 @@ export function pruneArgv(pluginRoot: string, ctx: Context, target: PruneTarget)
     '--projects', `${ctx.shared}/projects`,
     '--lock', `${ctx.root}/prune.lock`,
     '--state', `${ctx.root}/prune-state.json`,
+    '--since', `${ctx.root}/prune-tails.json`,
     ...('all' in target ? ['--all'] : ['--session', target.session]),
   ]
 }

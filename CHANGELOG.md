@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.17.1 (2026-11-18)
+
+- A session prunes its own transcript after it compacts on managed and Team accounts too. The plugin learned of a compaction from its `session.compact` hook, and Claude Code's built-in `sec-default` plugin, seated for those accounts, sends that event past every plugin a person installed ("its session.compact hook was skipped"). So a long-running session kept everything from before its last compaction until some session next started: on 2026-11-18 a transcript two compactions old held 5.8 MB of such rows out of 19.5 MB. The plugin no longer hooks the event. At every main turn's end it runs `prune.py --session <id> --since prune-tails.json`, which reads only the rows written since its last look and prunes when a compact boundary is among them, or when the file was replaced or cut since. One look runs at a time per session.
+
 ## 0.17.0 (2026-11-18)
 
 - A move keeps the session's model and effort. The new process started on Claude Code's configured model and effort, so a model picked with `/model` and an effort set with `/effort` for the session alone were lost at every move. In VS Code the panel's own model pick, which cca-stream replayed, could be older than the model the session ran on (2026-11-14: a session on Fable 5.2 came back on Opus 5.5). The plugin now writes the session's model and the effort of its last request beside the switch request, and cca and cca-stream start the new process with them in place of the first run's `--model` and `--effort`.

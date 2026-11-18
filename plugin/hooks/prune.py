@@ -26,11 +26,13 @@ reads whole when it opens the conversation. So this:
     slim mode leaves it), and does not count among the newest;
   - keeps every other row (titles, file history) as it was.
 
-  prune.py --projects DIR --lock FILE --state FILE --session ID
-  prune.py --projects DIR --lock FILE --state FILE --all [--min-bytes N]
+  prune.py --projects DIR --lock FILE --state FILE [--since FILE] --session ID
+  prune.py --projects DIR --lock FILE --state FILE [--since FILE] --all [--min-bytes N]
 
 --session prunes that conversation's transcripts (its own and its
-subagents'); --all every transcript of at least --min-bytes (by default
+subagents'), and with --since only when its own may have been compacted
+since that file last saw it (prune_tails.py), as a session asks at every
+turn's end; --all every transcript of at least --min-bytes (by default
 MIN_IDLE_SAVING, below which none can save enough) that changed since the
 state file last saw it, idle, under these rules. One line is printed per transcript shrunk.
 A transcript is replaced atomically, and rows Claude Code appends meanwhile
@@ -51,6 +53,7 @@ from collections import namedtuple
 
 # The row model beside this script; tests load this file by its path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import prune_tails  # noqa: E402
 from transcript_rows import CONVERSATION, row_of, scan, strings, without_copy, without_images  # noqa: E402
 
 # The newest images a transcript keeps whole, so a resumed session or agent
@@ -342,6 +345,26 @@ def write_state(path, files):
         raise
 
 
+def unseen(paths, tails):
+    """Whether a conversation among `paths` (a subagent's transcript is none)
+    may have been compacted since `tails` saw it. `tails` is brought up to
+    this look; a transcript that cannot be read counts, so the prune reports
+    it."""
+    found = False
+    for path in paths:
+        if os.path.basename(os.path.dirname(path)) == 'subagents':
+            continue
+        try:
+            compacted, tails[path] = prune_tails.compacted(path, tails.get(path))
+        except FileNotFoundError:
+            tails.pop(path, None)
+            continue
+        except OSError:
+            compacted = True
+        found = found or compacted
+    return found
+
+
 def megabytes(count):
     return f'{count / 1e6:.0f} MB'
 
@@ -354,6 +377,7 @@ def main(argv=None):
     which = parser.add_mutually_exclusive_group(required=True)
     which.add_argument('--session')
     which.add_argument('--all', action='store_true')
+    parser.add_argument('--since')
     parser.add_argument('--min-bytes', type=int, default=MIN_IDLE_SAVING)
     args = parser.parse_args(argv)
     # A hot reload of the plugin ends its children: the temporary file goes
@@ -363,10 +387,15 @@ def main(argv=None):
         return 0
     with open(args.lock, 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        paths = transcripts(args.projects, args.session)
+        tails = None if args.since is None else prune_tails.read(args.since)
+        if tails is not None and args.session is not None and not unseen(paths, tails):
+            prune_tails.write(args.since, tails)
+            return 0
         state = read_state(args.state)
         failed = False
         seen = {}
-        for path in transcripts(args.projects, args.session):
+        for path in paths:
             try:
                 now = stamp(path)
                 if args.all and (now[0] < args.min_bytes or passed_by(state.get(path), now, time.time())):
@@ -375,6 +404,10 @@ def main(argv=None):
                 result = prune(path)
                 if result.sizes is not None:
                     print(f'{path}: {megabytes(result.sizes[0])} -> {megabytes(result.sizes[1])}', flush=True)
+                    # Another file now, with rows the tail never looked at:
+                    # the next look reads it whole.
+                    if tails is not None:
+                        tails.pop(path, None)
                 if result.idle:
                     seen[path] = stamp(path)
                 elif result.idle_at is not None:
@@ -397,6 +430,8 @@ def main(argv=None):
                 seen[path] = now
         state = seen if args.all else {**state, **seen}
         write_state(args.state, state)
+        if tails is not None:
+            prune_tails.write(args.since, {path: tail for path, tail in tails.items() if not args.all or os.path.exists(path)})
     return 1 if failed else 0
 
 
