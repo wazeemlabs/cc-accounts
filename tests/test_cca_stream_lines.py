@@ -121,5 +121,45 @@ class RemoteControl(unittest.TestCase):
         self.assertEqual(json.loads(remote.from_child(bridge('connected', 9))[0])['bridge_epoch'], 3)
 
 
+
+class SetupKeeps(unittest.TestCase):
+    """What the setup replay leaves to the model and effort a move keeps."""
+
+    def requests(self, lines):
+        return [json.loads(text)['request'] for text in lines]
+
+    def test_the_panels_model_pick_is_left_out_when_the_move_keeps_the_model(self):
+        setup = stream.protocol.Setup()
+        setup.note(line(control('p1', 'initialize')))
+        setup.note(line(control('p2', 'set_model', model='claude-opus-5-5')))
+        setup.note(line(control('p3', 'set_permission_mode', mode='auto')))
+        subtypes = [request['subtype'] for request in self.requests(setup.replay(kept={'model': 'claude-fable-5-2[1m]'}))]
+        self.assertEqual(subtypes, ['initialize', 'set_permission_mode'])
+        self.assertIn('set_model', [request['subtype'] for request in self.requests(setup.replay())])
+
+    def test_a_model_pick_the_old_child_never_answered_is_newer_and_still_goes(self):
+        setup = stream.protocol.Setup()
+        setup.note(line(control('p2', 'set_model', model='claude-sonnet-5-5')))
+        [request] = setup.replay(unanswered={'p2'}, kept={'model': 'claude-opus-5-5'})
+        self.assertEqual(json.loads(request)['request_id'], 'p2')
+
+    def test_settings_for_the_session_alone_are_merged_and_replayed_once(self):
+        setup = stream.protocol.Setup()
+        setup.note(line(control('a', 'apply_flag_settings', settings={'viewMode': 'focus', 'effortLevel': 'low'})))
+        setup.note(line(control('b', 'apply_flag_settings', settings={'viewMode': None, 'fastMode': True})))
+        [request] = self.requests(setup.replay())
+        self.assertEqual(request, {'subtype': 'apply_flag_settings', 'settings': {'effortLevel': 'low', 'fastMode': True}})
+
+    def test_the_session_effort_setting_is_left_to_the_kept_effort(self):
+        setup = stream.protocol.Setup()
+        setup.note(line(control('a', 'apply_flag_settings', settings={'effortLevel': 'low'})))
+        self.assertEqual(setup.replay(kept={'effort': 'xhigh'}), [])
+
+    def test_relaunch_args_carry_the_kept_model_and_effort(self):
+        self.assertEqual(
+            stream.relaunch_args(['--model', 'opus', '--input-format', 'stream-json', '--resume', 'old'], ID,
+                                 {'model': 'claude-fable-5-2[1m]', 'effort': 'high'}),
+            ['--input-format', 'stream-json', '--model', 'claude-fable-5-2[1m]', '--effort', 'high', '--resume', ID])
+
 if __name__ == '__main__':
     unittest.main()

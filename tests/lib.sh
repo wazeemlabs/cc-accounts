@@ -34,7 +34,8 @@ setup() {
   printf '1\t%s\n2\t%s\n' "$HOME/.claude" "$HOME/.claude-two" > "$CCA_ROOT/accounts.tsv"
   LOG="$WORK/log-$RANDOM$RANDOM"; : > "$LOG"; export LOG
   # The stand-in records its account and args; with FAKE_SWITCH it asks for a
-  # switch on its first run, as /account does. Its comment holds Claude Code's
+  # switch on its first run, as /account does, leaving FAKE_KEEP beside the
+  # request as the plugin leaves the model and effort a move keeps. Its comment holds Claude Code's
   # default project entry, which cca-sync reads from the binary.
   export CCA_CLAUDE="$WORK/fake-claude"
   cat > "$CCA_CLAUDE" <<'FAKE'
@@ -48,7 +49,9 @@ echo "${CLAUDE_CODE_REMOTE_MEMORY_DIR-unset}" >> "$LOG.memory"
 echo "switch=${CLAUDE_ACCOUNT_SWITCH_FILE:+set} child=${CCA_STREAM_CHILD-unset}" >> "$LOG.switchfile"
 echo "token=${CLAUDE_CODE_OAUTH_TOKEN-unset} uuid=${CLAUDE_CODE_ACCOUNT_UUID-unset} email=${CLAUDE_CODE_USER_EMAIL-unset} entry=${CLAUDE_CODE_ENTRYPOINT-unset}" >> "$LOG.login"
 if [[ -n "${FAKE_SWITCH:-}" && ! -e "$LOG.switched" ]]; then
-  touch "$LOG.switched"; echo "$FAKE_SWITCH" > "$CLAUDE_ACCOUNT_SWITCH_FILE"; exit 0
+  touch "$LOG.switched"
+  if [[ -n "${FAKE_KEEP:-}" ]]; then printf '%s' "$FAKE_KEEP" > "$CLAUDE_ACCOUNT_SWITCH_FILE.keep"; fi
+  echo "$FAKE_SWITCH" > "$CLAUDE_ACCOUNT_SWITCH_FILE"; exit 0
 fi
 exit "${FAKE_STATUS:-0}"
 FAKE
@@ -56,7 +59,7 @@ FAKE
   export FIXTURES
   # XDG_CONFIG_HOME would send config writes outside the throwaway HOME; the
   # rest are what a session started by cca passes to the tests it runs.
-  unset CLAUDE_ACCOUNT CLAUDE_CONFIG_DIR FAKE_SWITCH FAKE_STATUS XDG_CONFIG_HOME \
+  unset CLAUDE_ACCOUNT CLAUDE_CONFIG_DIR FAKE_SWITCH FAKE_KEEP FAKE_STATUS XDG_CONFIG_HOME \
     CLAUDE_CODE_REMOTE_MEMORY_DIR CCA_TRUST_SYNC CCA_MCP_SYNC CCA_MODE CCA_PID CLAUDE_ACCOUNT_SWITCH_FILE \
     CCA_STREAM_CHILD CCA_STREAM_PID CCA_SHARED CCA_BALANCE
 }

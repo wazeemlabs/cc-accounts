@@ -111,6 +111,18 @@ check "a switch keeps the session's flags and drops its prompt and one-shot opti
 check "a switch says what it did not carry over" "cca: not carried over: -w feat fix it" "$(grep 'not carried' "$WORK/err")"
 
 setup
+FAKE_SWITCH="2 $ID" FAKE_KEEP=$'model claude-fable-5-2[1m]\neffort xhigh\n' "$CCA" run --model opus --effort=low --add-dir /a 2>/dev/null
+check "a switch reopens the conversation on the model and effort the session ran on, not the first run's" \
+  "dir=$HOME/.claude-two account=2 args=--add-dir /a --model claude-fable-5-2[1m] --effort xhigh --resume $ID" "$(sed -n 2p "$LOG")"
+check "and leaves no kept file behind" "0" "$(find "$CCA_ROOT/switch" -type f | wc -l | tr -d ' ')"
+
+setup
+FAKE_SWITCH="2 $ID" FAKE_KEEP=$'model opus;rm -rf /\nspeed fast\neffort high\n' "$CCA" run --model opus 2>"$WORK/err"
+check "a kept line that is no model or effort value is reported and passed over" \
+  "dir=$HOME/.claude-two account=2 args=--model opus --effort high --resume $ID|2" \
+  "$(sed -n 2p "$LOG")|$(grep -c 'not keeping' "$WORK/err")"
+
+setup
 "$CCA" run
 check "a terminal run tells the plugin it is the parent, and where state is" \
   "mode=terminal parent=yes self=no root=$CCA_ROOT" "$(cat "$LOG.pid")"
@@ -186,6 +198,16 @@ check "a switch in a VS Code session reopens the conversation on the new account
 check "and the wrapper exits with the reopened run's status" "0" "$status"
 check "and says what it did" "cca: resuming $ID on account 2" "$(cat "$WORK/err")"
 check "and leaves no switch file behind" "0" "$(find "$CCA_ROOT/switch" -type f | wc -l | tr -d ' ')"
+
+setup
+echo 2 > "$CCA_ROOT/by-session/$ID"
+mkfifo "$WORK/panel"; exec 3<>"$WORK/panel"
+FAKE_SWITCH="2 $ID" FAKE_KEEP=$'model claude-sonnet-5-5\neffort max\n' "$CCA" "$CCA_CLAUDE" --input-format stream-json --model opus <&3 2>"$WORK/err"
+exec 3>&-; rm -f "$WORK/panel"
+check "a switch in a VS Code session reopens it on the model and effort the session ran on" \
+  "dir=$HOME/.claude-two account=2 args=--input-format stream-json --model claude-sonnet-5-5 --effort max --resume $ID" "$(sed -n 2p "$LOG")"
+check "and says so" "cca: resuming $ID on account 2, model claude-sonnet-5-5, effort max" "$(cat "$WORK/err")"
+check "and leaves neither file behind" "0" "$(find "$CCA_ROOT/switch" -type f | wc -l | tr -d ' ')"
 
 setup
 FAKE_STATUS=6 "$CCA" "$CCA_CLAUDE" --input-format stream-json < /dev/null; status=$?

@@ -100,6 +100,13 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     return { value: { isSet: true, version: 1 } }
   })
   on('session.id', async () => ({ value: SESSION }))
+  // The model the session runs on, as $.session.model() answers; a thrown
+  // error when `model.fails`.
+  const model: { value: unknown; fails: boolean } = { value: 'claude-opus-5-5', fails: false }
+  on('session.model', async () => {
+    if (model.fails) throw new Error('no session bound')
+    return { value: model.value as never }
+  })
   on('session.usage', async () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [...limits] } as never }))
   // The session's folder: where it started, until a test moves it, as the
   // desktop app moves a session it started in a standby folder.
@@ -261,7 +268,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     return { value: undefined }
   })
   return {
-    files, ran, statuses, logs, clock, killed, agents, state, results, denied, limits, running, writes, released, slow, transcript, settings,
+    files, ran, statuses, logs, clock, killed, agents, state, results, denied, limits, running, writes, released, slow, transcript, settings, model,
     folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery,
   }
 }

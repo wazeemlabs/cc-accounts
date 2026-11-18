@@ -74,5 +74,34 @@ class Keep(unittest.TestCase):
         self.assertEqual(keep(), ([], []))
 
 
+
+class Kept(unittest.TestCase):
+    """The model and effort a move keeps replace the first run's options."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.file = pathlib.Path(self.tmp.name) / 'switch.keep'
+
+    def test_kept_values_replace_either_spelling_of_the_option_and_come_last(self):
+        self.assertEqual(
+            keep_args.with_kept(['--model', 'opus', '--add-dir', '/a', '--effort=low'], {'model': 'claude-fable-5-2[1m]', 'effort': 'max'}),
+            ['--add-dir', '/a', '--model', 'claude-fable-5-2[1m]', '--effort', 'max'])
+
+    def test_only_what_is_kept_is_replaced(self):
+        self.assertEqual(keep_args.with_kept(['--model', 'opus', '--effort', 'low'], {'effort': 'high'}),
+                         ['--model', 'opus', '--effort', 'high'])
+        self.assertEqual(keep_args.with_kept(['--model', 'opus'], {}), ['--model', 'opus'])
+
+    def test_reads_the_plugins_lines_and_none_when_there_is_no_file(self):
+        self.assertEqual(keep_args.read_kept(str(self.file)), {})
+        self.file.write_text('model claude-opus-5-5\neffort xhigh\n')
+        self.assertEqual(keep_args.read_kept(str(self.file)), {'model': 'claude-opus-5-5', 'effort': 'xhigh'})
+
+    def test_a_line_that_is_no_model_or_effort_value_is_passed_over(self):
+        self.file.write_text('model opus --dangerously-skip-permissions\nspeed fast\n\neffort high\nmodel\n')
+        self.assertEqual(keep_args.read_kept(str(self.file)), {'effort': 'high'})
+
 if __name__ == '__main__':
     unittest.main()
