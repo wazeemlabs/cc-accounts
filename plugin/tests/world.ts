@@ -118,8 +118,9 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   on('session.measure', async (_$, e) => ({ changed: e.changed }))
   // A transcript prune: every child's argv, what it prints, how it ends, a
-  // promise per child that settles once it has, and `started(n)`, which
-  // settles once n children have started.
+  // promise per child that settles once it has, `started(n)`, which settles
+  // once n children have started, and `hold`, which a child waits for before
+  // it prints and ends.
   const starts: { count: number; found: () => void }[] = []
   const prunes = {
     argv: [] as string[][],
@@ -127,6 +128,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     code: 0 as number | null,
     signal: null as string | null,
     ended: [] as Promise<void>[],
+    hold: undefined as Promise<void> | undefined,
     started: (count: number) =>
       prunes.argv.length >= count ? Promise.resolve() : new Promise<void>(found => { starts.push({ count, found }) }),
   }
@@ -139,6 +141,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     let end = () => {}
     prunes.ended.push(new Promise<void>(resolve => { end = resolve }))
     try {
+      await prunes.hold
       for (const chunk of prunes.chunks) yield chunk
       return { value: { code: prunes.code, signal: prunes.signal } }
     } finally {

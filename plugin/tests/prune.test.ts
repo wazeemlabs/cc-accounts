@@ -2,12 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 import { HOME, ROOT, SESSION, START, SUPERVISED, cost, turn, world } from './world'
 
 const PROJECTS = `${HOME}/.claude-shared/projects`
-const common = ['--projects', PROJECTS, '--lock', `${ROOT}/prune.lock`, '--state', `${ROOT}/prune-state.json`]
+const common = ['--projects', PROJECTS, '--lock', `${ROOT}/prune.lock`, '--state', `${ROOT}/prune-state.json`, '--since', `${ROOT}/prune-tails.json`]
 const summary = (count: number) =>
   `cc-accounts: pruned ${count} transcript${count === 1 ? '' : 's'} to save space; the debug log lists them.`
-
-// What a compaction leaves: at least one message.
-const KEPT = [{ role: 'user' as const, text: 'the summary', toolUses: [] }]
 
 describe('transcripts are pruned', () => {
   test('a session prunes every transcript that changed when it starts, without waiting for it', async ($, on) => {
@@ -23,11 +20,11 @@ describe('transcripts are pruned', () => {
     expect(w.logs.some(line => line.includes('prune'))).toBe(false)
   })
 
-  test("after a compaction, this conversation's transcripts are pruned once the main turn ends", async ($, on) => {
+  // The session is not told of its compactions where an organization's plugin
+  // sends session.compact past a person's plugins: prune.py finds them itself.
+  test("at each main turn's end, with no word of a compaction, a prune looks at this conversation for one since its last look", async ($, on) => {
     const w = world(on, SUPERVISED)
-    on('session.compact', async (_$, e) => ({ messages: e.messages }))
     await $.session.start(START)
-    await $.session.compact({ trigger: 'auto', messages: KEPT })
     await w.prunes.started(1)
     // A subagent's turn ending is not the main turn's.
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'a1', reason: 'answer', agentId: 'a', usage: cost('claude-opus-5-5', 1) })
@@ -35,28 +32,29 @@ describe('transcripts are pruned', () => {
     await turn($, w, [])
     await w.prunes.started(2)
     expect(w.prunes.argv[1]!.slice(2)).toEqual([...common, '--session', SESSION])
-    // Once per compaction: the next turn's end starts none, and the next
-    // compaction's is the third.
-    await turn($, w, [])
-    await $.session.compact({ trigger: 'auto', messages: KEPT })
+    await Promise.all(w.prunes.ended)
     await turn($, w, [])
     await w.prunes.started(3)
-    expect(w.prunes.argv).toHaveLength(3)
     expect(w.prunes.argv[2]!.slice(2)).toEqual([...common, '--session', SESSION])
   })
 
-  test('a compaction skipped or only precomputed prunes nothing', async ($, on) => {
+  test("a turn that ends while this conversation's last look still runs starts no other", async ($, on) => {
     const w = world(on, SUPERVISED)
-    on('session.compact', async (_$, e) => (e.trigger === 'manual' ? { skip: 'not now' } : { messages: e.messages }))
     await $.session.start(START)
-    await $.session.compact({ trigger: 'manual', messages: KEPT })
-    await $.session.compact({ trigger: 'precompute', messages: KEPT })
-    await turn($, w, [])
-    // The next prune started is a real compaction's, not one for those.
-    await $.session.compact({ trigger: 'auto', messages: KEPT })
+    await w.prunes.started(1)
+    await Promise.all(w.prunes.ended)
+    let release = () => {}
+    w.prunes.hold = new Promise<void>(resolve => { release = resolve })
     await turn($, w, [])
     await w.prunes.started(2)
-    expect(w.prunes.argv.map(argv => argv.at(-1))).toEqual(['--all', SESSION])
+    await turn($, w, [])
+    await turn($, w, [])
+    expect(w.prunes.argv).toHaveLength(2)
+    release()
+    await Promise.all(w.prunes.ended)
+    await turn($, w, [])
+    await w.prunes.started(3)
+    expect(w.prunes.argv).toHaveLength(3)
   })
 
   test('each transcript shrunk goes to the debug log, a line cut across pieces counted once, and one line to the transcript', async ($, on) => {
@@ -101,11 +99,9 @@ describe('transcripts are pruned', () => {
 
   test('CCA_PRUNE=off prunes nothing', async ($, on) => {
     const w = world(on, { ...SUPERVISED, CCA_PRUNE: 'off' })
-    on('session.compact', async (_$, e) => ({ messages: e.messages }))
     await $.session.start(START)
-    await $.session.compact({ trigger: 'auto', messages: KEPT })
     await turn($, w, [])
-    // The session start's prune and the compaction's each say so, and start nothing.
+    // The session start's prune and the turn end's each say so, and start nothing.
     await w.logged(line => line === 'cc-accounts: transcripts are not pruned (CCA_PRUNE=off).', 2)
     expect(w.prunes.argv).toHaveLength(0)
   })
