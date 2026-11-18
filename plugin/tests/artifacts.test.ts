@@ -55,7 +55,7 @@ describe('the artifacts a conversation published', () => {
     const one = artifactsText([NOTE], '2') ?? ''
     expect(one).toContain(`This conversation published this artifact on another account, and the 2 account does not own it: ${PAGE} (owned by 1, source /work/page.html).`)
     expect(one).toContain('read it first')
-    expect(one).toContain('press Share and add this account as an editor')
+    expect(one).toContain('press Share and give the whole organization edit access (or add this account as an editor)')
     expect(one).toContain('do not try again')
     const two = artifactsText([NOTE, { url: BOARD, file: '', account: '3' }], '2') ?? ''
     expect(two).toContain(`these artifacts on another account, and the 2 account does not own them: ${PAGE} (owned by 1, source /work/page.html), ${BOARD} (owned by 3).`)

@@ -81,7 +81,7 @@ const KEEPS =
   'An artifact belongs to the account that published it, and Claude Code cannot share or move one. ' +
   'To use one here, read it first (Artifact action "read"): if that answers, it was shared with this account, and it can be watched, ' +
   'and republished at the same link where the read says "writer". If the read says there is no such artifact, do not try again: ' +
-  'tell the person that its owner must open the link on claude.ai, press Share and add this account as an editor to keep the link, ' +
+  'tell the person that its owner must open the link on claude.ai, press Share and give the whole organization edit access (or add this account as an editor) to keep the link, ' +
   'or, if they would rather have a new link, publish its source file as a new artifact.'
 
 // What a conversation moved to `to` is told about the artifacts it left on
