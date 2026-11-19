@@ -112,13 +112,19 @@ export async function setPriority($: EngineInterface, root: string, folder: stri
   await writeAtomic($, priorityFile(root), formatPriorities(priorities))
 }
 
-// Each account's load: the summed weights of the working sessions on it.
-export function loads(live: readonly LiveSession[], priorities: Priorities): Map<string, number> {
+// Each account's load: the summed weights of the working sessions on it,
+// each counted by its share of what they spend (`shares`, by session id:
+// `spendShares`; one where not known).
+export function loads(
+  live: readonly LiveSession[],
+  priorities: Priorities,
+  shares: ReadonlyMap<string, number> = new Map(),
+): Map<string, number> {
   const found = new Map<string, number>()
   for (const session of live) {
     // An idle session spends nothing, so it weighs on no account's window.
     if (!session.active) continue
-    found.set(session.account, (found.get(session.account) ?? 0) + weightOf(priorities, session.cwd).weight)
+    found.set(session.account, (found.get(session.account) ?? 0) + weightOf(priorities, session.cwd).weight * (shares.get(session.sessionId) ?? 1))
   }
   return found
 }

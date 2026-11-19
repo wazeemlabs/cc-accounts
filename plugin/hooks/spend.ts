@@ -267,3 +267,38 @@ export async function demandPerHour(
   }
   return demandRate(points, CALIBRATION_DAYS)
 }
+
+// A session that has spent less than this over the days read has not shown
+// what it spends: about a seventh of a point of a Max 5x week.
+export const SHARE_MIN_TOKENS = 1_000_000
+// A day or two of spend is a rough guide to the next hours, so no session
+// counts as less than a quarter of an average one or more than four.
+export const SHARE_RANGE = { least: 0.25, most: 4 }
+
+// Each session's spend over the average of `ids`' (the working sessions),
+// from `tokens` spent by session id. A session with too little on record is
+// left out and counts as one; so does every session when fewer than two can
+// be compared.
+export function spendShares(ids: readonly string[], tokens: ReadonlyMap<string, number>): Map<string, number> {
+  const measured = ids.flatMap(id => {
+    const spent = tokens.get(id)
+    return spent !== undefined && spent >= SHARE_MIN_TOKENS ? [{ id, spent }] : []
+  })
+  if (measured.length < 2) return new Map()
+  const mean = measured.reduce((sum, session) => sum + session.spent, 0) / measured.length
+  return new Map(measured.map(({ id, spent }) => [id, Math.min(SHARE_RANGE.most, Math.max(SHARE_RANGE.least, spent / mean))]))
+}
+
+// What each record's owner has spent today and yesterday, in weighted
+// tokens, by id (a session's is its session id): today alone is too short just after midnight UTC.
+export async function sessionTokens($: EngineInterface, root: string, at: number): Promise<Map<string, number>> {
+  const found = new Map<string, number>()
+  for (const day of daysBack(at, 2)) {
+    for (const [key, spend] of await readSpend($, root, day)) {
+      // Keyed by id and folder. A record of anything but a working session is never looked up.
+      const id = key.split('\t')[0]!
+      found.set(id, (found.get(id) ?? 0) + spend.tokens)
+    }
+  }
+  return found
+}

@@ -16,7 +16,7 @@ import type { EngineInterface } from 'claude-code'
 import { context, defaultName, describeError, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
 import { block, blockedUntil, knownOf, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
-import { demandPerHour } from './spend'
+import { demandPerHour, sessionTokens, spendShares } from './spend'
 import { accountStates, liveSessions, ownContext, ownReading, writeReading, type LiveSession } from './survey'
 import { dropSwitch, requestSwitch, type Exit, type SwitchState } from './switching'
 import {
@@ -49,8 +49,9 @@ export async function candidates(
   family: string | undefined,
   live: readonly LiveSession[],
   priorities: Priorities,
+  shares: ReadonlyMap<string, number>,
 ): Promise<Candidate[]> {
-  const load = loads(live, priorities)
+  const load = loads(live, priorities, shares)
   const states = (await accountStates($, ctx)).filter(state => state.email !== undefined)
   return Promise.all(
     states.map(async state => ({
@@ -63,6 +64,12 @@ export async function candidates(
   )
 }
 
+// Each working session's share of what they spend, by session id.
+async function sharesOf($: EngineInterface, ctx: Context, live: readonly LiveSession[]): Promise<Map<string, number>> {
+  const working = live.filter(session => session.active).map(session => session.sessionId)
+  return spendShares(working, await sessionTokens($, ctx.root, await $.clock.now()))
+}
+
 // Where a new session should start, from every account's readings (this
 // session's own, fresher than its file, for its account): the default while
 // it has room, else the account a move would take. Published for cca, which
@@ -73,7 +80,7 @@ export async function publishStart($: EngineInterface, ctx: Context): Promise<st
   const preferred = await defaultName($, ctx)
   if ((await $.env.get('CCA_BALANCE')) === 'off') return preferred
   const live = await liveSessions($, ctx)
-  const options = await candidates($, ctx, undefined, live, await readPriorities($, ctx.root))
+  const options = await candidates($, ctx, undefined, live, await readPriorities($, ctx.root), await sharesOf($, ctx, live))
   const own = ctx.current === undefined ? undefined : await ownReading($, ctx.current.name)
   const current = options.map(option => (own !== undefined && option.name === own.account ? { ...option, reading: own } : option))
   const chosen = startAccount(preferred, current, await $.clock.now())
@@ -188,12 +195,15 @@ async function planMove($: EngineInterface, state: SwitchState, ctx: Context, fr
   const live = await liveHere($, ctx, from)
   const priorities = await readPriorities($, ctx.root)
   const mine = weightOf(priorities, await $.session.root())
+  const shares = await sharesOf($, ctx, live)
+  // What this session adds to an account it moves to.
+  const arriving = mine.weight * (shares.get(await $.session.id()) ?? 1)
   // Below the leave line, only a session with a heavier one beside it moves.
   const heavier = stop === undefined && full === undefined && tight !== undefined
     ? heavierOn(live, priorities, from, await $.session.id(), mine.weight)
     : undefined
   if (stop === undefined && full === undefined && heavier === undefined) {
-    return soonerPlan($, state, ctx, { from, reading, now, exit, live, priorities, arriving: mine.weight })
+    return soonerPlan($, state, ctx, { from, reading, now, exit, live, priorities, shares, arriving })
   }
   // `full ?? tight` is set whenever `stop` is not.
   const window = stop !== undefined && 'window' in stop ? stop.window : full ?? tight ?? 'five_hour'
@@ -209,8 +219,8 @@ async function planMove($: EngineInterface, state: SwitchState, ctx: Context, fr
   // that would meet it moves here for a while. One they explain needs no
   // record: they show it to every session, and when it resets.
   if (stop !== undefined && 'error' in stop) await block($, ctx.root, from, scopeOf(stop.error, family), stop.error, now)
-  const options = await candidates($, ctx, family, live, priorities)
-  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave, undefined, mine.weight)
+  const options = await candidates($, ctx, family, live, priorities, shares)
+  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave, undefined, arriving)
   const why = stop !== undefined && 'error' in stop
     ? `${from} failed the last turn (${stop.error})`
     : heavier !== undefined
@@ -250,8 +260,10 @@ async function stranded(
   if (state.stranded === told) return
   state.stranded = told
   const priorities = await readPriorities($, ctx.root)
-  const options = await candidates($, ctx, await sessionFamily($, state.answered), await liveSessions($, ctx), priorities)
-  const arriving = weightOf(priorities, await $.session.root()).weight
+  const live = await liveSessions($, ctx)
+  const shares = await sharesOf($, ctx, live)
+  const options = await candidates($, ctx, await sessionFamily($, state.answered), live, priorities, shares)
+  const arriving = weightOf(priorities, await $.session.root()).weight * (shares.get(await $.session.id()) ?? 1)
   const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave, undefined, arriving)
   const desktop = await inDesktopApp($)
   const why = failed !== undefined ? `${from} failed the last turn (${failed})` : `${from}'s ${describeWindows(reading, now)}`
@@ -294,7 +306,7 @@ async function hurry($: EngineInterface, state: SwitchState): Promise<void> {
 // well before this one's and has room, so that room is spent before the reset
 // takes it (usage.ts, soonerTarget). The move is planned, so it waits for the
 // session's background work and goes only where a planned move may.
-// `arriving`: this session's project weight.
+// `arriving`: this session's project weight by its share of the spend.
 async function soonerPlan(
   $: EngineInterface,
   state: SwitchState,
@@ -306,11 +318,12 @@ async function soonerPlan(
     exit: Exit
     live: readonly LiveSession[]
     priorities: Priorities
+    shares: ReadonlyMap<string, number>
     arriving: number
   },
 ): Promise<Plan | undefined> {
-  const { from, reading, now, exit, live, priorities, arriving } = here
-  const options = await candidates($, ctx, await sessionFamily($, state.answered), live, priorities)
+  const { from, reading, now, exit, live, priorities, shares, arriving } = here
+  const options = await candidates($, ctx, await sessionFamily($, state.answered), live, priorities, shares)
   // This session's own reading is fresher than its account's file; before
   // its first response it has none, and its account's saved one stands in.
   const own = options.find(option => option.name === from)
