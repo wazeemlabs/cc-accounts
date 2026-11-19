@@ -131,7 +131,7 @@ describe('what each working session spends beside the others', () => {
     expect(spendShares(['a', 'b'], new Map([['a', 3 * M], ['b', M], ['ended', 400 * M]]))).toEqual(new Map([['a', 1.5], ['b', 0.5]]))
   })
 
-  test("a session's spend is read from today and yesterday, every folder it worked in; a client's record is not a session's", async () => {
+  test("a session's spend is read from today and yesterday, every folder it worked in", async () => {
     const files = new Map<string, string>()
     const $ = {
       fs: {
@@ -148,7 +148,6 @@ describe('what each working session spends beside the others', () => {
     files.set(`${spendDir(ROOT, day(1))}/s1.json`, '{"folders":{"/p/a":100}}\n')
     files.set(`${spendDir(ROOT, day(1))}/s2.json`, '{"folders":{"/p/a":7}}\n')
     files.set(`${spendDir(ROOT, day(2))}/s2.json`, '{"folders":{"/p/a":1000}}\n')
-    files.set(`${spendDir(ROOT, day(0))}/client.json`, '{"cwd":"/p/a","tokens":900}\n')
     expect(await sessionTokens($, ROOT, at)).toEqual(new Map([['s1', 115], ['s2', 7]]))
   })
 })
