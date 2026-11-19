@@ -14,7 +14,7 @@ check "token keeps the token read from stdin and says what the account now runs 
   "0 Account 2 now runs on its long-lived token, not its /login." "$status $(echo "$out" | head -1)"
 check "and never prints it" "0" "$(echo "$out" | grep -c "$TOKEN")"
 check "the file store keeps it readable by the owner alone" "600 700" \
-  "$(stat -f '%Lp' "$CCA_ROOT/tokens/2" 2>/dev/null || stat -c '%a' "$CCA_ROOT/tokens/2") $(stat -f '%Lp' "$CCA_ROOT/tokens" 2>/dev/null || stat -c '%a' "$CCA_ROOT/tokens")"
+  "$(python3 -I -c 'import os,sys; print(*(oct(os.stat(p).st_mode & 0o777)[2:] for p in sys.argv[1:]))' "$CCA_ROOT/tokens/2" "$CCA_ROOT/tokens")"
 "$CCA" 2 -p x
 check "the account's session is given its token" "token=$TOKEN" "$(login)"
 : > "$LOG.login"; "$CCA" 1 -p x
@@ -26,7 +26,7 @@ check "a run through the editor's wrapper is given it too" "token=$TOKEN" "$(log
 : > "$LOG.login"; FAKE_SWITCH="1 $ID" "$CCA" 2 -p x 2>/dev/null
 check "a switch to an account with no token drops it" "token=$TOKEN token=unset" "$(login)"
 check "the list marks the account that runs on a token" "2" \
-  "$("$CCA" | awk '/long-lived token/ { print $1 == "*" ? $2 : $1 }' | paste -sd' ' -)"
+  "$("$CCA" | awk '/long-lived token/ { print ($1 == "*" ? $2 : $1) }' | paste -sd' ' -)"
 printf '%s\n' "$OTHER" | "$CCA" token 2 >/dev/null
 : > "$LOG.login"; "$CCA" 2 -p x
 check "a second token replaces the first" "token=$OTHER" "$(login)"
@@ -35,8 +35,8 @@ out="$("$CCA" token 2 --remove)"
 check "token --remove puts the account back on its /login" \
   "Account 2 runs on its /login again. token=unset no" \
   "$out $(login) $([[ -e "$CCA_ROOT/tokens/2" ]] && echo yes || echo no)"
-check "removing a token that is not there is refused" "2 cca: 2 has no token" \
-  "$("$CCA" token 2 --remove 2>&1; echo $?)" 2>/dev/null || true
+out="$("$CCA" token 2 --remove 2>&1)"; status=$?
+check "removing a token that is not there is refused" "2 cca: 2 has no token" "$status $out"
 
 setup; export CCA_TOKEN_STORE=file
 out="$(printf 'hello world\n' | "$CCA" token 2 2>&1)"; status=$?
@@ -46,7 +46,10 @@ check "what is not a setup-token token is refused and nothing is kept" \
 out="$(printf '\n' | "$CCA" token 2 2>&1)"; status=$?
 check "an empty line is refused" "2 cca: that is not a token from claude setup-token (it starts sk-ant-oat)" "$status $out"
 check "an unknown account is refused" "2" "$(printf '%s\n' "$TOKEN" | "$CCA" token nobody >/dev/null 2>&1; echo $?)"
-check "token needs a name" "2 cca: usage: cca token <name> [--remove]" "$("$CCA" token 2>&1; echo $?)" 2>/dev/null || true
+out="$("$CCA" token 2>&1)"; status=$?
+check "token needs a name" "2 cca: usage: cca token <name> [--remove]" "$status $out"
+out="$(printf '%s\n' "$TOKEN" | "$CCA" token 2 --drop 2>&1)"; status=$?
+check "an option that is not --remove is refused" "2 cca: usage: cca token <name> [--remove]" "$status $out"
 check "'token' cannot name an account" "2" "$("$CCA" add token >/dev/null 2>&1; echo $?)"
 
 setup; export CCA_TOKEN_STORE=file

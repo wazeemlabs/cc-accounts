@@ -12,6 +12,9 @@
 #                              and no other account's week resets sooner
 #   cca remove <name>          stop using <name>: no session starts or moves
 #                              there; its folder and login are left as they are
+#   cca token <name>           run <name> on a long-lived token from
+#                              `claude setup-token` (model requests only: for
+#                              unattended work); --remove goes back to /login
 #   cca <name> [claude args]   run Claude Code on <name>
 #   cca run [claude args]      run it on the account the resumed conversation last
 #                              used, else where new sessions start (what `claude`
@@ -46,7 +49,7 @@ SHARED_STATE=(projects todos file-history sessions)
 MCP_FILE="$SHARED/mcp.json"
 # Linked from ~/.claude into every other account unless share.conf says otherwise.
 DEFAULT_SHARE=(settings.json CLAUDE.md agents commands keybindings.json)
-RESERVED=" init add use remove run uninstall version help default usage priority now spend "
+RESERVED=" init add use remove token run uninstall version help default usage priority now spend "
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # The plugin rewrites a conversation's record each time it starts, so a record
 # this old belongs to a conversation nobody has opened since; it then opens on
@@ -200,6 +203,9 @@ apply() {
     CLAUDE_CODE_ACCOUNT_UUID CLAUDE_CODE_USER_EMAIL CLAUDE_CODE_ORGANIZATION_UUID \
     CLAUDE_CODE_RATE_LIMIT_TIER CLAUDE_CODE_SUBSCRIPTION_TYPE \
     CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH
+  # An account given a long-lived token (cca token) runs on it.
+  local token; token="$(token_of "$1")"
+  if [[ -n "$token" ]]; then export CLAUDE_CODE_OAUTH_TOKEN="$token"; fi
   # Claude Code keeps an inherited entrypoint, so such a claude also ran as a
   # desktop session (the session list, desktop-only limits); Claude Code drops
   # the app's entrypoints from the sessions it starts itself. The editor's,
@@ -304,8 +310,9 @@ list() {
   local def start name dir; def="$(default_name)"; start="$(start_name)"
   while IFS=$'\t' read -r name dir; do
     local email; email="$(email_of "$dir")"
-    printf '%s %-10s %-32s %s\n' "$([[ "$name" == "$start" ]] && echo '*' || echo ' ')" \
-      "$name" "${email:-(not signed in)}" "$dir"
+    printf '%s %-10s %-32s %s%s\n' "$([[ "$name" == "$start" ]] && echo '*' || echo ' ')" \
+      "$name" "${email:-(not signed in)}" "$dir" \
+      "$([[ -n "$(token_of "$name" 2>/dev/null)" ]] && echo '  (long-lived token)')"
   done < "$TABLE"
   if [[ "$start" == "$def" ]]; then
     echo "* new sessions start here. Move a running one with /account <name>."
@@ -331,6 +338,9 @@ edit_everywhere() {
 # The account set-up commands (init, add's linking, remove).
 # shellcheck source=libexec/cca-manage.sh
 . "$LIBEXEC/cca-manage.sh"
+# An account's long-lived token (token, and apply's use of it).
+# shellcheck source=libexec/cca-token.sh
+. "$LIBEXEC/cca-token.sh"
 
 case "${1:-}" in
   "") list ;;
@@ -357,6 +367,7 @@ case "${1:-}" in
     [[ $# -eq 2 ]] || die "usage: cca remove <name>"
     remove_account "$2"
     ;;
+  token) shift; token_command "$@" ;;
   add)
     [[ $# -ge 2 && $# -le 3 ]] || die "usage: cca add <name> [dir]"
     [[ -f "$TABLE" ]] || die "run cca init <name> first, naming your current account"

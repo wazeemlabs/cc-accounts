@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.22.0 (2026-11-19)
+
+- `cca token <name>` runs an account on a long-lived token from `claude setup-token`, for work nobody watches: a `/login` ends after a while and cannot renew itself. The token is pasted unseen, kept in the macOS Keychain (elsewhere a file only its owner can read), and given to Claude Code whenever that account runs; `cca` marks the account, and `cca token <name> --remove` goes back to `/login`. Claude Code allows such a token model requests only (no Artifacts, Remote Control, claude.ai connectors or Chrome tools), and `cca token` says so.
+- An account that signed in again takes sessions again. A lost login kept every session off the account for a day, and nothing ended that when the person signed in: on 2026-11-19 four accounts with room were closed to every session and `/account` counted no account free. A refusal now stops counting once the account has answered since.
+
 ## 0.21.1 (2026-11-18)
 
 - The words about an artifact left on another account name the share that covers every account at once: its owner gives the whole organization edit access from Share. Checked 2026-11-18: an artifact published on cto and shared that way read as "writer" from levoro.

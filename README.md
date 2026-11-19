@@ -169,6 +169,7 @@ Your accounts and conversations stay where they are.
 
 ## Good to know
 
+- A `/login` ends after a while and cannot renew itself. A session that fails on it moves to another account; sign in on the first again (`cca <name>`, then `/login`) and sessions move there again from its next response. For work nobody watches, `cca token <name>` runs the account on a one-year token from `claude setup-token`, kept in the macOS Keychain (elsewhere, a file only you can read in `~/.claude-shared/accounts/tokens/`). Claude Code allows that token model requests only: on such an account Artifacts, Remote Control, claude.ai connectors and the Chrome tools do not work, so keep the accounts you use them on signed in with `/login`.
 - Installed a new editor, or connected VS Code to WSL or a remote machine, after setup? Run `cca init` again with your first account's name (`cca init work`). It only adds what is missing.
 - `/account` uses Claude Code's plugin API, which is in early access (tested with Claude Code 2.1.305). If your Claude Code does not load the plugin, everything else still works, and `cca personal --resume <conversation id>` moves a conversation by hand.
 - When switching in a terminal, options such as `--model` and `--add-dir` carry over. The first prompt and one-time options such as `--print` and `--worktree` do not; cca says what it left out.
@@ -189,6 +190,7 @@ Your accounts and conversations stay where they are.
 | `cca add <name> [folder]` | Add an account. Its folder defaults to `~/.claude-<name>`. Running it again for an account relinks what it shares. |
 | `cca use <name>` | Start new sessions on `<name>` while it has room and no other account's week with room resets sooner. |
 | `cca remove <name>` | Stop using `<name>`, for a plan that ended: no session starts or moves there. Its folder and login stay, so `cca add <name> <folder>` brings it back. |
+| `cca token <name>` | Run `<name>` on a long-lived token: run `claude setup-token` signed in to that account, then paste the token here (it is not shown). For unattended work, since a `/login` ends after a while and such a session can only make model requests. `cca token <name> --remove` goes back to `/login`. |
 | `cca init <name>` | Set up, naming the account you are signed in to now. The installer runs this. |
 | `cca uninstall` | Undo setup's changes to your shell, settings and editors. |
 | `cca version`, `cca help` | |
@@ -200,7 +202,7 @@ Your accounts and conversations stay where they are.
 | `/account priority [<weight> [<folder>]]` | In Claude Code: show the project weights, or set this project's (or a folder's). |
 | `/account budget [<points a day> [<folder>]]` | In Claude Code: show every project's budget and spend today, or set this project's (or a folder's); 0 removes it. |
 
-Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_BUDGET=off` stops sessions being parked over budget, `CCA_PRUNE=off` stops conversations being pruned to their last compaction and newest images, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
+Environment variables: `CCA_BALANCE=off` stops sessions moving off accounts that are nearly spent, `CCA_BUDGET=off` stops sessions being parked over budget, `CCA_PRUNE=off` stops conversations being pruned to their last compaction and newest images, `CCA_TRUST_SYNC=off` stops folder trust syncing, and `CCA_MCP_SYNC=off` stops cca moving user MCP servers into the shared file and syncing per-project ones. `CCA_TOKEN_STORE=keychain` or `file` picks where `cca token` keeps a token. `CCA_ROOT` and `CCA_SHARED` move cc-accounts' own folders (by default `~/.claude-shared/accounts` and `~/.claude-shared`). For the installer, `CCA_REF=v0.1.1` installs a given release and `CCA_HOME` changes where it installs.
 
 ## Use only your own accounts
 

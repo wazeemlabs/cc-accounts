@@ -137,5 +137,6 @@ remove_account() {
   awk -F'\t' -v n="$name" '$1 != n' "$TABLE" > "$tmp" && mv "$tmp" "$TABLE"
   rm -f "$ROOT/usage/$name.json"
   rm -rf "${ROOT:?}/blocked/$name"
+  drop_token "$name" || true  # it may have none
   echo "Removed $name. Its folder $dir is left as it is: cca add $name $dir brings it back."
 }

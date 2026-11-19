@@ -6,7 +6,7 @@ Report a security problem privately through [GitHub's security advisories](https
 
 ## What cc-accounts touches
 
-- It never reads, copies or writes credentials. Each account's login stays where Claude Code keeps it.
+- It never reads, copies or writes an account's login, which stays where Claude Code keeps it. The one credential it handles is a long-lived token you give it with `cca token <name>`: it is kept in the macOS Keychain (service `cc-accounts`), or elsewhere in a file only you can read (`~/.claude-shared/accounts/tokens/<name>`), reaches the Keychain on standard input and never as a command argument, is never printed or logged, and is passed to Claude Code in `CLAUDE_CODE_OAUTH_TOKEN` when that account runs.
 - It writes the files listed in [docs/how-it-works.md](docs/how-it-works.md#files-cca-writes), all in your home directory.
 - It reads each account's `.claude.json` for the account's email address and its trusted folders.
 - It makes no network requests. `install.sh` clones this repository with git.
