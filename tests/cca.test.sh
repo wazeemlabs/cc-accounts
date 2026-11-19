@@ -165,10 +165,14 @@ mkdir -p "$CCA_ROOT/background" "$CCA_ROOT/blocked/2" "$CCA_ROOT/blocked/old"
 echo '{"tasks":[]}' > "$CCA_ROOT/background/old"; echo '{"tasks":[]}' > "$CCA_ROOT/background/new"
 echo '{"error":"rate_limit","at":0}' > "$CCA_ROOT/blocked/old/fable.json"
 echo '{"error":"rate_limit","at":0}' > "$CCA_ROOT/blocked/2/fable.json"
+mkdir -p "$CCA_ROOT/blocked/held"
+echo '{"error":"rate_limit","at":0,"repeats":1}' > "$CCA_ROOT/blocked/held/fable.json"
 touch -t 202001010000 "$CCA_ROOT/background/old" "$CCA_ROOT/blocked/old/fable.json"
+# A model's limit met twice holds until the account's week resets, up to seven days on.
+touch -t "$(python3 -c 'import time; print(time.strftime("%Y%m%d%H%M", time.localtime(time.time() - 6 * 86400)))')" "$CCA_ROOT/blocked/held/fable.json"
 "$CCA" run 2>/dev/null
-check "a session start drops day-old background and failure records, and the folders they leave empty" \
-  "background/new blocked/2/fable.json 0" \
+check "a session start drops day-old background records and failure records past a week, and the folders they leave empty" \
+  "background/new blocked/2/fable.json blocked/held/fable.json 0" \
   "$(cd "$CCA_ROOT" && find background blocked -type f | sort | paste -sd' ' -) $(cd "$CCA_ROOT" && find blocked -mindepth 1 -type d -empty | wc -l | tr -d ' ')"
 
 setup
