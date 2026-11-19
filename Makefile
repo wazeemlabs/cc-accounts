@@ -7,6 +7,7 @@ test-shell:
 	bash tests/cca.test.sh
 	bash tests/init.test.sh
 	bash tests/token.test.sh
+	bash tests/subcommand.test.sh
 
 test-python:
 	python3 -m unittest discover -s tests

@@ -27,3 +27,4 @@ Options:
 
 Commands:
   doctor                                Check the health of your installation
+  plugin|plugins                        Manage Claude Code plugins
