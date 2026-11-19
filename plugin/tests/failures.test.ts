@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { stopOf } from '../hooks/balance'
-import { failureIn, familyOf, scopeOf } from '../hooks/failures'
+import { failureIn, familyOf, holdUntil, scopeOf } from '../hooks/failures'
 
 const row = (value: object) => JSON.stringify(value)
 const reply = row({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } })
@@ -55,5 +55,30 @@ describe('what stopped a failed turn', () => {
     expect(stopOf('overloaded', 'seven_day')).toEqual({ window: 'seven_day' })
     expect(stopOf('overloaded', undefined)).toBe(undefined)
     expect(stopOf(undefined, undefined)).toBe(undefined)
+  })
+})
+
+describe('how long a failure keeps sessions off its account', () => {
+  const HOUR = 3_600_000
+  const at = 1_000_000
+
+  test('a usage limit holds an hour and a refusal a day', () => {
+    expect(holdUntil({ error: 'rate_limit', at }, undefined)).toBe(at + HOUR)
+    expect(holdUntil({ error: 'authentication_failed', at }, undefined)).toBe(at + 24 * HOUR)
+  })
+
+  test('a refusal is over once the account has answered since: its login was renewed, its hold lifted', () => {
+    for (const error of ['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'billing_error']) {
+      expect(holdUntil({ error, at }, at + 1)).toBe(undefined)
+    }
+  })
+
+  test('an answer from before the refusal, or at its very moment, does not end it', () => {
+    expect(holdUntil({ error: 'authentication_failed', at }, at - 1)).toBe(at + 24 * HOUR)
+    expect(holdUntil({ error: 'authentication_failed', at }, at)).toBe(at + 24 * HOUR)
+  })
+
+  test("a usage limit outlasts a later answer: another model's reply says nothing of the model that hit it", () => {
+    expect(holdUntil({ error: 'rate_limit', at }, at + 1)).toBe(at + HOUR)
   })
 })
