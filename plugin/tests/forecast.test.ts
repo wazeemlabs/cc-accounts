@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { demandRate } from '../hooks/spend'
+import { calibrationFile, demandPerHour, demandRate } from '../hooks/spend'
+import type { EngineInterface } from 'claude-code'
+import { ROOT } from './world'
 import { POLICY, readingOf, soonerTarget, weekAtRisk, type Candidate, type Reading } from '../hooks/usage'
 
 const HOUR = 3_600_000
@@ -82,5 +84,23 @@ describe('what the accounts together spend an hour', () => {
 
   test('nothing read is not known', () => {
     expect(demandRate(undefined, 3)).toBe(undefined)
+  })
+
+  test('reads the three whole days before today, each account by its plan size, and not today', async () => {
+    const files = new Map<string, string>()
+    // The two calls the reader makes.
+    const $ = { fs: { exists: async (path: string) => files.has(path), read: async (path: string) => files.get(path)! } } as unknown as EngineInterface
+    const DAY = 24 * HOUR
+    const at = Date.parse('2026-11-05T12:00:00Z')
+    const day = (back: number) => new Date(at - back * DAY).toISOString().slice(0, 10)
+    const accounts = [{ name: '1', units: 1 }, { name: '2', units: 2 }]
+    expect(await demandPerHour($, ROOT, accounts, at)).toBe(undefined)
+    files.set(calibrationFile(ROOT, day(0), '1'), '{"last":90,"consumed":90}\n')
+    expect(await demandPerHour($, ROOT, accounts, at)).toBe(undefined)
+    files.set(calibrationFile(ROOT, day(1), '1'), '{"last":30,"consumed":30}\n')
+    files.set(calibrationFile(ROOT, day(3), '2'), '{"last":21,"consumed":21}\n')
+    files.set(calibrationFile(ROOT, day(4), '2'), '{"last":50,"consumed":50}\n')
+    // 30 + 2 x 21 = 72 points over 72 hours.
+    expect(await demandPerHour($, ROOT, accounts, at)).toBe(1)
   })
 })
