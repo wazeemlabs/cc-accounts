@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.22.1 (2026-11-19)
+
+- A Claude Code subcommand typed in a terminal runs as typed. cca put `--mcp-config` in front of everything it ran, and `claude plugin test` refuses any option before `plugin`. A run whose first word `claude --help` lists as a command now gets no session option and no sync; a prompt, an option or nothing still starts a session.
+
 ## 0.22.0 (2026-11-19)
 
 - `cca token <name>` runs an account on a long-lived token from `claude setup-token`, for work nobody watches: a `/login` ends after a while and cannot renew itself. The token is pasted unseen, kept in the macOS Keychain (elsewhere a file only its owner can read), and given to Claude Code whenever that account runs; `cca` marks the account, and `cca token <name> --remove` goes back to `/login`. Claude Code allows such a token model requests only (no Artifacts, Remote Control, claude.ai connectors or Chrome tools), and `cca token` says so.

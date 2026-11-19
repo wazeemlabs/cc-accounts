@@ -226,6 +226,22 @@ claude_bin() {
   command -v claude || die "no claude binary found; install Claude Code first"
 }
 
+# Whether these args, typed in a terminal, start a session: none, an option
+# first, or a prompt. A
+# subcommand (plugin test, doctor, setup-token) starts none: it needs nothing
+# synced or loaded, and `plugin test` refuses any option in front of it. A
+# subcommand is one bare word that the binary's --help lists under Commands,
+# under either of its names (`plugin|plugins`).
+starts_session() {
+  local bin="$1" first="${2:-}"
+  [[ -z "$first" || "$first" == -* ]] && return 0
+  [[ "$first" =~ ^[a-z][a-z-]*$ ]] || return 0
+  ! "$bin" --help 2>/dev/null | awk -v word="$first" '
+    /^Commands:/ { listed = 1; next }
+    listed && /^  [a-z]/ { n = split($1, names, "|"); for (i = 1; i <= n; i++) if (names[i] == word) found = 1 }
+    END { exit !found }'
+}
+
 # Before a session starts, move the user MCP servers its account holds into
 # MCP_FILE and give it the folder trust and per-project MCP settings the
 # other accounts have (libexec/cca-sync), so every account loads the same
@@ -278,11 +294,13 @@ launch() {
   while :; do
     rm -f "$switch" "$switch.keep"
     apply "$account"
-    sync_account "$bin" "$account"
     # In front, as --mcp-config=FILE: the option takes several values, and
-    # this form leaves a prompt or subcommand after it alone.
+    # this form leaves a prompt after it alone.
     local status=0 load=()
-    if [[ -f "$MCP_FILE" ]]; then load=("--mcp-config=$MCP_FILE"); fi
+    if starts_session "$bin" ${args[@]+"${args[@]}"}; then
+      sync_account "$bin" "$account"
+      if [[ -f "$MCP_FILE" ]]; then load=("--mcp-config=$MCP_FILE"); fi
+    fi
     "$bin" ${load[@]+"${load[@]}"} ${args[@]+"${args[@]}"} || status=$?
     [[ -s "$switch" ]] || return "$status"
     # Line one names the account and conversation; the rest, when there is
@@ -423,8 +441,9 @@ case "${1:-}" in
     fi
     name="$(choose "$@")"
     apply "$name"
-    # A session starts with an option; a subcommand (plugin list, edit-hook)
-    # starts none and needs nothing synced or loaded.
+    # The editor starts a session with an option first and never with a
+    # prompt; its subcommands (plugin list, edit-hook) are not all in --help,
+    # and need nothing synced or loaded.
     if [[ -z "${1:-}" || "$1" == -* ]]; then
       sync_account "$bin" "$name"
       prune_short_records
