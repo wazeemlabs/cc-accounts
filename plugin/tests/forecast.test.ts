@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { calibrationFile, demandPerHour, demandRate } from '../hooks/spend'
+import { calibrationFile, demandPerHour, demandRate, sessionTokens, spendDir, spendShares, SHARE_MIN_TOKENS } from '../hooks/spend'
 import type { EngineInterface } from 'claude-code'
 import { ROOT } from './world'
 import { POLICY, readingOf, soonerTarget, weekAtRisk, type Candidate, type Reading } from '../hooks/usage'
@@ -102,5 +102,53 @@ describe('what the accounts together spend an hour', () => {
     files.set(calibrationFile(ROOT, day(4), '2'), '{"last":50,"consumed":50}\n')
     // 30 + 2 x 21 = 72 points over 72 hours.
     expect(await demandPerHour($, ROOT, accounts, at)).toBe(1)
+  })
+})
+
+describe('what each working session spends beside the others', () => {
+  const M = SHARE_MIN_TOKENS
+
+  test('a session counts by its spend over the average of the measured ones', () => {
+    expect(spendShares(['a', 'b', 'c'], new Map([['a', 6 * M], ['b', 2 * M], ['c', 4 * M]]))).toEqual(new Map([['a', 1.5], ['b', 0.5], ['c', 1]]))
+  })
+
+  test('one that has spent too little to judge, or nothing on record, is left out and counts as one', () => {
+    expect(spendShares(['a', 'b', 'new', 'none'], new Map([['a', 3 * M], ['b', M], ['new', M - 1]]))).toEqual(new Map([['a', 1.5], ['b', 0.5]]))
+  })
+
+  test('with fewer than two measured there is nothing to compare, and every session counts as one', () => {
+    expect(spendShares(['a', 'b'], new Map([['a', 50 * M]]))).toEqual(new Map())
+    expect(spendShares([], new Map())).toEqual(new Map())
+  })
+
+  test('no session counts under a quarter or over four: a day of spend is a rough guide to the next hours', () => {
+    const shares = spendShares(['a', 'b', 'c', 'd', 'e', 'f'], new Map([['a', 95 * M], ['b', M], ['c', M], ['d', M], ['e', M], ['f', M]]))
+    expect(shares.get('a')).toBe(4)
+    expect(shares.get('b')).toBe(0.25)
+  })
+
+  test('only the sessions asked about are compared: one that has ended does not move the average', () => {
+    expect(spendShares(['a', 'b'], new Map([['a', 3 * M], ['b', M], ['ended', 400 * M]]))).toEqual(new Map([['a', 1.5], ['b', 0.5]]))
+  })
+
+  test("a session's spend is read from today and yesterday, every folder it worked in; a client's record is not a session's", async () => {
+    const files = new Map<string, string>()
+    const $ = {
+      fs: {
+        exists: async (path: string) => [...files.keys()].some(file => file.startsWith(`${path}/`)),
+        list: async (path: string) => [...files.keys()].filter(file => file.startsWith(`${path}/`)).map(file => ({ kind: 'file', name: file.slice(path.length + 1) })),
+        read: async (path: string) => files.get(path)!,
+      },
+    } as unknown as EngineInterface
+    const DAY = 24 * HOUR
+    const at = Date.parse('2026-11-05T12:00:00Z')
+    const day = (back: number) => new Date(at - back * DAY).toISOString().slice(0, 10)
+    expect(await sessionTokens($, ROOT, at)).toEqual(new Map())
+    files.set(`${spendDir(ROOT, day(0))}/s1.json`, '{"folders":{"/p/a":10,"/p/b":5}}\n')
+    files.set(`${spendDir(ROOT, day(1))}/s1.json`, '{"folders":{"/p/a":100}}\n')
+    files.set(`${spendDir(ROOT, day(1))}/s2.json`, '{"folders":{"/p/a":7}}\n')
+    files.set(`${spendDir(ROOT, day(2))}/s2.json`, '{"folders":{"/p/a":1000}}\n')
+    files.set(`${spendDir(ROOT, day(0))}/client.json`, '{"cwd":"/p/a","tokens":900}\n')
+    expect(await sessionTokens($, ROOT, at)).toEqual(new Map([['s1', 115], ['s2', 7]]))
   })
 })

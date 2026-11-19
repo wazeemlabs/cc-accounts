@@ -68,6 +68,12 @@ describe('project weights', () => {
     expect(activeOf('idle', undefined, 0)).toBe(true)
   })
 
+  test("a session counts by its share of what the working sessions spend, where that is known", () => {
+    const live = [at('1', 'a', '/p/app'), at('2', 'a', '/p/other'), at('3', 'b', '/p/other')]
+    // Session 1 is in a project of weight 3 and spends twice the average; session 3 half of it.
+    expect(loads(live, WEIGHTS, new Map([['1', 2], ['3', 0.5]]))).toEqual(new Map([['a', 7], ['b', 0.5]]))
+  })
+
   test('an idle session weighs on no account', () => {
     const live = [at('1', 'a', '/p/app'), { ...at('2', 'a', '/p/other'), active: false }]
     expect(loads(live, WEIGHTS)).toEqual(new Map([['a', 3]]))
