@@ -155,7 +155,7 @@ export async function gatherReport(
   const budgets = await readBudgetsInForce($, ctx)
   return {
     now,
-    accounts: await Promise.all(states.map(async state => ({ state, holds: await holdsOf($, ctx.root, state.account.name, now) }))),
+    accounts: await Promise.all(states.map(async state => ({ state, holds: await holdsOf($, ctx.root, state.account.name, now, state.reading?.at) }))),
     live: await liveSessions($, ctx),
     priorities,
     current: ctx.current?.name,

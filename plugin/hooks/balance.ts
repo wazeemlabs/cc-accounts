@@ -57,7 +57,7 @@ export async function candidates(
       reading: state.reading,
       load: load.get(state.account.name) ?? 0,
       units: state.units,
-      blockedUntil: await blockedUntil($, ctx.root, state.account.name, family),
+      blockedUntil: await blockedUntil($, ctx.root, state.account.name, family, state.reading?.at),
     })),
   )
 }

@@ -114,8 +114,24 @@ export async function block(
   await writeAtomic($, blockFile(root, account, scope), `${JSON.stringify({ error, at })}\n`)
 }
 
+// Until when a failure recorded at `at` keeps sessions off its account, given
+// when the account last answered (`answeredAt`: its reading's time, which
+// only a response writes). A refusal is over once the account has answered
+// since: its login was renewed, its hold lifted. Undefined then. A usage
+// limit is a model's, and a later answer may be another model's, so it
+// runs its time.
+export function holdUntil(record: { error: string; at: number }, answeredAt: number | undefined): number | undefined {
+  if (record.error !== 'rate_limit' && answeredAt !== undefined && answeredAt > record.at) return undefined
+  return record.at + blockMsOf(record.error)
+}
+
 // Until when the record in `file` keeps sessions off its account.
-async function heldUntil($: EngineInterface, file: string, account: string): Promise<number | undefined> {
+async function heldUntil(
+  $: EngineInterface,
+  file: string,
+  account: string,
+  answeredAt: number | undefined,
+): Promise<number | undefined> {
   if (!(await $.fs.exists(file))) return undefined
   let value: unknown
   try {
@@ -125,20 +141,21 @@ async function heldUntil($: EngineInterface, file: string, account: string): Pro
     return undefined
   }
   if (!isObject(value) || typeof value.at !== 'number' || typeof value.error !== 'string') return undefined
-  return value.at + blockMsOf(value.error)
+  return holdUntil({ error: value.error, at: value.at }, answeredAt)
 }
 
 // Until when a session on `family` (undefined: not known) keeps off
 // `account`, after a failure of the whole account's or one of that family's.
-// Undefined when it has not failed.
+// Undefined when it has not failed, or has answered since a refusal.
 export async function blockedUntil(
   $: EngineInterface,
   root: string,
   account: string,
   family: string | undefined,
+  answeredAt: number | undefined,
 ): Promise<number | undefined> {
   const scopes = family === undefined ? [ACCOUNT_SCOPE] : [ACCOUNT_SCOPE, family]
-  const times = await Promise.all(scopes.map(scope => heldUntil($, blockFile(root, account, scope), account)))
+  const times = await Promise.all(scopes.map(scope => heldUntil($, blockFile(root, account, scope), account, answeredAt)))
   const known = times.filter((at): at is number => at !== undefined)
   return known.length === 0 ? undefined : Math.max(...known)
 }
@@ -150,13 +167,14 @@ export async function holdsOf(
   root: string,
   account: string,
   now: number,
+  answeredAt: number | undefined,
 ): Promise<{ scope: string; until: number }[]> {
   const dir = `${root}/blocked/${account}`
   if (!(await $.fs.exists(dir))) return []
   const holds: { scope: string; until: number }[] = []
   for (const entry of await $.fs.list(dir)) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    const until = await heldUntil($, `${dir}/${entry.name}`, account)
+    const until = await heldUntil($, `${dir}/${entry.name}`, account, answeredAt)
     if (until !== undefined && until > now) holds.push({ scope: entry.name.slice(0, -'.json'.length), until })
   }
   return holds.sort((a, b) => a.scope.localeCompare(b.scope))
