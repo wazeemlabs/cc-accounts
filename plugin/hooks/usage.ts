@@ -48,7 +48,11 @@ const HOUR_MS = 3_600_000
 // accounts with room the one whose week resets first is spent first, and a
 // session moves to it from an account whose week resets at least `soonerMs`
 // later (`soonerTarget`); the margin keeps sessions from moving for an
-// hour's difference. That preference holds only while the account's
+// hour's difference. That move is made only to save room: when the accounts
+// together are on course to spend `fillMargin` times what is left in the
+// weeks ending by then, sessions leaving full accounts and new sessions fill
+// the week anyway, and the move would cost the new account the whole context
+// uncached for nothing (`weekAtRisk`). That preference holds only while the account's
 // five-hour window can carry the sessions working on it: its use plus
 // `perSession` points for each unit of their load stays below the bar
 // (`hasRoom`). A session whose own account is headed past `leave` by that
@@ -64,6 +68,7 @@ export const POLICY = {
   refusalBlockMs: 24 * HOUR_MS,
   resetGraceMs: 15 * 60_000,
   soonerMs: 6 * HOUR_MS,
+  fillMargin: 2,
 }
 
 // How long a failure keeps sessions off an account. A usage limit may clear
@@ -275,15 +280,52 @@ export function startAccount(preferred: string | undefined, candidates: readonly
   return chooseTarget('', candidates, now, POLICY.take, preferred) ?? chooseTarget('', candidates, now, POLICY.leave, preferred) ?? preferred
 }
 
+// The points left in the account's week, a point being one percent of a
+// Max 5x week: none for an account nobody has measured.
+function weekRoom(candidate: Candidate, now: number): number {
+  if (candidate.reading === undefined) return 0
+  return Math.max(0, 100 - percentNow(candidate.reading, 'seven_day', now)) * candidate.units
+}
+
+// Whether room in `target`'s week would expire unused unless sessions are
+// sent to it. `demandPerHour`: the points an hour the accounts together have
+// been spending (undefined: not known, which counts as at risk). The room at
+// stake is that of every account whose week ends by then and can be spent
+// (not held off after a failure): they are filled in the order they end.
+export function weekAtRisk(
+  target: Candidate,
+  candidates: readonly Candidate[],
+  now: number,
+  demandPerHour: number | undefined,
+): boolean {
+  const ends = weekEnds(target.reading, now)
+  if (!Number.isFinite(ends) || weekRoom(target, now) === 0) return false
+  if (demandPerHour === undefined) return true
+  const others = candidates.filter(candidate => candidate.name !== target.name)
+  const room = [target, ...others]
+    .filter(candidate => weekEnds(candidate.reading, now) <= ends)
+    .filter(candidate => candidate.blockedUntil === undefined || now >= candidate.blockedUntil)
+    .reduce((sum, candidate) => sum + weekRoom(candidate, now), 0)
+  return (demandPerHour * (ends - now)) / HOUR_MS < POLICY.fillMargin * room
+}
+
 // An account with room whose week resets at least POLICY.soonerMs before
 // the one the session is on, which it should move to so that room is spent
 // before it is lost; undefined when there is none. `arriving`: this
-// session's weight, which the target must carry too.
-export function soonerTarget(current: Candidate, candidates: readonly Candidate[], now: number, arriving = 1): string | undefined {
+// session's weight, which the target must carry too. `demandPerHour`: what
+// the accounts together spend, by which a week that fills anyway is left alone.
+export function soonerTarget(
+  current: Candidate,
+  candidates: readonly Candidate[],
+  now: number,
+  arriving = 1,
+  demandPerHour?: number,
+): string | undefined {
   const target = chooseTarget(current.name, candidates, now, POLICY.take, undefined, arriving)
   const found = candidates.find(candidate => candidate.name === target)
   // Without room for this session the target's five-hour window would stop it.
   if (found === undefined || !hasRoom(found, now, POLICY.take, arriving)) return undefined
+  if (!weekAtRisk(found, candidates, now, demandPerHour)) return undefined
   const ends = weekEnds(found.reading, now)
   // A week with no known reset loses nothing that moving would save.
   return Number.isFinite(ends) && ends + POLICY.soonerMs <= weekEnds(current.reading, now) ? target : undefined

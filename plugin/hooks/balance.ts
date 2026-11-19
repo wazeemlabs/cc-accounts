@@ -16,6 +16,7 @@ import type { EngineInterface } from 'claude-code'
 import { context, defaultName, describeError, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
 import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
+import { demandPerHour } from './spend'
 import { accountStates, liveSessions, ownContext, ownReading, writeReading, type LiveSession } from './survey'
 import { dropSwitch, requestSwitch, type Exit, type SwitchState } from './switching'
 import {
@@ -314,7 +315,7 @@ async function soonerPlan(
   // its first response it has none, and its account's saved one stands in.
   const own = options.find(option => option.name === from)
   const current = { name: from, reading: reading ?? own?.reading, load: own?.load ?? 0, units: own?.units ?? 1 }
-  const sooner = soonerTarget(current, options, now, arriving)
+  const sooner = soonerTarget(current, options, now, arriving, await demandPerHour($, ctx.root, options, now))
   const target = sooner ?? spreadTarget(current, options, now, arriving)
   if (target === undefined) return undefined
   const why = sooner !== undefined

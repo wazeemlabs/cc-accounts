@@ -238,3 +238,32 @@ export async function tokensPerPoint($: EngineInterface, root: string, accounts:
   }
   return points >= CALIBRATION_POINTS && tokens > 0 ? tokens / points : DEFAULT_TOKENS_PER_POINT
 }
+
+// Points an hour, from `points` consumed over `days` whole days; undefined
+// when no day was read.
+export function demandRate(points: number | undefined, days: number): number | undefined {
+  return points === undefined ? undefined : points / (days * 24)
+}
+
+// What the accounts together have been spending, in points an hour (a point
+// being one percent of a Max 5x week, so an account's consumption counts by
+// its plan size): the CALIBRATION_DAYS whole days before today, today being
+// part of a day. Undefined with no day on record. Days with no record count
+// as nothing spent, which reads low, and a low figure moves sessions to an
+// ending week sooner, never later.
+export async function demandPerHour(
+  $: EngineInterface,
+  root: string,
+  accounts: readonly { name: string; units: number }[],
+  at: number,
+): Promise<number | undefined> {
+  let points: number | undefined
+  for (const day of daysBack(at - DAY_MS, CALIBRATION_DAYS)) {
+    for (const account of accounts) {
+      const file = calibrationFile(root, day, account.name)
+      if (!(await $.fs.exists(file))) continue
+      points = (points ?? 0) + (parseCalibration(await $.fs.read(file))?.consumed ?? 0) * account.units
+    }
+  }
+  return demandRate(points, CALIBRATION_DAYS)
+}
