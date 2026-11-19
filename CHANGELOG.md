@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.24.0 (2026-11-19)
+
+- A reopened conversation starts on the model and effort it last ran on. A model picked in a session lasts only as long as its process, and the VS Code panel's own pick is one setting that every session shares, so after an editor restart every reopened session came back on the same model, whatever it had been running. The plugin now records each conversation's model and effort at the end of every turn, and cca starts a resumed conversation with them, in a terminal and in the panel. A `--model` or `--effort` on the command line wins, and a new conversation starts on Claude Code's own setting.
+
 ## 0.23.0 (2026-11-19)
 
 Three changes that stop the balancer spending usage on moves. A move makes the new account read the whole conversation uncached, so each one avoided is usage kept.

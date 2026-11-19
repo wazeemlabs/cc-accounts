@@ -7,7 +7,7 @@
 // beside the switch file, one `<name> <value>` line each; cca and cca-stream
 // start the new process with them (cca-keep-args, kept_options).
 import type { EngineInterface } from 'claude-code'
-import { context, describeError, runOnTranscript, writeAtomic } from './context'
+import { context, describeError, run, runOnTranscript, writeAtomic } from './context'
 
 // The levels `claude --effort` takes (2.1.325).
 export const EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
@@ -83,4 +83,42 @@ export async function writeKept($: EngineInterface, switchFile: string): Promise
   } catch (error) {
     $.ui.log(`cc-accounts: could not keep this session's model and effort for the move (${describeError(error)}).`)
   }
+}
+
+// Where a conversation's model and effort are remembered between processes.
+export function rememberedFile(root: string, sessionId: string): string {
+  return `${root}/models/${sessionId}`
+}
+
+// Records what the session runs on, for cca to start the conversation with
+// when it is reopened (bin/cca, remember). A model picked in a session lives
+// as long as its process, and a new process starts on the settings' model:
+// VS Code restarted, and every session it reopened came back on another
+// model (2026-11-19). Called at each turn's end, when the turn's request is
+// the transcript's last; `last` is what this process last wrote, and the
+// text now on record is returned. What cannot be read keeps its recorded
+// value. Never rejects: keptNow reports what it could not read.
+export async function remember($: EngineInterface, root: string, last: string | undefined): Promise<string | undefined> {
+  try {
+    const now = await keptNow($)
+    const file = rememberedFile(root, await $.session.id())
+    const recorded = last ?? (await readRemembered($, file))
+    const text = formatKept({ model: now.model ?? valueIn(recorded, 'model'), effort: now.effort ?? valueIn(recorded, 'effort') })
+    if (text === '' || text === recorded) return recorded
+    await run($, ['mkdir', '-p', `${root}/models`])
+    await writeAtomic($, file, text)
+    return text
+  } catch (error) {
+    $.ui.log(`cc-accounts: could not record this session's model and effort (${describeError(error)}); reopened, it starts on Claude Code's setting.`)
+    return last
+  }
+}
+
+async function readRemembered($: EngineInterface, file: string): Promise<string> {
+  return (await $.fs.exists(file)) ? await $.fs.read(file) : ''
+}
+
+function valueIn(text: string, name: 'model' | 'effort'): string | undefined {
+  const line = text.split('\n').find(entry => entry.startsWith(`${name} `))
+  return line?.slice(name.length + 1)
 }

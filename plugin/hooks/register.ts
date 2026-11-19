@@ -5,6 +5,7 @@ import { usesBrowser } from './browser'
 import { accountCommand } from './command'
 import { balance, noteMeasure, showStatus, startOrDefault } from './balance'
 import { context, describeError, exitOf, record, type Context } from './context'
+import { remember } from './keep'
 import { projectName } from './priorities'
 import { forgetRefused, noteRefused, parkedFile, parkedNow, WAKE_MS, wakeParked } from './parking'
 import { registerPane } from './pane'
@@ -72,6 +73,8 @@ export const register: Register = on => {
   // still runs: it can wait on the machine's lock, and turns ending meanwhile
   // would each leave another child waiting behind it.
   const pruning = { running: false }
+  // What this process last recorded of the session's model and effort (keep.ts).
+  let remembered: string | undefined
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -176,6 +179,7 @@ export const register: Register = on => {
         $.ui.log(`cc-accounts: could not count this turn against its budget (${describeError(error)}).`)
       }
       await startOrDefault($, ctx, undefined)
+      remembered = await remember($, ctx.root, remembered)
       // The transcript is pruned once the turn a compaction ran in has ended:
       // prune.py looks for one since its last look, and passes by without.
       if (!pruning.running) {

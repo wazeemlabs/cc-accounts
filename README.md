@@ -49,6 +49,8 @@ A switch does not cut work short. If Claude is in the middle of a turn, or a sub
 
 A switch keeps the session's model and effort: the conversation reopens on the model it ran on, whether you picked it in the panel or with `/model`, and at the effort of its last request, including one set with `/effort` for that session alone. Settings the VS Code panel set for the session alone come along too.
 
+A conversation you reopen starts the same way. A model picked in a session lasts only as long as its process, and the VS Code panel's own pick is one setting every session shares, so after an editor restart every reopened session used to come back on that one model. The plugin records each conversation's model and effort at the end of every turn (`~/.claude-shared/accounts/models/`), and cca starts a resumed conversation with them. A `--model` or `--effort` you pass yourself wins, and a new conversation starts on Claude Code's own setting.
+
 - `/account personal now` switches at once and stops whatever is running.
 - `/account <this session's account>` cancels a queued switch.
 - Scheduled wakeups (`/loop`, ScheduleWakeup, CronCreate) are not waited for. Claude Code restores them when the conversation reopens on the other account.

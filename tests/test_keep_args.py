@@ -94,6 +94,16 @@ class Kept(unittest.TestCase):
                          ['--model', 'opus', '--effort', 'high'])
         self.assertEqual(keep_args.with_kept(['--model', 'opus'], {}), ['--model', 'opus'])
 
+    def test_remembered_values_come_first_and_only_where_the_args_name_none(self):
+        remembered = {'model': 'claude-opus-5-5', 'effort': 'xhigh'}
+        self.assertEqual(keep_args.with_remembered(['--resume', 'x'], remembered),
+                         ['--model', 'claude-opus-5-5', '--effort', 'xhigh', '--resume', 'x'])
+        self.assertEqual(keep_args.with_remembered(['--effort=low', '--resume', 'x'], remembered),
+                         ['--model', 'claude-opus-5-5', '--effort=low', '--resume', 'x'])
+        self.assertEqual(keep_args.with_remembered(['--model', 'opus', '--effort', 'low'], remembered),
+                         ['--model', 'opus', '--effort', 'low'])
+        self.assertEqual(keep_args.with_remembered(['--resume', 'x'], {}), ['--resume', 'x'])
+
     def test_reads_the_plugins_lines_and_none_when_there_is_no_file(self):
         self.assertEqual(keep_args.read_kept(str(self.file)), {})
         self.file.write_text('model claude-opus-5-5\neffort xhigh\n')

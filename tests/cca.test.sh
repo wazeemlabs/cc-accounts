@@ -321,6 +321,59 @@ setup
 "$CCA" add 2 "$HOME/elsewhere" 2>/dev/null; s3=$?
 check "add refuses a command name, a malformed name and a name taken by another dir" "2 2 2" "$s1 $s2 $s3"
 
+# A reopened conversation starts on the model and effort it last ran on, which
+# the plugin records at each turn's end (models/<id>). 2026-11-19: VS Code
+# restarted and every panel session came back on the settings' model, since
+# a model picked in a session lives only as long as its process.
+setup
+mkdir -p "$CCA_ROOT/models"
+printf 'model claude-opus-5-5\neffort xhigh\n' > "$CCA_ROOT/models/$ID"
+"$CCA" run --resume "$ID"
+check "a resumed conversation starts on the model and effort it last ran on" \
+  "dir=unset account=1 args=--model claude-opus-5-5 --effort xhigh --resume $ID" "$(cat "$LOG")"
+
+setup
+mkdir -p "$CCA_ROOT/models"
+printf 'model claude-opus-5-5\neffort xhigh\n' > "$CCA_ROOT/models/$ID"
+"$CCA" run --model=sonnet --resume "$ID"
+check "a model or effort named on the command line wins over the remembered one" \
+  "dir=unset account=1 args=--effort xhigh --model=sonnet --resume $ID" "$(cat "$LOG")"
+
+setup
+mkdir -p "$CCA_ROOT/models"
+printf 'model claude-opus-5-5\neffort xhigh\n' > "$CCA_ROOT/models/$ID"
+"$CCA" run --add-dir /a
+check "a new conversation starts on Claude Code's own setting" "dir=unset account=1 args=--add-dir /a" "$(cat "$LOG")"
+
+setup
+mkdir -p "$CCA_ROOT/models"
+printf 'model opus;rm -rf /\neffort high\n' > "$CCA_ROOT/models/$ID"
+"$CCA" run --resume "$ID" 2>"$WORK/err"
+check "a remembered line that is no model or effort value is reported and passed over" \
+  "dir=unset account=1 args=--effort high --resume $ID|1" "$(cat "$LOG")|$(grep -c 'not keeping' "$WORK/err")"
+
+setup
+mkdir -p "$CCA_ROOT/models"
+printf 'model claude-fable-5-2\neffort low\n' > "$CCA_ROOT/models/$ID"
+"$CCA" "$CCA_CLAUDE" --output-format stream-json --resume="$ID" < /dev/null
+check "a conversation the editor reopens starts on them too" \
+  "dir=unset account=1 args=--model claude-fable-5-2 --effort low --output-format stream-json --resume=$ID" "$(cat "$LOG")"
+
+setup
+mkdir -p "$CCA_ROOT/models"
+printf 'model claude-fable-5-2\neffort low\n' > "$CCA_ROOT/models/$ID"
+FAKE_SWITCH="2 $ID" FAKE_KEEP=$'model claude-opus-5-5\neffort high\n' "$CCA" run --resume "$ID" 2>/dev/null
+check "a move keeps what the session ran on, over what it was reopened with" \
+  "dir=$HOME/.claude-two account=2 args=--model claude-opus-5-5 --effort high --resume $ID" "$(sed -n 2p "$LOG")"
+
+setup
+mkdir -p "$CCA_ROOT/models"
+echo 'model opus' > "$CCA_ROOT/models/$ID"
+echo 'model opus' > "$CCA_ROOT/models/aaaaaaaa-1111-4222-8333-944455556666"
+touch -t 202001010000 "$CCA_ROOT/models/aaaaaaaa-1111-4222-8333-944455556666"
+"$CCA" run
+check "a terminal run drops remembered models older than RECORD_DAYS and keeps fresh ones" "$ID" "$(ls "$CCA_ROOT/models")"
+
 setup
 echo 2 > "$CCA_ROOT/by-session/$ID"
 echo 2 > "$CCA_ROOT/by-session/aaaaaaaa-1111-4222-8333-944455556666"

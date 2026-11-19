@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """cca-keep-args [--kept FILE] <claude binary> [args...]
+cca-keep-args --remembered FILE [args...]
 
 Prints, NUL-separated, the args a relaunch on another account carries over:
 every option except those that choose, start or end a session, and no prompt.
@@ -7,6 +8,10 @@ Which options take a value is read from `<claude binary> --help`.
 Dropped args go to stderr, so the person sees what did not carry over.
 With --kept, the model and effort the session ran on, which the plugin
 writes beside the switch file, replace any --model or --effort in the args.
+
+With --remembered, prints the args of a run that reopens a conversation,
+with the model and effort it last ran on (FILE, which the plugin writes at
+each turn's end) in front, each only where the args name none.
 """
 import re
 import subprocess
@@ -106,7 +111,8 @@ def keep(args, table, drop=DROP, keep_unknown=False):
 
 
 def read_kept(path):
-    """{name: value} from the file the plugin left beside the switch file;
+    """{name: value} from a file the plugin left: beside the switch file, or
+    a conversation's remembered model and effort (models/<id>);
     empty when there is none (a plugin before 0.17.0 writes none). A line
     that is not `<model|effort> <value>` is reported and passed over."""
     try:
@@ -143,8 +149,24 @@ def with_kept(args, kept):
     return out
 
 
+def with_remembered(args, remembered):
+    """`args` with each remembered setting's option in front, unless the
+    args name that option themselves, in either spelling: what the person or
+    a move asked for wins over what the conversation last ran on. In front,
+    so that a prompt at the end stays the last word."""
+    named = {token.split('=', 1)[0] for token in args}
+    front = []
+    for name, value in remembered.items():
+        if KEPT_OPTIONS[name] not in named:
+            front.extend([KEPT_OPTIONS[name], value])
+    return [*front, *args]
+
+
 def main():
     argv = sys.argv[1:]
+    if argv[:1] == ['--remembered'] and len(argv) >= 2:
+        sys.stdout.write(''.join(arg + '\0' for arg in with_remembered(argv[2:], read_kept(argv[1]))))
+        return
     kept_file = None
     if argv[:1] == ['--kept'] and len(argv) >= 2:
         kept_file, argv = argv[1], argv[2:]

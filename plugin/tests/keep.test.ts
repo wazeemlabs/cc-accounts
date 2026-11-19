@@ -4,10 +4,11 @@
 // after a move, and an effort set for the session alone was lost too.
 import { describe, expect, test } from 'claude-code/testing'
 import { effortIn } from '../hooks/keep'
-import { SELF, SHELL, START, SUPERVISED, SWITCH, TERMINAL, limits, run, turn, world } from './world'
+import { ROOT, SELF, SESSION, SHELL, START, SUPERVISED, SWITCH, TERMINAL, limits, run, turn, world } from './world'
 
 const KEPT = `${SWITCH}.keep`
 const SIGINT = ['kill', '-INT', SELF]
+const REMEMBERED = `${ROOT}/models/${SESSION}`
 
 function request(effort: unknown, querySource = 'sdk'): string {
   return JSON.stringify({ type: 'api-request', querySource, params: { model: 'claude-fable-5-2', output_config: { effort } } })
@@ -77,6 +78,52 @@ describe('what a move keeps', () => {
     await turn($, w, [])
     await w.clock.advance(0)
     expect(w.files.get(KEPT)).toBe('model claude-sonnet-5-5\neffort medium\n')
+  })
+})
+
+// A model picked in a session lives only as long as its process, so the
+// plugin records what each turn ran on and cca starts a reopened
+// conversation with it. 2026-11-19: VS Code restarted and every panel
+// session came back on the settings' model.
+describe('what a reopened conversation starts on', () => {
+  test("each turn's end records the session's model and effort", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.model.value = 'claude-fable-5-2'
+    w.transcript.tail = `${request('low')}\n`
+    await $.session.start(START)
+    expect(w.files.has(REMEMBERED)).toBe(false)
+    await turn($, w, [])
+    expect(w.files.get(REMEMBERED)).toBe('model claude-fable-5-2\neffort low\n')
+  })
+
+  test('a model or effort changed in the session is recorded at the next turn', async ($, on) => {
+    const w = world(on, TERMINAL)
+    w.transcript.tail = `${request('low', 'repl_main_thread')}\n`
+    await $.session.start(START)
+    await turn($, w, [])
+    w.model.value = 'claude-sonnet-5-5'
+    w.transcript.tail = `${request('max', 'repl_main_thread')}\n`
+    await turn($, w, [])
+    expect(w.files.get(REMEMBERED)).toBe('model claude-sonnet-5-5\neffort max\n')
+  })
+
+  test('a turn whose model and effort cannot be read leaves the record as it was', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.transcript.tail = `${request('high')}\n`
+    await $.session.start(START)
+    await turn($, w, [])
+    w.model.fails = true
+    w.transcript.tail = null
+    await turn($, w, [])
+    expect(w.files.get(REMEMBERED)).toBe('model claude-opus-5-5\neffort high\n')
+  })
+
+  test("a subagent's turn records nothing", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.transcript.tail = `${request('high')}\n`
+    await $.session.start(START)
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'sub', reason: 'error', agentId: 'a1' })
+    expect(w.files.has(REMEMBERED)).toBe(false)
   })
 })
 

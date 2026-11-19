@@ -179,6 +179,23 @@ resume_id() {
   return 0
 }
 
+# Sets REMEMBERED to these args with, for a run that reopens a conversation,
+# the model and effort it last ran on in front (models/<id>, which the plugin
+# writes at each turn's end), each only where the args name none. A model
+# picked in a session lives as long as its process, and a new process starts
+# on the settings' model: the editor restarted, and every session it reopened
+# came back on another model (2026-11-19).
+REMEMBERED=()
+remember() {
+  REMEMBERED=("$@")
+  local id; id="$(resume_id "$@")"
+  [[ -n "$id" && -s "$ROOT/models/$id" ]] || return 0
+  REMEMBERED=()
+  local arg
+  while IFS= read -r -d '' arg; do REMEMBERED+=("$arg"); done \
+    < <("$LIBEXEC/cca-keep-args" --remembered "$ROOT/models/$id" "$@")
+}
+
 # Which account a run with these args starts on.
 choose() {
   local id; id="$(resume_id "$@")"
@@ -286,10 +303,12 @@ launch() {
   # session (inheriting these) cannot switch this one.
   export CLAUDE_ACCOUNT_SWITCH_FILE="$switch" CCA_MODE=terminal CCA_PID=$$
   trap 'rm -f "$SWITCH" "$SWITCH.keep"' EXIT
-  local args=("$@") first=("$@")
+  remember "$@"
+  local args=(${REMEMBERED[@]+"${REMEMBERED[@]}"}) first=("$@")
   # by-session: each conversation's account. artifacts: what it published.
+  # models: the model and effort it last ran on.
   local kept
-  for kept in by-session artifacts; do
+  for kept in by-session artifacts models; do
     if [[ -d "$ROOT/$kept" ]]; then
       find "$ROOT/$kept" -type f -mtime +"$RECORD_DAYS" -delete
     fi
@@ -445,6 +464,8 @@ case "${1:-}" in
     fi
     name="$(choose "$@")"
     apply "$name"
+    remember "$@"
+    set -- ${REMEMBERED[@]+"${REMEMBERED[@]}"}
     # The editor starts a session with an option first and never with a
     # prompt; its subcommands (plugin list, edit-hook) are not all in --help,
     # and need nothing synced or loaded.
