@@ -14,7 +14,7 @@
 // CCA_BALANCE=off stops the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
 import { context, defaultName, describeError, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
-import { block, blockedUntil, scopeOf, sessionFamily, turnFailure } from './failures'
+import { block, blockedUntil, knownOf, scopeOf, sessionFamily, turnFailure } from './failures'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { demandPerHour } from './spend'
 import { accountStates, liveSessions, ownContext, ownReading, writeReading, type LiveSession } from './survey'
@@ -58,7 +58,7 @@ export async function candidates(
       reading: state.reading,
       load: load.get(state.account.name) ?? 0,
       units: state.units,
-      blockedUntil: await blockedUntil($, ctx.root, state.account.name, family, state.reading?.at),
+      blockedUntil: await blockedUntil($, ctx.root, state.account.name, family, knownOf(state.reading)),
     })),
   )
 }

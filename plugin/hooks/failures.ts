@@ -17,7 +17,7 @@
 // that hit it, and sessions on other families still move there.
 import type { EngineInterface } from 'claude-code'
 import { describeError, runOnTranscript, writeAtomic, type Context } from './context'
-import { blockMsOf } from './usage'
+import { blockMsOf, type Reading } from './usage'
 
 // The scope of a failure that is the whole account's.
 export const ACCOUNT_SCOPE = 'account'
@@ -102,7 +102,8 @@ export function blockFile(root: string, account: string, scope: string): string 
   return `${root}/blocked/${account}/${scope}.json`
 }
 
-// Records that `account` failed with `error` at `at`, for `scope`.
+// Records that `account` failed with `error` at `at`, for `scope`. A record
+// already there for the same error, met within a day, makes this a repeat.
 export async function block(
   $: EngineInterface,
   root: string,
@@ -111,27 +112,53 @@ export async function block(
   error: string,
   at: number,
 ): Promise<void> {
-  await writeAtomic($, blockFile(root, account, scope), `${JSON.stringify({ error, at })}\n`)
+  const file = blockFile(root, account, scope)
+  const repeats = repeatsOf(await readFailure($, file, account), error, at)
+  await writeAtomic($, file, `${JSON.stringify(repeats === 0 ? { error, at } : { error, at, repeats })}\n`)
 }
 
-// Until when a failure recorded at `at` keeps sessions off its account, given
-// when the account last answered (`answeredAt`: its reading's time, which
-// only a response writes). A refusal is over once the account has answered
-// since: its login was renewed, its hold lifted. Undefined then. A usage
-// limit is a model's, and a later answer may be another model's, so it
-// runs its time.
-export function holdUntil(record: { error: string; at: number }, answeredAt: number | undefined): number | undefined {
+// A failure record: what Claude Code called the error, when, and how many
+// times in a row the same error has been met before (absent: none).
+export type Failure = { error: string; at: number; repeats?: number }
+
+// A limit met again this soon after the last time is the same one, not a
+// new one: a hold runs an hour, so a retry comes well within it.
+const REPEAT_MS = 24 * 3_600_000
+const WEEK_MS = 7 * 24 * 3_600_000
+
+// How many times in a row `error` has now been met before this time, given
+// the record already kept for the same account and scope.
+export function repeatsOf(before: Failure | undefined, error: string, at: number): number {
+  if (before === undefined || before.error !== error || at - before.at > REPEAT_MS) return 0
+  return (before.repeats ?? 0) + 1
+}
+
+// Until when a failure keeps sessions off its account, given when the
+// account last answered (`answeredAt`: its reading's time, which only a
+// response writes). A refusal is over once the account has answered since:
+// its login was renewed, its hold lifted. Undefined then. A usage limit is a
+// model's, and a later answer may be another model's, so it runs its hour.
+// `week`: for a limit recorded for one model family (`perModel`), met again
+// after its hour, the limit is that model's weekly cap, which no reading
+// shows; it holds until the account's week resets (`weekEndsAt`, from its
+// reading), when that week is the one the limit was met in.
+export function holdUntil(
+  record: Failure,
+  answeredAt: number | undefined,
+  week?: { perModel: boolean; weekEndsAt: number | undefined },
+): number | undefined {
   if (record.error !== 'rate_limit' && answeredAt !== undefined && answeredAt > record.at) return undefined
+  const ends = week?.weekEndsAt
+  if (
+    record.error === 'rate_limit' && week?.perModel === true && (record.repeats ?? 0) >= 1 &&
+    ends !== undefined && Number.isFinite(ends) && ends > record.at && ends - record.at < WEEK_MS
+  ) return ends
   return record.at + blockMsOf(record.error)
 }
 
-// Until when the record in `file` keeps sessions off its account.
-async function heldUntil(
-  $: EngineInterface,
-  file: string,
-  account: string,
-  answeredAt: number | undefined,
-): Promise<number | undefined> {
+// The failure record in `file`, or undefined when there is none or it is
+// not one (reported: the account then counts as working).
+async function readFailure($: EngineInterface, file: string, account: string): Promise<Failure | undefined> {
   if (!(await $.fs.exists(file))) return undefined
   let value: unknown
   try {
@@ -141,7 +168,26 @@ async function heldUntil(
     return undefined
   }
   if (!isObject(value) || typeof value.at !== 'number' || typeof value.error !== 'string') return undefined
-  return holdUntil({ error: value.error, at: value.at }, answeredAt)
+  return typeof value.repeats === 'number' ? { error: value.error, at: value.at, repeats: value.repeats } : { error: value.error, at: value.at }
+}
+
+// What is known of an account when its failure records are read: when it
+// last answered and when its week resets, both from its reading.
+export type Known = { answeredAt: number | undefined; weekEndsAt: number | undefined }
+
+// What `reading` tells of its account. A week's reset the reading does not
+// give is unknown, so no hold is stretched to it.
+export function knownOf(reading: Reading | undefined): Known {
+  const resetsAt = reading?.windows.seven_day?.resetsAt
+  const ends = resetsAt === undefined ? NaN : Date.parse(resetsAt)
+  return { answeredAt: reading?.at, weekEndsAt: Number.isFinite(ends) ? ends : undefined }
+}
+
+// Until when the record of `scope` keeps sessions off `account`.
+async function heldUntil($: EngineInterface, root: string, account: string, scope: string, known: Known): Promise<number | undefined> {
+  const record = await readFailure($, blockFile(root, account, scope), account)
+  if (record === undefined) return undefined
+  return holdUntil(record, known.answeredAt, { perModel: scope !== ACCOUNT_SCOPE, weekEndsAt: known.weekEndsAt })
 }
 
 // Until when a session on `family` (undefined: not known) keeps off
@@ -152,12 +198,12 @@ export async function blockedUntil(
   root: string,
   account: string,
   family: string | undefined,
-  answeredAt: number | undefined,
+  known: Known,
 ): Promise<number | undefined> {
   const scopes = family === undefined ? [ACCOUNT_SCOPE] : [ACCOUNT_SCOPE, family]
-  const times = await Promise.all(scopes.map(scope => heldUntil($, blockFile(root, account, scope), account, answeredAt)))
-  const known = times.filter((at): at is number => at !== undefined)
-  return known.length === 0 ? undefined : Math.max(...known)
+  const times = await Promise.all(scopes.map(scope => heldUntil($, root, account, scope, known)))
+  const held = times.filter((at): at is number => at !== undefined)
+  return held.length === 0 ? undefined : Math.max(...held)
 }
 
 // Every failure record of `account` still in force at `now`: its scope (a
@@ -167,15 +213,16 @@ export async function holdsOf(
   root: string,
   account: string,
   now: number,
-  answeredAt: number | undefined,
+  known: Known,
 ): Promise<{ scope: string; until: number }[]> {
   const dir = `${root}/blocked/${account}`
   if (!(await $.fs.exists(dir))) return []
   const holds: { scope: string; until: number }[] = []
   for (const entry of await $.fs.list(dir)) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    const until = await heldUntil($, `${dir}/${entry.name}`, account, answeredAt)
-    if (until !== undefined && until > now) holds.push({ scope: entry.name.slice(0, -'.json'.length), until })
+    const scope = entry.name.slice(0, -'.json'.length)
+    const until = await heldUntil($, root, account, scope, known)
+    if (until !== undefined && until > now) holds.push({ scope, until })
   }
   return holds.sort((a, b) => a.scope.localeCompare(b.scope))
 }

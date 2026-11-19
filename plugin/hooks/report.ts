@@ -4,7 +4,7 @@
 // four, a Pro a fifth.
 import type { EngineInterface } from 'claude-code'
 import type { Context } from './context'
-import { holdsOf } from './failures'
+import { holdsOf, knownOf } from './failures'
 import { projectName, readPriorities, weightOf, DEFAULT_WEIGHT, type Priorities } from './priorities'
 import { accountStates, liveSessions, type AccountState, type LiveSession } from './survey'
 import { percentNow, POLICY, windowAtLimit, windowName, type Reading } from './usage'
@@ -155,7 +155,7 @@ export async function gatherReport(
   const budgets = await readBudgetsInForce($, ctx)
   return {
     now,
-    accounts: await Promise.all(states.map(async state => ({ state, holds: await holdsOf($, ctx.root, state.account.name, now, state.reading?.at) }))),
+    accounts: await Promise.all(states.map(async state => ({ state, holds: await holdsOf($, ctx.root, state.account.name, now, knownOf(state.reading)) }))),
     live: await liveSessions($, ctx),
     priorities,
     current: ctx.current?.name,

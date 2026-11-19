@@ -162,6 +162,31 @@ describe('where a stopped session goes', () => {
     expect(w.files.get(BY_SESSION)).toBe('3\n')
   })
 
+  test("a model's limit met again within a day is recorded as a repeat", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    w.files.set(blockFile(ROOT, '1', 'fable'), `${JSON.stringify({ error: 'rate_limit', at: 0 })}\n`)
+    await w.clock.advance(2 * HOUR)
+    await $.session.start(START)
+    limits(w, 40, 30)
+    w.transcript.tail = apiError('rate_limit')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(JSON.parse(w.files.get(blockFile(ROOT, '1', 'fable')) ?? '{}')).toEqual({ error: 'rate_limit', at: 2 * HOUR, repeats: 1 })
+  })
+
+  test("an account whose model limit was met twice is skipped past the hour, until its week resets", async ($, on) => {
+    const w = world(on, SUPERVISED)
+    signInThree(w)
+    w.files.set(blockFile(ROOT, '2', 'fable'), `${JSON.stringify({ error: 'rate_limit', at: 0, repeats: 1 })}\n`)
+    saved(w, '2', 10, 20, '1970-01-03T00:00:00Z')
+    await w.clock.advance(2 * HOUR)
+    await $.session.start(START)
+    w.transcript.tail = apiError('rate_limit')
+    await endTurn($, w, await startTurn($))
+    await w.clock.advance(0)
+    expect(w.files.get(BY_SESSION)).toBe('3\n')
+  })
+
   test('with every other account failing too, the session stays and says why', async ($, on) => {
     const w = world(on, SUPERVISED)
     w.files.set(blockFile(ROOT, '2', 'fable'), `${JSON.stringify({ error: 'rate_limit', at: 0 })}\n`)
