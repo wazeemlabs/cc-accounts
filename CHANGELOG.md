@@ -2,6 +2,14 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.23.0 (2026-11-19)
+
+Three changes that stop the balancer spending usage on moves. A move makes the new account read the whole conversation uncached, so each one avoided is usage kept.
+
+- A session no longer moves to the account whose week resets first when that account's room will be used anyway. The room left before the reset is set against what the accounts have been spending over the last three days; when that spend is at least twice the room, the session stays. Over three weeks on one machine every account ended its week 93 to 100% used, so most of those moves saved nothing.
+- A model's weekly limit is remembered for the week. No reading shows a per-model cap, so sessions tried the account again every hour, and each try cost two moves and a failed turn. The first limit still waits an hour; met again within a day, it keeps that model off the account until the account's week resets. cca keeps failure records a week, not a day.
+- A working session counts by what it spends. Each used to count 10 points of its account's five-hour window. Now its spend over today and yesterday is set against the average of the working sessions, between a quarter and four times, so a session that runs sub-agents all day takes the room it will use and light sessions share an account.
+
 ## 0.22.1 (2026-11-19)
 
 - A Claude Code subcommand typed in a terminal runs as typed. cca put `--mcp-config` in front of everything it ran, and `claude plugin test` refuses any option before `plugin`. A run whose first word `claude --help` lists as a command now gets no session option and no sync; a prompt, an option or nothing still starts a session.

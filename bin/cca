@@ -56,10 +56,13 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # the default account.
 RECORD_DAYS=180
 # The plugin's Stop hook leaves each session's background work in
-# background/<id>, read only at the end of the turn that wrote it, and the
-# plugin records an account's failures in blocked/<account>/<scope>.json,
-# which count for an hour: a day-old one of either is never read again.
+# background/<id>, read only at the end of the turn that wrote it: a day-old
+# one is never read again.
 SHORT_RECORD_DAYS=1
+# The plugin records an account's failures in blocked/<account>/<scope>.json.
+# One counts for an hour or a day, and a model's limit met twice until the
+# account's week resets, at most seven days on.
+BLOCK_RECORD_DAYS=7
 # Settings the editor saves by running the binary once with one of these
 # subcommands (VS Code's Claude in Chrome and memory dialogs). They live in
 # each account's .claude.json, and the editor runs the helper itself, with
@@ -262,10 +265,11 @@ sync_account() {
 }
 
 prune_short_records() {
-  local dir
-  for dir in "$ROOT/background" "$ROOT/blocked"; do
+  local entry dir days
+  for entry in "background:$SHORT_RECORD_DAYS" "blocked:$BLOCK_RECORD_DAYS"; do
+    dir="$ROOT/${entry%%:*}"; days="${entry##*:}"
     [[ -d "$dir" ]] || continue
-    find "$dir" -type f -mtime +"$SHORT_RECORD_DAYS" -delete
+    find "$dir" -type f -mtime +"$days" -delete
     find "$dir" -mindepth 1 -type d -empty -delete
   done
 }
