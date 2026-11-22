@@ -360,6 +360,14 @@ describe('what the session is told', () => {
   })
 
   test('a move with no limit and no cut turn needs no follow-up', () => {
-    expect(followUpText({ from: 'a', to: 'b', interrupted: false, stop: undefined, stopped: ['shell "x"'] })).toBe(undefined)
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, stop: undefined, stopped: [] })).toBe(undefined)
+  })
+
+  test('a move nothing forced names the watches it ended, alone or after a cut turn', () => {
+    const ended = 'Moving this conversation to the b account ended this background work, which only watches or waits, so start again whatever of it is still needed: monitor "log".'
+    expect(followUpText({ from: 'a', to: 'b', interrupted: false, stop: undefined, stopped: ['monitor "log"'] })).toBe(`[cc-accounts] ${ended}`)
+    expect(followUpText({ from: 'a', to: 'b', interrupted: true, stop: undefined, stopped: ['monitor "log"'] })).toBe(
+      `[cc-accounts] Moving this conversation to the b account interrupted your turn. Carry on from where you stopped. ${ended}`,
+    )
   })
 })

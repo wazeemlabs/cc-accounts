@@ -4,7 +4,7 @@
 // itself: ending a session stops its background work, and only its owner
 // knows what that is worth.
 import type { EngineInterface } from 'claude-code'
-import { parseRecord } from './background'
+import { parseRecord, working } from './background'
 import { run, type Context } from './context'
 import { projectName } from './priorities'
 import { untilText } from './report'
@@ -163,7 +163,8 @@ export async function gatherSessions($: EngineInterface, ctx: Context): Promise<
     // caught half written, lists none.
     const record = recordFile(ctx.root, entry.sessionId)
     const found = (await $.fs.exists(record)) ? parseRecord(await $.fs.read(record)) : undefined
-    if (found?.kind === 'tasks') tasks.set(entry.sessionId, found.tasks.length)
+    // A watch is not counted: closing the session loses nothing of it.
+    if (found?.kind === 'tasks') tasks.set(entry.sessionId, working(found.tasks).length)
   }
   return sessionRows(running, parseProcesses(stdout), accounts, tasks, await $.clock.now())
 }

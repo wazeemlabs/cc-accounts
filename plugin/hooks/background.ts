@@ -79,6 +79,26 @@ export function taskStarted(tool: string, input: Record<string, unknown>, result
   return task
 }
 
+// A watch: work that only waits for or reports on something else (a Monitor
+// on a log or a condition, the watch Claude Code keeps on a published
+// artifact). It never ends by itself, so a switch that waited for one never
+// happened (2026-11-22: a move sat queued behind three artifact watches), and
+// ending it loses nothing: it is started again. What it watches, a shell or a
+// subagent, is listed as work of its own and still holds a switch.
+export function isWatch(task: Task): boolean {
+  return task.type === 'monitor'
+}
+
+// The tasks ending the process would cost something: all but the watches.
+export function working(tasks: readonly Task[]): Task[] {
+  return tasks.filter(task => !isWatch(task))
+}
+
+// `1 watch`, `2 watches`
+export function describeWatches(watches: readonly Task[]): string {
+  return `${watches.length} watch${watches.length === 1 ? '' : 'es'}`
+}
+
 // `shell "npm test"`, or `monitor m1` for one with no description.
 export function nameTask(task: Task): string {
   return task.description ? `${task.type} "${task.description}"` : `${task.type} ${task.id}`

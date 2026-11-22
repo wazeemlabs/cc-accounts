@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { describeTasks, parseRecord, taskStarted, turnMark } from '../hooks/background'
+import { describeTasks, isWatch, parseRecord, taskStarted, turnMark, working } from '../hooks/background'
 import {
   BY_SESSION,
   RECORD,
@@ -9,6 +9,7 @@ import {
   SHELL,
   START,
   STREAM,
+  SUPERVISED,
   SWITCH,
   TERMINAL,
   endTurn,
@@ -19,6 +20,10 @@ import {
 } from './world'
 
 const SIGINT = ['kill', '-INT', SELF]
+// As Claude Code lists a watch it keeps on a published artifact.
+const WATCH = { id: 'm1', type: 'monitor', description: 'live updates for artifact https://claude.ai/code/artifact/296dbf74-961a-42d3-9fef-ae149277af68 (auto-armed on publish)' }
+// A Monitor the conversation started itself.
+const LOG = { id: 'm9', type: 'monitor', description: 'until the build log says done' }
 
 describe('background work', () => {
   test('reads the Stop hook record and the turn mark, refusing anything else', () => {
@@ -50,6 +55,18 @@ describe('background work', () => {
       .toEqual({ id: 'w1', type: 'workflow', description: 'build' })
     expect(taskStarted('Read', { file_path: '/a' }, { content: '' })).toBe(undefined)
     expect(taskStarted('Bash', { command: 'x' }, 'not an object')).toBe(undefined)
+  })
+
+  test('a monitor is a watch, not work: it only waits, and starting it again loses nothing', () => {
+    expect(isWatch(WATCH)).toBe(true)
+    expect(isWatch(LOG)).toBe(true)
+    // What a watch watches is work of its own and still counts.
+    expect(isWatch({ id: 'b2', type: 'shell', description: 'tail -f build.log' })).toBe(false)
+    expect(isWatch(SHELL)).toBe(false)
+    expect(isWatch(SCOUT)).toBe(false)
+    expect(isWatch({ id: 'w1', type: 'workflow', description: 'build' })).toBe(false)
+    expect(working([WATCH, SHELL, LOG, SCOUT])).toEqual([SHELL, SCOUT])
+    expect(working([WATCH, LOG])).toEqual([])
   })
 
   test('names the work in a sentence', () => {
@@ -131,6 +148,50 @@ describe('/account waits for the work a switch would stop', () => {
     await turn($, w, [])
     await w.clock.advance(0)
     expect(w.killed).toEqual([SIGINT])
+  })
+
+  test('a switch does not wait for a watch: it goes at once and says the watch ends', async ($, on) => {
+    const w = world(on, STREAM)
+    await $.session.start(START)
+    await turn($, w, [WATCH])
+    const { text } = await $.command.run(run('2'))
+    expect(text).toBe('Switched to 2, ending 1 watch: your next message continues this conversation on it.')
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([SIGINT])
+  })
+
+  test('a switch waiting for work beside a watch names only the work, and goes when the work ends', async ($, on) => {
+    const w = world(on, STREAM)
+    await $.session.start(START)
+    await turn($, w, [WATCH, SHELL])
+    const { text } = await $.command.run(run('2'))
+    expect(text).toContain('Switch to 2 queued: waiting for 1 background task (shell "npm test") to end.')
+    expect(text).toContain('To switch now and stop it, type /account 2 now.')
+    await turn($, w, [WATCH])
+    await w.clock.advance(0)
+    expect(w.killed).toEqual([SIGINT])
+  })
+
+  test('a forced switch names the watches it ends after the work it stops', async ($, on) => {
+    const w = world(on, STREAM)
+    await $.session.start(START)
+    await turn($, w, [SHELL, WATCH, LOG])
+    const { text } = await $.command.run(run('2 now'))
+    expect(text).toBe(
+      'Switched to 2, stopping 1 background task (shell "npm test") and ending 2 watches: your next message continues this conversation on it.',
+    )
+  })
+
+  test('a move that ended a monitor tells the reopened conversation to start it again; an artifact watch alone needs no word', async ($, on) => {
+    const w = world(on, SUPERVISED)
+    await $.session.start(START)
+    await turn($, w, [WATCH, LOG])
+    await $.command.run(run('2'))
+    await w.clock.advance(0)
+    expect(w.files.get(SWITCH)).toBe(
+      `2 ${SESSION}\n[cc-accounts] Moving this conversation to the 2 account ended this background work, which only watches or waits, ` +
+        'so start again whatever of it is still needed: monitor "until the build log says done".\n',
+    )
   })
 
   test('one task ending of two keeps the switch waiting for the other', async ($, on) => {

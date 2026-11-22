@@ -375,8 +375,9 @@ export function accountStatus(name: string, reading: Reading | undefined, now: n
 // it needs to be told nothing: `stop`, what stopped its last turn;
 // `interrupted`, whether ending the process cut short a turn a message
 // started after the switch was decided; `stopped`, the background work the
-// move ended. Scheduled wakeups need no word: Claude Code restores the
-// session's own when the conversation is resumed.
+// move ended: all of it after a stop, else the watches it did not wait
+// for. Scheduled wakeups need no word: Claude Code restores the session's
+// own when the conversation is resumed.
 export type Move = {
   from: string | undefined
   to: string
@@ -407,8 +408,17 @@ export function followUpText(move: Move): string | undefined {
     if (move.stopped.length > 0) {
       parts.push(`The move stopped this background work, so start again whatever of it is still needed: ${move.stopped.join(', ')}.`)
     }
-  } else if (move.interrupted) {
-    parts.push(`Moving this conversation to the ${move.to} account interrupted your turn. Carry on from where you stopped.`)
+  } else {
+    if (move.interrupted) {
+      parts.push(`Moving this conversation to the ${move.to} account interrupted your turn. Carry on from where you stopped.`)
+    }
+    // A move nothing forced did not wait for the session's watches.
+    if (move.stopped.length > 0) {
+      parts.push(
+        `Moving this conversation to the ${move.to} account ended this background work, which only watches or waits, ` +
+          `so start again whatever of it is still needed: ${move.stopped.join(', ')}.`,
+      )
+    }
   }
   // Told only with a turn the move already starts: these alone start none,
   // and an Artifact call on one of them carries the same words.

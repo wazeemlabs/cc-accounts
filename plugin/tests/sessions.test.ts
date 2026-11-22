@@ -111,7 +111,8 @@ describe('/account sessions', () => {
     registry(20, 's-20', { status: 'idle', statusUpdatedAt: now - 2 * HOUR })
     registry(50, 's-50', { status: 'idle', statusUpdatedAt: now })
     w.files.set(`${ROOT}/by-session/s-20`, '2\n')
-    w.files.set(`${ROOT}/background/s-20`, JSON.stringify({ tasks: [{ id: 'b1', type: 'shell', description: 'npm test' }] }))
+    // An artifact watch beside the shell is not work a close would lose.
+    w.files.set(`${ROOT}/background/s-20`, JSON.stringify({ tasks: [{ id: 'b1', type: 'shell', description: 'npm test' }, { id: 'm1', type: 'monitor', description: 'live updates for artifact https://claude.ai/code/artifact/abc (auto-armed on publish)' }] }))
     w.running.add('10').add('20')
     w.processes.table = PS
     const { text } = await $.command.run(run('sessions'))

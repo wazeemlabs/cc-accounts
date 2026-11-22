@@ -2,6 +2,10 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.25.0 (2026-11-22)
+
+- A switch no longer waits for a watch. A Monitor, and the live watch Claude Code keeps on a published artifact, only wait for something else and never end by themselves, so a move queued behind one never happened: a session sat on a filling account behind three artifact watches until they were stopped by hand. `/account` and the balancer now wait only for work that would be lost (a turn, a subagent, a background command, a workflow) and end the watches when they move. The reply says how many watches end, the reopened conversation is told which Monitors to start again, and Claude Code arms an artifact's watch again itself. `/account sessions`, the dashboard and `/account close` no longer count a watch as background work.
+
 ## 0.24.0 (2026-11-19)
 
 - A reopened conversation starts on the model and effort it last ran on. A model picked in a session lasts only as long as its process, and the VS Code panel's own pick is one setting that every session shares, so after an editor restart every reopened session came back on the same model, whatever it had been running. The plugin now records each conversation's model and effort at the end of every turn, and cca starts a resumed conversation with them, in a terminal and in the panel. A `--model` or `--effort` on the command line wins, and a new conversation starts on Claude Code's own setting.

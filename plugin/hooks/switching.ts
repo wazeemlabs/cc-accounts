@@ -3,8 +3,8 @@
 // in flight and all background work (subagents, shells, monitors), so a
 // switch waits for the turn to end and the work to finish unless forced.
 import type { EngineInterface } from 'claude-code'
-import { elsewhere, isLostWatch, readNotes } from './artifacts'
-import { describeTasks, ENDED_AGENT, nameTask, parseRecord, type Task } from './background'
+import { elsewhere, isLostWatch, linkIn, readNotes } from './artifacts'
+import { describeTasks, describeWatches, ENDED_AGENT, isWatch, nameTask, parseRecord, working, type Task } from './background'
 import { accountStatus, followUpText, type Move, type Stop } from './usage'
 import { describeError, record, run, type Context } from './context'
 import { keptFile, writeKept } from './keep'
@@ -36,8 +36,9 @@ export type Pending = {
   by: 'person' | 'balancer'
 }
 
-// What a switch waits for: the turn in flight and the background work.
-export type Wait = { turn: boolean; tasks: Task[] }
+// What a switch waits for: the turn in flight and the background work. The
+// `watches` it ends without waiting (background.ts, isWatch).
+export type Wait = { turn: boolean; tasks: Task[]; watches: Task[] }
 
 // One process's state: /account only ever ends its own process. A hot reload
 // of the plugin loads the module again in the same process, so what must
@@ -109,6 +110,14 @@ export function describeWait(wait: Wait): string {
   return parts.filter(part => part !== '').join(' and ')
 }
 
+// `stopping 1 background task (shell "npm test") and ending 2 watches`, or
+// nothing where the switch ends neither.
+export function describeEnding(wait: Wait): string {
+  const waited = describeWait(wait)
+  const parts = [waited === '' ? '' : `stopping ${waited}`, wait.watches.length > 0 ? `ending ${describeWatches(wait.watches)}` : '']
+  return parts.filter(part => part !== '').join(' and ')
+}
+
 // The work a switch would stop now. The agent list is live; shells, monitors
 // and workflows are as the last turn's Stop hook listed them, with the ones
 // tool calls started since.
@@ -119,7 +128,8 @@ export async function waitingFor($: EngineInterface, state: SwitchState): Promis
       state.tasks.set(agent.id, { id: agent.id, type: 'subagent', description: agent.description })
     }
   }
-  return { turn: state.turns > 0, tasks: [...state.tasks.values()] }
+  const all = [...state.tasks.values()]
+  return { turn: state.turns > 0, tasks: working(all), watches: all.filter(isWatch) }
 }
 
 // At a main-loop turn's end: the work its Stop hook listed replaces what was
@@ -266,7 +276,11 @@ export async function carryOut($: EngineInterface, state: SwitchState): Promise<
     // The artifacts the conversation leaves on other accounts: their watches
     // cannot be started again on this one, so they are named with them.
     const left = state.root === undefined ? [] : elsewhere(await readNotes($, state.root, exit.sessionId), target)
-    const tasks = stop === undefined ? [] : (await waitingFor($, state)).tasks
+    // A move nothing forced ends only watches. Claude Code arms the watch of
+    // an artifact again itself when the conversation is resumed; any other
+    // watch is the conversation's to start again.
+    const ended = await waitingFor($, state)
+    const tasks = stop === undefined ? ended.watches.filter(task => linkIn(task.description) === undefined) : [...ended.tasks, ...ended.watches]
     const stopped = tasks.filter(task => !isLostWatch(task.description, left)).map(nameTask)
     await runExit($, state, pending, { from, to: target, stop, interrupted: false, stopped, left, browser: state.browser })
   } catch (error) {

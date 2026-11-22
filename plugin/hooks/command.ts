@@ -13,7 +13,7 @@ import { closeCommand } from './close'
 import { openDashboard } from './dashboard'
 import { formatSessions, gatherSessions } from './sessions'
 import { readReading } from './survey'
-import { afterOf, describeWait, dropSwitch, leadOf, requestSwitch, type SwitchState } from './switching'
+import { afterOf, describeEnding, describeWait, dropSwitch, leadOf, requestSwitch, type SwitchState } from './switching'
 import { describeUse } from './usage'
 
 // After /account changes a budget or weight: the sessions it lets go on are woken at once.
@@ -164,9 +164,8 @@ export async function accountCommand($: EngineInterface, args: string, state: Sw
     }
   }
   if (asked.kind === 'started') {
-    const { stopping } = asked
-    const stopped = stopping.turn || stopping.tasks.length > 0 ? `, stopping ${describeWait(stopping)}` : ''
-    return { text: `${leadOf(asked.exit, target.name)}${stopped}: ${afterOf(asked.exit, 'it')}${signIn}` }
+    const ending = describeEnding(asked.stopping)
+    return { text: `${leadOf(asked.exit, target.name)}${ending === '' ? '' : `, ${ending}`}: ${afterOf(asked.exit, 'it')}${signIn}` }
   }
   const count = asked.wait.tasks.length + (asked.wait.turn ? 1 : 0)
   $.ui.status(`account ${current ?? '(unknown)'}, switching to ${target.name}`)
