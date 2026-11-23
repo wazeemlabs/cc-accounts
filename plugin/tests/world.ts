@@ -69,6 +69,10 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   // processes still running, each with its parent, as `ps -o pid=,ppid=` lists them.
   const others = new Map<string, number>()
   const helpers = new Map<string, string>()
+  // Probes of accounts: the ones asked, in order, what each answers (the
+  // reading its run saves; none: it is refused and saves nothing new), and
+  // the ones whose run hangs.
+  const probes = { asked: [] as string[], answers: new Map<string, string>(), fails: new Set<string>() }
   // The rate-limit windows the session's last response reported.
   const limits: { kind: string; percentUsed: number; resetsAt?: string }[] = []
   // The folder the session's shell is in was deleted (a removed worktree):
@@ -205,6 +209,16 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
     ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', async (_$, e) => {
     if (folder.gone && e.init?.cwd === undefined) throw new Error(`$.process.run(${e.argv[0]}) failed to start: ENOENT`)
+    if ((e.argv[0] ?? '').endsWith('/bin/cca')) {
+      // A probe of an account (probe.ts): the run saves the reading its
+      // reply carried, here what a test said the account answers.
+      const account = e.argv[1] ?? ''
+      probes.asked.push(account)
+      if (probes.fails.has(account)) throw new Error('timed out')
+      const answer = probes.answers.get(account)
+      if (answer !== undefined) files.set(`${ROOT}/usage/${account}.json`, answer)
+      return done(answer === undefined ? 1 : 0)
+    }
     if (e.argv[0] === 'mv') {
       // mv -f <from> <to>
       const to = e.argv[3] ?? ''
@@ -302,7 +316,7 @@ export function world(on: On, env: Record<string, string>, signalsToDie = 1) {
   })
   return {
     files, ran, statuses, logs, clock, killed, agents, state, results, denied, limits, running, writes, released, slow, transcript, settings, model,
-    folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery, window, processes, others, helpers,
+    folder, failWrites, where, prunes, debug, logged, submitted, sent, delivery, window, processes, others, helpers, probes,
   }
 }
 
