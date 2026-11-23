@@ -63,6 +63,9 @@ export type SwitchState = {
   strandedNote: string | undefined
   // Whether this conversation called the Claude in Chrome tools (browser.ts).
   browser: boolean
+  // What stopped the session's last turn while no account had room to move
+  // to: it checks again until it can go on (balance.ts, recheck).
+  waiting: Stop | undefined
 }
 
 export function newState(): SwitchState {
@@ -78,6 +81,7 @@ export function newState(): SwitchState {
     stranded: undefined,
     strandedNote: undefined,
     browser: false,
+    waiting: undefined,
   }
 }
 

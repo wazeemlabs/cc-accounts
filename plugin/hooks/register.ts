@@ -3,7 +3,7 @@ import { afterCall } from './artifacts'
 import { taskStarted, turnMark } from './background'
 import { usesBrowser } from './browser'
 import { accountCommand } from './command'
-import { balance, noteMeasure, showStatus, startOrDefault } from './balance'
+import { balance, noteMeasure, recheck, showStatus, startOrDefault, WAIT_MS } from './balance'
 import { context, describeError, exitOf, record, type Context } from './context'
 import { remember } from './keep'
 import { projectName } from './priorities'
@@ -65,8 +65,27 @@ async function check($: EngineInterface, parked: Parked): Promise<void> {
   }
 }
 
+// A session waiting for room checks every WAIT_MS (balance.ts, recheck), from
+// the turn's end that left it waiting until it moves or a turn starts.
+function watchForRoom($: EngineInterface, state: ReturnType<typeof newState>, waiting: { timer: Timer | undefined }): void {
+  if (state.waiting === undefined || state.pending !== undefined) {
+    waiting.timer?.cancel()
+    waiting.timer = undefined
+    return
+  }
+  waiting.timer ??= $.clock.every(WAIT_MS, () => {
+    recheck($, state)
+      .catch((error: unknown) => {
+        // Reported; the next check tries again.
+        $.ui.log(`cc-accounts: could not check whether this session can go on (${describeError(error)}).`)
+      })
+      .finally(() => watchForRoom($, state, waiting))
+  })
+}
+
 export const register: Register = on => {
   const state = newState()
+  const waiting: { timer: Timer | undefined } = { timer: undefined }
   registerPane(on, state)
   const parked: Parked = { project: undefined, refused: false, timer: undefined }
   // Whether the prune a main-loop turn's end started for this conversation
@@ -99,6 +118,8 @@ export const register: Register = on => {
         await record($, ctx, await $.session.id(), ctx.current.name)
       }
     }
+    // A session that waited for room when the plugin reloaded waits again.
+    watchForRoom($, state, waiting)
     // A refused session whose minute check a reload cancelled (or a new
     // process on a refused conversation): its check starts again.
     if (ctx !== undefined && parked.timer === undefined && (await $.fs.exists(parkedFile(ctx.root, await $.session.id())))) {
@@ -120,6 +141,9 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       state.turns += 1
+      // A person, a wake or the resume started it: it waits for room no longer.
+      state.waiting = undefined
+      watchForRoom($, state, waiting)
       await save($, state)
       if (state.root !== undefined) await $.fs.write(recordFile(state.root, await $.session.id()), turnMark(e.turnId))
       // A person or a wake started it again: nothing is left to wake it for,
@@ -190,6 +214,7 @@ export const register: Register = on => {
       }
     }
     await save($, state)
+    watchForRoom($, state, waiting)
     if (state.pending !== undefined) await $.clock.after(0, () => carryOut($, state))
     return result
   }).catch(async ($, e, next) => {

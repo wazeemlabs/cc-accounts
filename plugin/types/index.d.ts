@@ -11,6 +11,9 @@ export type CcAccountsSwitching = {
   // Whether the conversation called the Claude in Chrome tools: absent in what
   // a plugin before 0.21.0 saved, read as no.
   browser?: boolean
+  // What stopped the last turn of a session that waits for room: absent in
+  // what a plugin before 0.26.0 saved, read as not waiting.
+  waiting?: { window: string } | { error: string } | null
 }
 
 // A queued switch, less how this process ends, which is read again.

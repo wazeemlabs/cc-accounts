@@ -11,14 +11,19 @@
 // /account does. Projects can matter more than others (priorities.ts): a
 // session counts by its project's weight, and on an account running low a
 // lighter session moves off to leave the rest to a heavier one.
+// A session that must leave and finds no room asks the accounts that read
+// full whether they still are (probe.ts), and one its account stopped with
+// nowhere to go checks again every WAIT_MS until it can go on (recheck).
 // CCA_BALANCE=off stops the moves; readings are still written.
 import type { EngineInterface } from 'claude-code'
 import { context, defaultName, describeError, exitOf, inDesktopApp, startFile, writeAtomic, type Context } from './context'
 import { block, blockedUntil, knownOf, scopeOf, sessionFamily, turnFailure } from './failures'
+import { probe, readingFull } from './probe'
 import { heavierOn, loads, projectName, readPriorities, weightOf, type Priorities } from './priorities'
 import { demandPerHour, sessionTokens, spendShares } from './spend'
-import { accountStates, liveSessions, ownContext, ownReading, writeReading, type LiveSession } from './survey'
+import { accountStates, liveSessions, ownContext, ownReading, readReading, writeReading, type LiveSession } from './survey'
 import { dropSwitch, requestSwitch, type Exit, type SwitchState } from './switching'
+import { save } from './saved'
 import {
   ACCOUNT_FAILURES,
   accountStatus,
@@ -175,10 +180,20 @@ async function liveHere($: EngineInterface, ctx: Context, from: string): Promise
   return (await liveSessions($, ctx)).map(live => (live.sessionId === self ? { ...live, account: from } : live))
 }
 
-async function planMove($: EngineInterface, state: SwitchState, ctx: Context, from: string, stopped: boolean): Promise<Plan | undefined> {
+// `again`: what stopped the session's last turn, when this is a later check
+// of a session still waiting on it (recheck); the stop is then not read from
+// the transcript, and its failure is not recorded a second time.
+async function planMove(
+  $: EngineInterface,
+  state: SwitchState,
+  ctx: Context,
+  from: string,
+  stopped: boolean,
+  again?: Stop,
+): Promise<Plan | undefined> {
   const now = await $.clock.now()
   const reading = await ownReading($, from)
-  const stop = stopped ? stopOf(await turnFailure($, ctx), windowAtLimit(reading, now)) : undefined
+  const stop = again ?? (stopped ? stopOf(await turnFailure($, ctx), windowAtLimit(reading, now)) : undefined)
   const full = fullWindow(reading, now)
   const tight = tightWindow(reading, now)
   // Room again: what a session that cannot move told of is over.
@@ -187,6 +202,10 @@ async function planMove($: EngineInterface, state: SwitchState, ctx: Context, fr
     state.strandedNote = undefined
   }
   const exit = await exitOf($, await $.session.id())
+  // Nothing can go on here after a stop: the session waits for room (recheck)
+  // unless a move is planned below. Only a session that stays open waits: a
+  // print run ends with its turn, and a timer would hold its process.
+  state.waiting = state.interactive || exit?.kind === 'stream' ? stop : undefined
   if (exit === undefined) {
     await stranded($, state, ctx, from, reading, stop, full, now)
     return undefined
@@ -218,9 +237,17 @@ async function planMove($: EngineInterface, state: SwitchState, ctx: Context, fr
   // A failure the readings do not explain is recorded, so that no session
   // that would meet it moves here for a while. One they explain needs no
   // record: they show it to every session, and when it resets.
-  if (stop !== undefined && 'error' in stop) await block($, ctx.root, from, scopeOf(stop.error, family), stop.error, now)
-  const options = await candidates($, ctx, family, live, priorities, shares)
-  const target = chooseTarget(from, options, now, stop === undefined ? POLICY.take : POLICY.leave, undefined, arriving)
+  if (again === undefined && stop !== undefined && 'error' in stop) await block($, ctx.root, from, scopeOf(stop.error, family), stop.error, now)
+  const bar = stop === undefined ? POLICY.take : POLICY.leave
+  const choose = async (): Promise<{ target: string | undefined; full: string[] }> => {
+    const options = await candidates($, ctx, family, live, priorities, shares)
+    const others = options.filter(option => option.name !== from)
+    return { target: chooseTarget(from, options, now, bar, undefined, arriving), full: readingFull(others, now) }
+  }
+  let { target, full: reads } = await choose()
+  // A session that must leave, with no room by the readings: the accounts
+  // that read full are asked, and the choice made again on their answers.
+  if (target === undefined && heavier === undefined && (await probe($, ctx, reads, now)).length > 0) target = (await choose()).target
   const why = stop !== undefined && 'error' in stop
     ? `${from} failed the last turn (${stop.error})`
     : heavier !== undefined
@@ -232,7 +259,48 @@ async function planMove($: EngineInterface, state: SwitchState, ctx: Context, fr
     if (heavier === undefined) $.ui.log(`cc-accounts: ${why}, and no other account has room to move to.`)
     return undefined
   }
+  state.waiting = undefined
   return { from, target, exit, force: stop !== undefined, stop, why }
+}
+
+// How often a session its account stopped, with nowhere to go, checks again.
+export const WAIT_MS = 5 * 60_000
+
+// What a session is told when its own account can serve it again.
+export function resumeText(account: string, window: string): string {
+  return `[cc-accounts] The ${account} account's ${windowName(window)} window has room again. Carry on from where you stopped.`
+}
+
+// A waiting session's check, from its timer (register.ts): its account
+// stopped its last turn and no other had room, so nothing of its own would
+// start it again. Its own account is asked first, since a reset a person
+// made shows in no session's reading; with room there the session is told to
+// carry on. Otherwise the move is planned again, the full accounts asked
+// with it, and made once one has room.
+export async function recheck($: EngineInterface, state: SwitchState): Promise<void> {
+  const stop = state.waiting
+  if (stop === undefined || state.pending !== undefined || state.ending || state.turns > 0) return
+  const ctx = await context($)
+  if (ctx?.current === undefined) return
+  const from = ctx.current.name
+  const now = await $.clock.now()
+  if ('window' in stop) {
+    await probe($, ctx, [from], now)
+    // The saved reading is the account's latest: this session saves its own
+    // at every measurement, and a probe's run saves the one its reply gave.
+    const reading = (await readReading($, ctx.root, from)) ?? (await ownReading($, from))
+    if (windowAtLimit(reading, now) === undefined) {
+      state.waiting = undefined
+      await save($, state)
+      $.ui.log(`cc-accounts: ${from}'s ${windowName(stop.window)} window has room again; this conversation goes on.`)
+      await $.prompt.submit({ text: resumeText(from, stop.window) })
+      return
+    }
+  }
+  if ((await $.env.get('CCA_BALANCE')) === 'off') return
+  const plan = await planMove($, state, ctx, from, true, stop)
+  if (plan !== undefined) await move($, state, ctx, plan)
+  await save($, state)
 }
 
 // A session that would leave its account but that nothing would reopen

@@ -32,6 +32,7 @@ export function snapshot(state: SwitchState): SavedSwitch {
     stranded: state.stranded ?? null,
     strandedNote: state.strandedNote ?? null,
     browser: state.browser,
+    waiting: state.waiting ?? null,
   }
 }
 
@@ -57,6 +58,7 @@ export function parseSaved(value: unknown): SavedSwitch | undefined {
   if (typeof saved.turns !== 'number' || !Number.isInteger(saved.turns) || saved.turns < 0) return undefined
   if (!optional(saved.answered) || !optional(saved.stranded) || !optional(saved.strandedNote)) return undefined
   if (saved.browser !== undefined && typeof saved.browser !== 'boolean') return undefined
+  if (saved.waiting !== undefined && saved.waiting !== null && !isStop(saved.waiting)) return undefined
   const pending = saved.pending as Record<string, unknown> | null
   if (pending !== null) {
     if (typeof pending !== 'object' || typeof pending.target !== 'string' || typeof pending.force !== 'boolean') return undefined
@@ -89,6 +91,7 @@ export async function restore($: EngineInterface, state: SwitchState, exitNow: P
   state.stranded = saved.stranded ?? undefined
   state.strandedNote = saved.strandedNote ?? undefined
   state.browser = saved.browser ?? false
+  state.waiting = saved.waiting ?? undefined
   // A queued switch goes on only where this process can still be ended for it.
   // One saved with no word of who asked is a person's, never decided again.
   state.pending = saved.pending !== null && exitNow !== undefined

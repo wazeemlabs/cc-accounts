@@ -2,6 +2,11 @@
 
 All notable changes to cc-accounts are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.26.0 (2026-11-24)
+
+- An account whose limit was reset is found without anyone telling cc-accounts. A reading comes only from a session running on its account, so an account every session had left kept its last one until the reset that reading named. When its limits were reset sooner from the account itself, it still read "week 100%", and every session stayed on spent accounts until one was moved there by hand. A session that must leave its account and finds no room now asks each account that reads full: one short request on it through cca. Claude Code refuses the request on a spent account before any model runs, so asking a full account costs nothing, and the reply renews the account's reading either way. An account is asked at most once in ten minutes, by whichever session gets there first.
+- A session its account stopped goes on by itself. With no account to move to, a stopped session used to stay idle until someone wrote to it. It now checks every five minutes: its own account is asked too, and once its window has room again the session is told to carry on where it is; once another account has room it moves there and carries on. A turn anyone starts ends the wait, and a print run never waits.
+
 ## 0.25.0 (2026-11-22)
 
 - A switch no longer waits for a watch. A Monitor, and the live watch Claude Code keeps on a published artifact, only wait for something else and never end by themselves, so a move queued behind one never happened: a session sat on a filling account behind three artifact watches until they were stopped by hand. `/account` and the balancer now wait only for work that would be lost (a turn, a subagent, a background command, a workflow) and end the watches when they move. The reply says how many watches end, the reopened conversation is told which Monitors to start again, and Claude Code arms an artifact's watch again itself. `/account sessions`, the dashboard and `/account close` no longer count a watch as background work.
